@@ -59,7 +59,10 @@ const clipEnds = (s, n = CHARS) => {
   return `${t.slice(0, head)} …[略]… ${t.slice(t.length - (n - head))}`;
 };
 const isReviewBot = (t) => /^代码审查 · PR #\d+/.test(t.title);
-const isSubagent = (t) => t.parentThreadId || t.threadId.startsWith("thread:delegated-task:");
+const isSubagent = (t) => t.parentThreadId || t.threadId.startsWith("thread:delegated-task:") || t.threadId.startsWith("mcp:launch:");
+// 代理派活的执行线程：parentThreadId 为空（launch 建的顶层线程），但首条消息就是派活模板。
+// 它们做完即完成，验收由派活方负责，不该占巡检候选（否则侧栏 5 条会被报成 10 条）。
+const isDelegatedTask = (task) => /^\s*(Act as|你是|作为).{0,80}(sub-?agent|子代理|审查者|审查代理)/i.test(String(task ?? ""));
 
 async function listAll(environmentId) {
   const out = [];
@@ -208,8 +211,7 @@ async function snapshotEnv(env) {
   const top = all.filter((t) => !isSubagent(t));
   const candidates = top.filter((t) => !isReviewBot(t) && t.threadId !== SELF);
   const enriched = await Promise.all(
-    candidates.map(async (t) => {
-      const base = {
+    candidates.map(async (t) => {      const base = {
         id: t.threadId,
         link: t.link,
         title: clip(t.title, 80),
@@ -261,7 +263,8 @@ async function snapshotEnv(env) {
   });
   const active = occupying.length;
   const occupyingTitles = occupying.map((t) => clip(t.title, 40));
-  return { environmentId: env.environmentId, label: env.label, activeTopLevel: active, occupying: occupyingTitles, candidates: enriched };
+  const real = enriched.filter((x) => !isDelegatedTask(x.task));
+  return { environmentId: env.environmentId, label: env.label, activeTopLevel: active, occupying: occupyingTitles, candidates: real, delegatedExcluded: enriched.length - real.length };
 }
 
 async function main() {
