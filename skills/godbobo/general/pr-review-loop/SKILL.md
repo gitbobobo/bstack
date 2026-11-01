@@ -5,6 +5,14 @@ description: PR 推送并请求复审后，持续跟进审查 bot 与 CI；同�
 
 请求复审后持续跟进至收敛。处理完一轮后保持对最新审查意见与检查状态的监听；一轮返回不代表任务已完成。
 
+## 开 PR 之前
+
+模版里的「创建 PR 前完成」就是本轮的交付门槛，PR 建完再回头读已经晚了一轮：缺项会先被审查者当意见提出来。所以创建 PR 之前先定模版：
+
+1. 找仓库自己的模版：`.github/PULL_REQUEST_TEMPLATE.md`（含全小写与 `.github/PULL_REQUEST_TEMPLATE/` 目录）、`docs/` 下的模版，以及 `CONTRIBUTING.md` 里指定的模版。找到就整份用它、按它的结构填满，与本节规则冲突时以仓库为准；HTML 注释只当填写说明，正文不带注释。
+2. 仓库没有模版时用 [references/pr-template.md](references/pr-template.md)：占位项换成仓库的真实入口（检查命令、启动方式、分层名称），无关小节删掉，不留空表格。
+3. 描述写满「创建 PR 前完成」再创建：GitHub 用 `gh pr create --body-file '<文件>'`，Forgejo 用 `fj pr create`（正文同样按模版填），其他宿主按仓库自己的入口（REST 等）提交同一份正文。
+
 ## 跟进入口
 
 1. 先读取当前 PR 的最新评论、审查结果和最新 HEAD 的检查状态，恢复工作树外的跨轮账本。快照与每一轮都核对最新 headRefOid，旧提交上的通过不能代替最新提交的检查与审查。读评论/意见列表记得带 `--paginate`——不带只回最旧 30 条，评论多的 PR 新意见永远不可见。bot 常在同一条评论里原地改写结论：快照按 `updated_at` 判新，凡是 `updated_at` 晚于账本上次快照的评论都算本轮输入。
