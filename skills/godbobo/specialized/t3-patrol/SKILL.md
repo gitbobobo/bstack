@@ -104,7 +104,7 @@ node <技能目录>/scripts/patrol-snapshot.mjs --self <本线程 id> > /tmp/t3-
 | 在问技术取舍（方案、范围、修在哪个 PR、要不要结构整改） | `M7` |
 | 说在等审查，但没关联这个 PR（`pullRequests` 为空或不含它） | 巡逻侧有 `watch_pull_request` 就直接代挂，再发 `M8`，PR 号从它最近的汇报里取 |
 | 说在等审查或子任务，但 PR 在它最后一条消息之后已有新结论/CI，线程没被唤醒（`prs` 标 `(stale)`；或 `completed` 停着、尾部自称在等，`latestAt` 晚于 `lastMsgAt`） | `M9` |
-| PR 已收敛：在等的审查者都通过、检查全绿，主代理在等合并；尾部出现「交还给你」「等你合并」、`ready for merge`、`converged`、收尾清单同样算；CONFLICTING 只是 main 前进的计数/文档冲突也按收敛处理 | `M10` |
+| PR 已收敛：在等的审查者都通过、没有未回报的审查请求（推送触发的也算）、检查全绿，主代理在等合并；尾部出现「交还给你」「等你合并」、`ready for merge`、`converged`、收尾清单同样算；CONFLICTING 只是 main 前进的计数/文档冲突也按收敛处理 | `M10` |
 | PR 已合并、`$pr-finish` 已跑完（尾部是收尾汇报，或后续消息里给过交接提示词） | 按 [references/handoff.md](references/handoff.md) 交接并 settle，每轮重新看容量；已合并的线程一律走这一行，不归入「已交付」 |
 | 在等监听或子任务 | 核 PR 实况：有审查者在途（未出结论且触发未超 30 分钟，或检查还在跑）→ 不打扰；没有 → 按「停滞」处理 |
 | 等某个审查者出结论，但触发已超 30 分钟仍无结果 | `M11` |
