@@ -63,7 +63,7 @@ T3 在事件到达时唤醒本线程。等外部结果时登记监听，然后�
 
 - PR 审查、CI、冲突：`watch_pull_request`（用法见 T3 注入的 PR 说明）；子任务：`delegate_task` async 的完成事件。
 - 部分 harness（如 pi）延迟加载 MCP 工具：`watch_pull_request` 不在工具列表时先用 `tool_search` 搜一次，搜不到再走上节的 ACP 兜底。
-- `watch_pull_request` 不会在「自己 GitHub 账号发表的评论」上唤醒线程：借用户 token 发结论的 bot 署名就是本账号（已实测确认：watch 注册成功、结论到达后依然无唤醒）；只有真 bot 账号的评论会触发。所以挂 watch 的同时，用 `schedule_task`（`{"type":"interval","everyMs":1800000}`，回到当前线程）挂一个兜底定时任务：到点按 `$pr-review-loop`「意见识别不看作者」重读全部评论，本轮审查者到齐或按无响应规则放弃等待后删除它。
+- `watch_pull_request` 不会在「自己 GitHub 账号发表的评论」上唤醒线程（已实测确认：watch 注册成功、结论到达后依然无唤醒）。云端审查者现在各用自己的身份发言，它们的结论会正常唤醒；只有「借用户 token 发言」的账号才会漏唤醒，那类场景挂 `schedule_task`（`{"type":"interval","everyMs":1800000}`，回到当前线程）兜底：到点按 `$pr-review-loop`「审查意见按身份归属」重读全部评论，本轮审查者到齐或按无响应规则放弃等待后删除它。
 
 ## 子线程取证（t3_thread_read）
 
