@@ -29,7 +29,7 @@ git 操作偏好：可审计粒度的规范提交、远程同步（未推送分�
 
 ### pr-review-loop
 
-PR 推送并请求复审后，持续跟进审查 bot 与 CI，每轮等所有审查者意见到齐后再修改并更新账本；同一子系统连续三轮仍有需修复的有效意见时，先调 `$code-review-panel` 做方向审计（不受 P 级标签限制），审计须把意见定性为有限清单、开放反例或范围扩张，后两种要换修法或圈定范围，路径默认根治、拿不准请两位顾问裁决，只有产品决策交回用户。轮次按受审提交计算，重复通知不另计轮次；登记当前各审查者的触发方式与等待上限（等待上限只花一次，超时过的审查者后续轮次不再等待）；自己的回复统一带 `<!-- pr-review-loop:reply -->` 标记排除。跟进与等待收尾期间不追目标分支，整合留给收尾。
+开 PR 之前先定 PR 模版：仓库有自己的模版（`.github`、`docs`、`CONTRIBUTING` 指定）就整份照它填，没有就用本技能自带的通用模版 [references/pr-template.md](skills/godbobo/general/pr-review-loop/references/pr-template.md)；PR 推送并请求复审后，持续跟进审查 bot 与 CI，每轮等所有审查者意见到齐后再修改并更新账本；同一子系统连续三轮仍有需修复的有效意见时，先请一位方向顾问独立做方向审计（编排环境用 `--task design` 选人，否则用不同模型家族的只读子代理），由他把意见定性为有限清单、开放反例或范围扩张，后两种要换修法或圈定范围，定性之外的路径默认根治、分歧按根治取向自选，只有产品决策交回用户。轮次按受审提交计算，重复通知不另计轮次；登记当前各审查者的触发方式与等待上限（等待上限只花一次，超时过的审查者后续轮次不再等待）；审查意见按身份归属：审查者各用自己的身份发言，自己账号下的是本线程的回复；回复仍带 `<!-- pr-review-loop:reply -->` 标记兜底，回复、改描述、读评论与检查的命令按宿主分列（github.com 走 `gh`，Forgejo/Gitea 走 `fj` 或 REST）。跟进与等待收尾期间不追目标分支，整合留给收尾。
 
 详见 [skills/godbobo/general/pr-review-loop/SKILL.md](skills/godbobo/general/pr-review-loop/SKILL.md)。
 
@@ -53,7 +53,7 @@ PR 收尾：对最新目标分支一次性整合（默认 merge）并解决冲�
 
 ### t3-orchestrator
 
-T3 Code 多 harness 编排：只用 pi / codex / factory droid 三个 harness，pi 经 cliproxyapi 调全部模型（额度由 cliproxyapi 自动路由），codex、droid 作为 cliproxyapi 故障时的备用入口。选 harness/模型由 `route.mjs` 按固定规则裁决（`route-data.mjs` 是唯一事实源，`route.mjs audit` 核对路由数据与实时目录），delegate_task 派活验收（子代理一律 `runtimeMode:"full-access"`，不为它向用户索要授权；卡在 `approval_request` 就取消重派），失败自动换路续跑；实现顾问由 `--task design` 单独选出，Opus 只做实现顾问；非产品决策由主代理按「根治」取向自主拍板，拿不准请两位实现顾问裁决，不停下等用户；附 `route-playground.mjs` 可视化路由沙盒。专用技能，仅限用户或技能点名时调用。
+T3 Code 多 harness 编排：只用 pi / codex / factory droid 三个 harness，pi 经 cliproxyapi 调全部模型（额度由 cliproxyapi 自动路由），codex、droid 作为 cliproxyapi 故障时的备用入口。选 harness/模型由 `route.mjs` 按固定规则裁决（`route-data.mjs` 是唯一事实源，`route.mjs audit` 核对路由数据与实时目录），delegate_task 派活验收（子代理一律 `runtimeMode:"full-access"`，不为它向用户索要授权；卡在 `approval_request` 就取消重派），失败自动换路续跑；实现顾问由 `--task design` 单独选出，Opus 只做实现顾问；非产品决策由主代理按「根治」取向自主拍板，命中方向顾问触发（审计、技术取舍、跨模块方案、高风险决策）就派一位顾问独立裁决，不停下等用户；附 `route-playground.mjs` 可视化路由沙盒。专用技能，仅限用户或技能点名时调用。
 
 详见 [skills/godbobo/specialized/t3-orchestrator/SKILL.md](skills/godbobo/specialized/t3-orchestrator/SKILL.md)。
 
