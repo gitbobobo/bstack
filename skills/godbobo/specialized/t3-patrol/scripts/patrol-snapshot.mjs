@@ -59,10 +59,12 @@ const clipEnds = (s, n = CHARS) => {
   return `${t.slice(0, head)} …[略]… ${t.slice(t.length - (n - head))}`;
 };
 const isReviewBot = (t) => /^代码审查 · PR #\d+/.test(t.title);
-const isSubagent = (t) => t.parentThreadId || t.threadId.startsWith("thread:delegated-task:") || t.threadId.startsWith("mcp:launch:");
-// 代理派活的执行线程：parentThreadId 为空（launch 建的顶层线程），但首条消息就是派活模板。
-// 它们做完即完成，验收由派活方负责，不该占巡检候选（否则侧栏 5 条会被报成 10 条）。
-const isDelegatedTask = (task) => /^\s*(Act as|你是|作为).{0,80}(sub-?agent|子代理|审查者|审查代理)/i.test(String(task ?? ""));
+const isSubagent = (t) => t.parentThreadId || t.threadId.startsWith("thread:delegated-task:");
+// 代理派活的执行线程：首条消息就是派活模板。它们做完即完成，验收由派活方负责，不该占巡检候选。
+// 判据只能用内容，不能用 `mcp:launch:` 前缀——那只是 launch 方式，代理也会用它建长期验收/总单线程。
+// 有工作树的一律留下：那说明它绑着一段真实工作，被过滤掉就再没人看得见它。
+const isDelegatedTask = (task, hasWorktree) =>
+  !hasWorktree && /^\s*(Act as|你是|作为).{0,80}(sub-?agent|子代理|审查者|审查代理)/i.test(String(task ?? ""));
 
 async function listAll(environmentId) {
   const out = [];
@@ -220,6 +222,7 @@ async function snapshotEnv(env) {
         updatedAt: t.updatedAt,
         projectId: t.projectId,
         model: `${t.providerInstanceId}/${t.model}`,
+        hasWorktree: Boolean(t.worktreePath),
         prs: (t.pullRequests ?? []).map((p) => `${p.repository}#${p.number}:${p.state}${p.watching === false ? "(unwatched)" : ""}`),
       };
       try {
@@ -263,8 +266,22 @@ async function snapshotEnv(env) {
   });
   const active = occupying.length;
   const occupyingTitles = occupying.map((t) => clip(t.title, 40));
-  const real = enriched.filter((x) => !isDelegatedTask(x.task));
-  return { environmentId: env.environmentId, label: env.label, activeTopLevel: active, occupying: occupyingTitles, candidates: real, delegatedExcluded: enriched.length - real.length };
+  const real = enriched.filter((x) => !isDelegatedTask(x.task, x.hasWorktree));
+  // 兜底对账：被任何过滤规则排除、但停在失败态的真实顶层线程。过滤规则一改就可能误杀，
+  // 把误杀的线程留在这份名单里，巡检每轮必须逐个过——静默消失比多算几条候选危险得多。
+  const realIds = new Set(real.map((x) => x.id));
+  const failedTopLevel = top
+    .filter((t) => ["failed", "interrupted", "cancelled"].includes(t.status) && !realIds.has(t.threadId))
+    .map((t) => ({ id: t.threadId, link: t.link, title: clip(t.title, 60), status: t.status, updatedAt: t.updatedAt }));
+  return {
+    environmentId: env.environmentId,
+    label: env.label,
+    activeTopLevel: active,
+    occupying: occupyingTitles,
+    candidates: real,
+    delegatedExcluded: enriched.length - real.length,
+    failedTopLevel,
+  };
 }
 
 async function main() {

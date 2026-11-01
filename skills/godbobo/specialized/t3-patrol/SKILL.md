@@ -51,11 +51,12 @@ node <技能目录>/scripts/patrol-snapshot.mjs --self <本线程 id> > /tmp/t3-
 ```
 
 - 输出结构的读法：
-  - **候选**：`environments[].candidates`（已剔除子代理线程、代理派活执行线程、「代码审查 · PR #N」线程和本线程；剔除数量在 `delegatedExcluded`）。每条带 `link`、`status`、`prs`、`lastMsgAt`、最近 3 次 run、`pendingRequestCount`、`task`（首条用户消息）、`tail`（最后 4 条消息，保留首尾共 600 字——代理常在长汇报末尾才提问）。
+  - **候选**：`environments[].candidates`（已剔除子代理线程、首条消息是派活模板且没有工作树的执行线程、「代码审查 · PR #N」线程和本线程；剔除数量在 `delegatedExcluded`）。每条带 `link`、`status`、`prs`、`lastMsgAt`、最近 3 次 run、`pendingRequestCount`、`task`（首条用户消息）、`tail`（最后 4 条消息，保留首尾共 600 字——代理常在长汇报末尾才提问）。
   - **监听状态**：`prs` 里 open PR 标 `(unwatched)`；已挂监听但 review/评论时间晚于 `lastMsgAt` 标 `(stale)`；需代挂的列在 `needsWatchPrs`（`needsWatch` 为 true）。
   - **审查健康度**：`needsConvergenceAudit` 为 true 的列在 `convergenceAuditPrs`，带时长/轮次/当日 P0–P2 条数，直接当审计题头。
   - **空转迹象**（仅活跃状态 preparing/queued/starting/running/waiting）：`distinctRecentCommands`（最近 30 个工具调用里不同命令数）、`sampleCommand`、`minutesSinceLastMessage`。
   - **容量**：`activeTopLevel` 与 `occupying`（[references/handoff.md](references/handoff.md) 第 3 步用）。
+  - **失败对账**：`failedTopLevel` 列出被候选过滤排除、但状态是 failed/interrupted/cancelled 的顶层线程。每轮逐个看——过滤规则一改就可能误杀真线程，静默消失比多算几条候选危险得多。
 - 按环境分段用 `jq` 或 `read` 取这个文件。某个线程的 `tail` 不够判断时，再单独用 `t3_thread_read` 补读那一个线程（`afterPosition` 取 `itemCount - 60`，`limit` 10，`maxCharsPerItem` 1500）。
 - 以往运行巡检的线程也会出现在候选里（标题含 t3-patrol 或巡检），判定时跳过。
 - 脚本退出码 2 表示缺 `T3_MCP_URL`/`T3_MCP_BEARER_TOKEN`：改用 `t3_thread_list`（`allProjects:true`、`settled:false`，按 `nextCursor` 翻完）和上面的 `t3_thread_read` 参数手工取证，取到的每条只记判定要用的字段。
@@ -83,7 +84,9 @@ node <技能目录>/scripts/patrol-snapshot.mjs --self <本线程 id> > /tmp/t3-
 
 消息正文见 [references/messages.md](references/messages.md)（M1–M13），`M<n>` 即取那条模板照发；收尾交接见 [references/handoff.md](references/handoff.md)。
 
-**先做监听体检，它不在判定表里**：快照里 `needsWatch` 为 true 的线程一律直接 `watch_pull_request` 代挂（传 `threadId`、`environmentId`、`url`，取 `needsWatchPrs`），报告里记一行。代挂不改变线程状态，与判定表选的「不打扰」并存：线程收轮时撤监听是常态，缺监听几乎每轮都会出现，等它停到能判「空等」再补已经晚了一整轮。因此扫描时先看 `needsWatch`，再看 PR 结论时间。
+**先过 `failedTopLevel`**：里面的每条都按判定表「run failed」那行处理——有工作树、任务没做完的直接恢复继续，不因为它在候选之外就跳过。
+
+**再做监听体检，它不在判定表里**：快照里 `needsWatch` 为 true 的线程一律直接 `watch_pull_request` 代挂（传 `threadId`、`environmentId`、`url`，取 `needsWatchPrs`），报告里记一行。代挂不改变线程状态，与判定表选的「不打扰」并存：线程收轮时撤监听是常态，缺监听几乎每轮都会出现，等它停到能判「空等」再补已经晚了一整轮。因此扫描时先看 `needsWatch`，再看 PR 结论时间。
 
 | 现状 | 动作 |
 | --- | --- |
@@ -113,7 +116,7 @@ node <技能目录>/scripts/patrol-snapshot.mjs --self <本线程 id> > /tmp/t3-
 
 **拿不准时**：先按「在等产品决策」那行找依据，有依据就定案并落地；只有规则冲突、或要改用户可见的行为又无先例可循，才交给用户。
 
-**完成标准**：候选清单上每个线程都有一个判定和一个动作（「不打扰」也算），`needsWatch` 为 true 的都已代挂监听，`needsConvergenceAudit` 为 true 的都发了收敛审计（或已有审计在落地中），发出的每条消息都已成功返回。
+**完成标准**：候选清单上每个线程都有一个判定和一个动作（「不打扰」也算），`needsWatch` 为 true 的都已代挂监听，`needsConvergenceAudit` 为 true 的都发了收敛审计（或已有审计在落地中），`failedTopLevel` 为空或每条都有了处理，发出的每条消息都已成功返回。
 
 ## 4. 汇报
 
