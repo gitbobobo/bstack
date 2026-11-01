@@ -5,7 +5,9 @@
 // 用法：node patrol-snapshot.mjs [--self <本线程 id>] [--tail 4] [--chars 600]
 // 依赖环境变量 T3_MCP_URL、T3_MCP_BEARER_TOKEN（T3 注入；缺席时退出码 2，改用 MCP 工具手工取证）。
 
-import { realpathSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const args = process.argv.slice(2);
@@ -120,7 +122,160 @@ const ROUNDS_JQ =
   ' rounds:([((.reviews[]?.body // ""), (.comments[]?.body // "")) | try (capture("第\\\\s*(?<n>[0-9]+)\\\\s*轮").n) catch null, try (capture("[Rr]ound\\\\s*(?<n>[0-9]+)").n) catch null] | map(select(. != null) | tonumber) | max),' +
   ' failChecks:[.statusCheckRollup[]|select(.conclusion=="FAILURE")|.name], pendingChecks:[.statusCheckRollup[]|select(.conclusion=="")|.name]|length}';
 
-async function prLiveOf(pr) {
+// ---- PR 实况：github.com 走 gh，其他宿主（Forgejo/Gitea）走 REST。 ----
+// 只走 gh 会让搬去 Forgejo 的仓库静默失明：prLiveOf 返回 null，(stale)、久审不收敛、
+// PR 健康度全都不触发，而 PR 可能已经三十几轮还在冒 P2——正是这张表要拦的那种。
+let liveCache = new Map();
+
+const roundOf = (texts) => {
+  let n = null;
+  for (const t of texts) {
+    for (const re of [/第\s*(\d+)\s*轮/, /[Rr]ound\s*(\d+)/]) {
+      const m = String(t ?? "").match(re);
+      if (m) n = Math.max(n ?? 0, Number(m[1]));
+    }
+  }
+  return n;
+};
+const P02 = /\bP[0-2]\b/;
+const NEED_AUDIT = (openHours, reviewRounds, inlineP0P2) =>
+  Boolean(((openHours ?? 0) > 48 || (reviewRounds ?? 0) > 20) && (inlineP0P2 ?? 0) > 0);
+
+// 端点地址与凭据：环境变量 → ~/.agents/env/forgejo.sh → 本地工作树的 origin + git credential helper。
+function forgeConf() {
+  const bases = [];
+  const tokens = [];
+  for (const k of ["FORGEJO_BASE", "FORGEJO_URL", "GITEA_URL"]) if (process.env[k]) bases.push(process.env[k]);
+  for (const k of ["FORGEJO_TOKEN", "GITEA_TOKEN", "FORGEJO_API_TOKEN"]) if (process.env[k]) tokens.push(process.env[k]);
+  try {
+    for (const line of readFileSync(join(homedir(), ".agents", "env", "forgejo.sh"), "utf8").split("\n")) {
+      const m = line.match(/^\s*(?:export\s+)?([A-Za-z0-9_]+)=(.*)$/);
+      if (!m) continue;
+      const val = m[2].trim().replace(/^(['"])(.*)\1$/, "$2");
+      if (/^(FORGEJO|GITEA)_(BASE|URL|HOST)$/i.test(m[1]) && /^https?:\/\//.test(val)) bases.push(val);
+      else if (/^(FORGEJO|GITEA)_?.*TOKEN/i.test(m[1]) && val) tokens.push(val);
+    }
+  } catch {}
+  return {
+    bases: [...new Set(bases.map((b) => b.replace(/\/+$/, "")).filter(Boolean))],
+    tokens: [...new Set(tokens.filter(Boolean))],
+  };
+}
+
+async function baseFromHint(hint) {
+  if (!hint) return null;
+  // PR 自己的 URL 最可靠：T3 记录的 pullRequests[].url 就带宿主，工作树收尾后已回收也不影响。
+  try {
+    const host = new URL(String(hint)).origin;
+    if (/^https?:/.test(host)) return host;
+  } catch {}
+  try {
+    const { execFileSync } = await import("node:child_process");
+    const url = execFileSync("git", ["-C", hint, "remote", "get-url", "origin"], { encoding: "utf8", timeout: 5000, stdio: ["pipe", "pipe", "pipe"] }).trim();
+    const m = url.match(/^(https?):\/\/([^/]+)/);
+    return m ? `${m[1]}://${m[2]}` : null;
+  } catch {
+    return null;
+  }
+}
+
+async function credentialFor(base) {
+  try {
+    const { execFileSync } = await import("node:child_process");
+    const u = new URL(base);
+    const out = execFileSync("git", ["credential", "fill"], {
+      input: `protocol=${u.protocol.replace(":", "")}\nhost=${u.host}\n\n`,
+      encoding: "utf8",
+      timeout: 10000,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    const hit = out.split("\n").find((l) => l.startsWith("password="));
+    return hit ? hit.slice("password=".length) : null;
+  } catch {
+    return null;
+  }
+}
+
+async function forgeApi(base, token, path) {
+  const res = await fetch(`${base}/api/v1${path}`, {
+    headers: { authorization: `token ${token}`, accept: "application/json" },
+    signal: AbortSignal.timeout(20000),
+  });
+  if (!res.ok) throw new Error(`${path} -> ${res.status}`);
+  return res.json();
+}
+
+async function forgejoLiveOf(repo, num, hint) {
+  const conf = forgeConf();
+  const bases = [];
+  const fromWt = await baseFromHint(hint);
+  if (fromWt) bases.push(fromWt);
+  for (const b of conf.bases) if (!bases.includes(b)) bases.push(b);
+  for (const base of bases) {
+    const tokens = [...conf.tokens];
+    const fromGit = await credentialFor(base);
+    if (fromGit) tokens.push(fromGit);
+    for (const token of [...new Set(tokens)]) {
+      try {
+        const pr = await forgeApi(base, token, `/repos/${repo}/pulls/${num}`);
+        const reviews = (await forgeApi(base, token, `/repos/${repo}/pulls/${num}/reviews?limit=50`).catch(() => [])) ?? [];
+        const comments = (await forgeApi(base, token, `/repos/${repo}/issues/${num}/comments?limit=100`).catch(() => [])) ?? [];
+        const statuses = (await forgeApi(base, token, `/repos/${repo}/commits/${pr.head?.sha}/statuses?limit=50`).catch(() => [])) ?? [];
+        const sinceMs = Date.now() - 24 * 3600 * 1000;
+        let inline24h = 0;
+        let inlineP0P2 = 0;
+        let latest = 0;
+        for (const r of reviews.slice(-12)) {
+          const at = Date.parse(r.submitted_at ?? "");
+          if (at > latest) latest = at;
+          if (!at || at < sinceMs || !r.comments_count) continue;
+          const cs = (await forgeApi(base, token, `/repos/${repo}/pulls/${num}/reviews/${r.id}/comments?limit=50`).catch(() => [])) ?? [];
+          inline24h += cs.length;
+          inlineP0P2 += cs.filter((c) => P02.test(c.body ?? "")).length;
+        }
+        for (const c of comments) {
+          const at = Date.parse(c.created_at ?? "");
+          if (at > latest) latest = at;
+        }
+        // 同一 context 会有多条状态（先 pending 后 failure），按最坏取一条，避免重复计数。
+        const rank = { success: 1, pending: 2, failure: 3, error: 3 };
+        const byCtx = new Map();
+        for (const st of statuses) {
+          if (!st.context) continue;
+          const cur = byCtx.get(st.context);
+          if (!cur || (rank[st.status] ?? 0) > (rank[cur] ?? 0)) byCtx.set(st.context, st.status);
+        }
+        const openHours = pr.created_at ? Math.round((Date.now() - Date.parse(pr.created_at)) / 36000) / 100 : null;
+        const reviewRounds = roundOf([...reviews.map((r) => r.body), ...comments.map((c) => c.body)]);
+        return {
+          repo,
+          num: Number(num),
+          host: base,
+          latestAt: latest ? new Date(latest).toISOString() : null,
+          failChecks: [...byCtx].filter(([, st]) => st === "failure" || st === "error").map(([c]) => c),
+          pendingChecks: [...byCtx].filter(([, st]) => st === "pending").length,
+          openHours,
+          reviewRounds,
+          inline24h,
+          inlineP0P2,
+          needsConvergenceAudit: NEED_AUDIT(openHours, reviewRounds, inlineP0P2),
+        };
+      } catch (e) {
+        if (DEBUG) console.error("forgejo live failed", base, repo, num, String(e.message ?? e).slice(0, 200));
+      }
+    }
+  }
+  return null;
+}
+
+async function prLiveOf(pr, hint) {
+  if (liveCache.has(pr)) return liveCache.get(pr);
+  const out = await prLiveUncached(pr, hint);
+  liveCache.set(pr, out);
+  return out;
+}
+
+async function prLiveUncached(pr, hint) {
   const m = String(pr).match(/^(.+?)#(\d+):open/);
   if (!m) return null;
   const repo = m[1];
@@ -131,8 +286,10 @@ async function prLiveOf(pr) {
   try {
     base = JSON.parse(gh(["pr", "view", num, "--repo", repo, "--json", "createdAt,reviews,comments,statusCheckRollup", "--jq", ROUNDS_JQ]) || "{}");
   } catch (e) {
-    if (DEBUG) console.error("pr view failed", pr, String(e.message ?? e).slice(0, 300));
-    return null;
+    if (DEBUG) console.error("gh pr view failed", pr, String(e.message ?? e).slice(0, 200));
+    const fj = await forgejoLiveOf(repo, num, hint);
+    if (fj) return fj;
+    return { repo, num: Number(num), unavailable: true };
   }
   const openHours = base.createdAt ? Math.round((Date.now() - Date.parse(base.createdAt)) / 36000) / 100 : null;
   // 行内意见单独走 API：review 的 body 不包含行内意见。只翻最后几页（关心的是 24h 内），
@@ -162,6 +319,7 @@ async function prLiveOf(pr) {
   return {
     repo,
     num: Number(num),
+    host: "github.com",
     latestAt: base.review ?? base.comment ?? null,
     failChecks: base.failChecks ?? [],
     pendingChecks: base.pendingChecks ?? 0,
@@ -169,7 +327,7 @@ async function prLiveOf(pr) {
     reviewRounds,
     inline24h,
     inlineP0P2,
-    needsConvergenceAudit: Boolean(((openHours ?? 0) > 48 || (reviewRounds ?? 0) > 20) && (inlineP0P2 ?? 0) > 0),
+    needsConvergenceAudit: NEED_AUDIT(openHours, reviewRounds, inlineP0P2),
   };
 }
 
@@ -239,8 +397,9 @@ async function snapshotEnv(env) {
               livePrs.map(async (p) => {
                 let tag = `${p.repository}#${p.number}:${p.state}${p.watching === false ? "(unwatched)" : ""}`;
                 if (p.state !== "open") return tag;
-                const live = await prLiveOf(tag);
+                const live = await prLiveOf(tag, p.url);
                 if (!live) return tag;
+                if (live.unavailable) return `${tag}(health-unavailable)`;
                 health.push(live);
                 if (p.watching !== false && live.latestAt && Date.parse(live.latestAt) > lastMsgMs) tag += "(stale)";
                 return tag;
