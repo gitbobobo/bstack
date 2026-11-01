@@ -15,12 +15,12 @@ description: PR 推送并请求复审后，持续跟进审查 bot 与 CI；同�
 
 ## 跟进入口
 
-1. 先读取当前 PR 的最新评论、审查结果和最新 HEAD 的检查状态，恢复工作树外的跨轮账本。快照与每一轮都核对最新 headRefOid，旧提交上的通过不能代替最新提交的检查与审查。读评论/意见列表记得带 `--paginate`——不带只回最旧 30 条，评论多的 PR 新意见永远不可见。bot 常在同一条评论里原地改写结论：快照按 `updated_at` 判新，凡是 `updated_at` 晚于账本上次快照的评论都算本轮输入。
+1. 先读取当前 PR 的最新评论、审查结果和最新 HEAD 的检查状态，恢复工作树外的跨轮账本。快照与每一轮都核对最新 headRefOid，旧提交上的通过不能代替最新提交的检查与审查。读评论/意见列表记得带 `--paginate`——不带只回最旧 30 条，评论多的 PR 新意见永远不可见（Forgejo 用 `fj pr view <PR> comments` 与 `fj pr review <PR> list -c`，REST 按 `?limit=50&page=` 翻页）。bot 常在同一条评论里原地改写结论：快照按 `updated_at` 判新，凡是 `updated_at` 晚于账本上次快照的评论都算本轮输入。
 2. 等齐本轮意见：本轮请求的和推送自动触发的审查者（上轮已超时的不算），都在最新 HEAD 上给出结论（或按第 6 步放弃等待）后，才开始归桶和修改；只到了一部分就继续监听，不边到边改。
 3. 按「收敛规则」归桶 → 更新跨轮账本 → 判断是否触发方向审计。触发时先请方向顾问给出定性、按「方向取舍」定收敛路径，再恢复修复；只有产品决策按「暂停」交回用户。
 4. 按确定的路径修复 → 核验或补跑相关检查 → 在已有提交/推送授权范围内提交推送 → 回复。每次请求复审或继续等待自动复审前，必须把本轮处置及升级判断写回账本，向用户简短说明各子系统的连续轮数、顾问定性（触发过审计时）和下一步，再按「审查者现状」重新触发本轮未通过的审查者。需要额外授权时先完成可审阅的修复，再交回用户。
 
-   推送含可见 UI 改动的提交前：先重拍受影响界面、上传、`gh pr edit` 更新 PR 描述中的截图链接，再推送。push 时自动触发的审查者读的是当时的描述——先推后改，它按旧图审，会对已修问题再开一轮。上传前先打开图片，确认不是过渡帧或旧布局。
+   推送含可见 UI 改动的提交前：先重拍受影响界面、上传、按「回复」的宿主命令更新 PR 描述中的截图链接，再推送。push 时自动触发的审查者读的是当时的描述——先推后改，它按旧图审，会对已修问题再开一轮。上传前先打开图片，确认不是过渡帧或旧布局。
 5. 本轮处理完后登记监听，并以此结束本轮：完成标准是监听登记调用已返回成功（T3 下 PR 已关联、`watch_pull_request` 成功，兜底定时任务存在），汇报末尾写明监听状态。新事件到达即回到第 1 步做快照。
 6. 审查者超过「审查者现状」里的等待上限仍无结果时，按其下的「等待上限只花一次」处理。
 
@@ -85,14 +85,18 @@ description: PR 推送并请求复审后，持续跟进审查 bot 与 CI；同�
 
 ## 回复
 
-回复正文先写进 UTF-8 无 BOM 的临时文件，不要把中文内联在命令里。
+回复正文先写进 UTF-8 无 BOM 的临时文件，不要把中文内联在命令里。宿主按 PR URL 判断：github.com 用 `gh`；其他实例（Forgejo/Gitea）用本机 `fj`，缺命令或未登录时退回同名 REST 端点（`/api/v1/...`，凭据取 `FORGEJO_TOKEN`、`~/.agents/env/forgejo.sh` 或本机 git credential helper）。
 
-- 行内意见：`gh api repos/<repo>/pulls/<n>/comments -X POST -F in_reply_to=<线程第一条评论的 id> -f body="$(cat '<回复文件>'; printf '\n\n<!-- pr-review-loop:reply -->')"`
-- 顶层评论、审查总结和 bot 结论：`gh api repos/<repo>/issues/<n>/comments -X POST -f body="$(cat '<回复文件>'; printf '\n\n<!-- pr-review-loop:reply -->')"`，正文开头引用被回复的意见或附上它的链接。
+| 动作 | GitHub | Forgejo |
+| --- | --- | --- |
+| 回复行内意见 | `gh api repos/<repo>/pulls/<n>/comments -X POST -F in_reply_to=<线程第一条评论的 id> -f body="$(cat '<文件>'; printf '\n\n<!-- pr-review-loop:reply -->')"` | 没有 `in_reply_to`：在对话区发顶层评论，开头引用原意见并附它的 `html_url`（`fj pr comment <PR> --body-file '<文件>'`）。必须落回同一段 diff 时用 `POST /api/v1/repos/<owner>/<repo>/pulls/<n>/reviews/<review id>/comments`，body 带 `path`、目标行的 `new_position`（或 `old_position`）和正文，review id 先 `GET /api/v1/repos/<owner>/<repo>/pulls/<n>/reviews` 取 |
+| 顶层评论、审查总结、bot 结论 | `gh api repos/<repo>/issues/<n>/comments -X POST -f body="$(cat '<文件>'; printf '\n\n<!-- pr-review-loop:reply -->')"`，正文开头引用被回复的意见或附上它的链接 | `fj pr comment <PR> --body-file '<文件>'`（标记写进文件末尾）；或 `POST /api/v1/repos/<owner>/<repo>/issues/<n>/comments` |
+| 改 PR 描述（交付范围、截图链接） | `gh pr edit <n> --body-file '<文件>'` | `fj pr edit body "$(cat '<文件>')"`；或 `PATCH /api/v1/repos/<owner>/<repo>/pulls/<n>` |
+| 读评论与检查状态 | `gh pr view`、`gh pr checks`、`gh api … --paginate` | `fj pr view <PR> comments`、`fj pr review <PR> list -c`、`fj pr status <PR>` |
 
-**自己发的每条评论末尾都要带 `<!-- pr-review-loop:reply -->` 标记**（HTML 注释，渲染后不可见）——回复、处置总结、更正都一样。不带标记的自己评论会在下一轮被当作新意见回收一次。Windows 下 `$(cat …)` 不可用时把标记写进回复文件末尾，再用 `-F body=@<回复文件>` 提交。
+**自己发的每条评论末尾都要带 `<!-- pr-review-loop:reply -->` 标记**（HTML 注释，两个宿主渲染后都不可见）——回复、处置总结、更正都一样。下一轮按作者就能排除自己的评论，标记是同一账号被别的 agent 借用时的唯一判据，照发不要省。Forgejo 走 `--body-file` 时把标记写进文件末尾；GitHub 在 Windows 下 `$(cat …)` 不可用时也写进文件，再用 `-F body=@<文件>` 提交。
 
-不要对任何评论执行 `PATCH` 或 `DELETE`，自己账号发的也不行——有仓库写权限时 GitHub 不会拦，改错了就会覆盖审查结论。回复发错了就再发一条更正，不要改原评论。修改 PR 描述用 `gh pr edit`，不受这条限制。
+不要对任何评论执行 `PATCH` 或 `DELETE`，自己账号发的也不行——两边 API 有权限时都不会拦（Forgejo 的 `fj pr edit comment` 同样不用），改错了就会覆盖审查结论。回复发错了就再发一条更正，不要改原评论。修改 PR 描述不受这条限制，命令见上表。
 
 ## 暂停
 
@@ -103,6 +107,6 @@ description: PR 推送并请求复审后，持续跟进审查 bot 与 CI；同�
 所有审查者已回应（或已按上面的规则放弃等待），最新提交上没有未处理的有效意见，CI 通过：
 
 1. 撤掉仍在运行的监听。
-2. 勾选 PR 描述中「审查意见处理」的待办项。
+2. 勾选 PR 描述中「审查意见处理」的待办项（用「回复」表里的改描述命令）。
 3. 向用户简短汇报：共几轮；修了什么；哪些意见没改、理由是什么；哪个审查者无响应。
 4. 不要合并 PR，等用户的收尾指令。
