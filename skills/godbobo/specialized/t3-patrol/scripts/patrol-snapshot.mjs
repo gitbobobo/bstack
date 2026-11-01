@@ -5,6 +5,7 @@
 // 用法：node patrol-snapshot.mjs [--self <本线程 id>] [--tail 4] [--chars 600]
 // 依赖环境变量 T3_MCP_URL、T3_MCP_BEARER_TOKEN（T3 注入；缺席时退出码 2，改用 MCP 工具手工取证）。
 
+import { execFileSync } from "node:child_process";
 import { readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -118,7 +119,7 @@ async function tailOf(environmentId, t) {
 // 轮次/时长/当日行内意见过去全靠每轮现算，结果是不算（线程看起来一直在动就当成健康），
 // 久审不收敛的线程因此从未被审计过——这里算成字段，让异常自己冒出来。
 const ROUNDS_JQ =
-  '{createdAt, review:(.reviews|last|.submittedAt), comment:(.comments|last|.createdAt),' +
+  '{createdAt, mergeStateStatus, review:(.reviews|last|.submittedAt), comment:(.comments|last|.createdAt),' +
   ' rounds:([((.reviews[]?.body // ""), (.comments[]?.body // "")) | try (capture("第\\\\s*(?<n>[0-9]+)\\\\s*轮").n) catch null, try (capture("[Rr]ound\\\\s*(?<n>[0-9]+)").n) catch null] | map(select(. != null) | tonumber) | max),' +
   ' failChecks:[.statusCheckRollup[]|select(.conclusion=="FAILURE")|.name], pendingChecks:[.statusCheckRollup[]|select(.conclusion=="")|.name]|length}';
 
@@ -156,6 +157,13 @@ function forgeConf() {
       else if (/^(FORGEJO|GITEA)_?.*TOKEN/i.test(m[1]) && val) tokens.push(val);
     }
   } catch {}
+  // fj 的自建实例列表是宿主的最省事来源：装了 fj 并登录过的机器不用再配 FORGEJO_BASE。
+  try {
+    for (const line of execFileSync("fj", ["auth", "list"], { encoding: "utf8", timeout: 5000, stdio: ["pipe", "pipe", "pipe"] }).split("\n")) {
+      const host = line.trim().replace(/[\u2066-\u2069]/g, "").replace(/STYLE\(\)/g, "");
+      if (/^[\w.-]+\.[a-z]{2,}(:\d+)?$/i.test(host)) bases.push(`https://${host}`);
+    }
+  } catch {}
   return {
     bases: [...new Set(bases.map((b) => b.replace(/\/+$/, "")).filter(Boolean))],
     tokens: [...new Set(tokens.filter(Boolean))],
@@ -170,7 +178,6 @@ async function baseFromHint(hint) {
     if (/^https?:/.test(host)) return host;
   } catch {}
   try {
-    const { execFileSync } = await import("node:child_process");
     const url = execFileSync("git", ["-C", hint, "remote", "get-url", "origin"], { encoding: "utf8", timeout: 5000, stdio: ["pipe", "pipe", "pipe"] }).trim();
     const m = url.match(/^(https?):\/\/([^/]+)/);
     return m ? `${m[1]}://${m[2]}` : null;
@@ -181,7 +188,6 @@ async function baseFromHint(hint) {
 
 async function credentialFor(base) {
   try {
-    const { execFileSync } = await import("node:child_process");
     const u = new URL(base);
     const out = execFileSync("git", ["credential", "fill"], {
       input: `protocol=${u.protocol.replace(":", "")}\nhost=${u.host}\n\n`,
@@ -192,6 +198,45 @@ async function credentialFor(base) {
     const hit = out.split("\n").find((l) => l.startsWith("password="));
     return hit ? hit.slice("password=".length) : null;
   } catch {
+    return null;
+  }
+}
+
+// CI 状态优先问 fj：它自带实例凭据，输出与人在网页上看到的一致；
+// 0.6.0 的 --style minimal 仍会混进 STYLE() 与 U+2066/2068 标记，先剥掉。
+async function fjStatusOf(repo, num, base) {
+  const host = (() => {
+    try {
+      return new URL(base).host;
+    } catch {
+      return null;
+    }
+  })();
+  if (!host) return null;
+  try {
+    const raw = execFileSync("fj", ["--style", "minimal", "-H", host, "pr", "status", `${repo}#${num}`], {
+      encoding: "utf8",
+      timeout: 20000,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    const clean = raw.replace(/[\u2066-\u2069]/g, "").replace(/STYLE\(\)/g, "");
+    const checks = clean
+      .split("\n")
+      .filter((l) => l.startsWith("- "))
+      .map((l) => {
+        const [state, ...name] = l.slice(2).split(" — ");
+        return { state: state.trim().toLowerCase(), name: name.join(" — ").trim() };
+      });
+    const head = (clean.split("\n")[0] ?? "").split(" — ").map((x) => x.trim());
+    return {
+      state: head[0] ?? null,
+      mergeable: head[1] ?? null,
+      failChecks: checks.filter((c) => ["failure", "failed", "error"].includes(c.state)).map((c) => c.name),
+      pendingChecks: checks.filter((c) => ["pending", "running", "queued", "waiting"].includes(c.state)).length,
+      totalChecks: checks.length,
+    };
+  } catch (e) {
+    if (DEBUG) console.error("fj pr status failed", repo, num, String(e.message ?? e).slice(0, 160));
     return null;
   }
 }
@@ -220,7 +265,7 @@ async function forgejoLiveOf(repo, num, hint) {
         const pr = await forgeApi(base, token, `/repos/${repo}/pulls/${num}`);
         const reviews = (await forgeApi(base, token, `/repos/${repo}/pulls/${num}/reviews?limit=50`).catch(() => [])) ?? [];
         const comments = (await forgeApi(base, token, `/repos/${repo}/issues/${num}/comments?limit=100`).catch(() => [])) ?? [];
-        const statuses = (await forgeApi(base, token, `/repos/${repo}/commits/${pr.head?.sha}/statuses?limit=50`).catch(() => [])) ?? [];
+        const fjStatus = await fjStatusOf(repo, num, base);
         const sinceMs = Date.now() - 24 * 3600 * 1000;
         let inline24h = 0;
         let inlineP0P2 = 0;
@@ -238,12 +283,22 @@ async function forgejoLiveOf(repo, num, hint) {
           if (at > latest) latest = at;
         }
         // 同一 context 会有多条状态（先 pending 后 failure），按最坏取一条，避免重复计数。
-        const rank = { success: 1, pending: 2, failure: 3, error: 3 };
-        const byCtx = new Map();
-        for (const st of statuses) {
-          if (!st.context) continue;
-          const cur = byCtx.get(st.context);
-          if (!cur || (rank[st.status] ?? 0) > (rank[cur] ?? 0)) byCtx.set(st.context, st.status);
+        let failChecks = [];
+        let pendingChecks = 0;
+        if (fjStatus) {
+          failChecks = fjStatus.failChecks;
+          pendingChecks = fjStatus.pendingChecks;
+        } else {
+          const statuses = (await forgeApi(base, token, `/repos/${repo}/commits/${pr.head?.sha}/statuses?limit=50`).catch(() => [])) ?? [];
+          const rank = { success: 1, pending: 2, failure: 3, error: 3 };
+          const byCtx = new Map();
+          for (const st of statuses) {
+            if (!st.context) continue;
+            const cur = byCtx.get(st.context);
+            if (!cur || (rank[st.status] ?? 0) > (rank[cur] ?? 0)) byCtx.set(st.context, st.status);
+          }
+          failChecks = [...byCtx].filter(([, st]) => st === "failure" || st === "error").map(([c]) => c);
+          pendingChecks = [...byCtx].filter(([, st]) => st === "pending").length;
         }
         const openHours = pr.created_at ? Math.round((Date.now() - Date.parse(pr.created_at)) / 36000) / 100 : null;
         const reviewRounds = roundOf([...reviews.map((r) => r.body), ...comments.map((c) => c.body)]);
@@ -252,8 +307,10 @@ async function forgejoLiveOf(repo, num, hint) {
           num: Number(num),
           host: base,
           latestAt: latest ? new Date(latest).toISOString() : null,
-          failChecks: [...byCtx].filter(([, st]) => st === "failure" || st === "error").map(([c]) => c),
-          pendingChecks: [...byCtx].filter(([, st]) => st === "pending").length,
+          failChecks,
+          pendingChecks,
+          mergeable: fjStatus?.mergeable ?? null,
+          checksFrom: fjStatus ? "fj" : "rest",
           openHours,
           reviewRounds,
           inline24h,
@@ -280,11 +337,10 @@ async function prLiveUncached(pr, hint) {
   if (!m) return null;
   const repo = m[1];
   const num = m[2];
-  const { execFileSync } = await import("node:child_process");
   const gh = (args) => execFileSync("gh", args, { encoding: "utf8", timeout: 30000, maxBuffer: 64 * 1024 * 1024, stdio: ["pipe", "pipe", "pipe"] });
   let base;
   try {
-    base = JSON.parse(gh(["pr", "view", num, "--repo", repo, "--json", "createdAt,reviews,comments,statusCheckRollup", "--jq", ROUNDS_JQ]) || "{}");
+    base = JSON.parse(gh(["pr", "view", num, "--repo", repo, "--json", "createdAt,reviews,comments,statusCheckRollup,mergeStateStatus", "--jq", ROUNDS_JQ]) || "{}");
   } catch (e) {
     if (DEBUG) console.error("gh pr view failed", pr, String(e.message ?? e).slice(0, 200));
     const fj = await forgejoLiveOf(repo, num, hint);
@@ -323,6 +379,8 @@ async function prLiveUncached(pr, hint) {
     latestAt: base.review ?? base.comment ?? null,
     failChecks: base.failChecks ?? [],
     pendingChecks: base.pendingChecks ?? 0,
+    mergeable: base.mergeStateStatus ?? null,
+    checksFrom: "gh",
     openHours,
     reviewRounds,
     inline24h,
@@ -406,7 +464,20 @@ async function snapshotEnv(env) {
               }),
             )
           : base.prs;
-        return { ...base, prs, ...tail, ...needsWatchOf(prs), ...convergenceOf(health) };
+        const prHealth = health.map((h) => ({
+          pr: `#${h.num}`,
+          host: h.host,
+          openHours: h.openHours,
+          rounds: h.reviewRounds,
+          latestAt: h.latestAt,
+          inline24h: h.inline24h,
+          inlineP0P2: h.inlineP0P2,
+          failChecks: h.failChecks,
+          pendingChecks: h.pendingChecks,
+          mergeable: h.mergeable ?? null,
+          checksVia: h.checksFrom ?? null,
+        }));
+        return { ...base, prs, ...tail, ...needsWatchOf(prs), ...convergenceOf(health), ...(prHealth.length ? { prHealth } : {}) };
       } catch (e) {
         return { ...base, error: String(e.message ?? e) };
       }
