@@ -19,6 +19,7 @@ const opt = (name, dflt) => {
 const SELF = opt("self", null);
 const TAIL = Number(opt("tail", 4));
 const CHARS = Number(opt("chars", 600));
+const CONC = Number(opt("concurrency", 6));
 const ACTIVE_MS = 2 * 3600 * 1000; // 有在审 PR 的线程，最近一次 run 结束多久内仍算占用
 const LIVE = new Set(["preparing", "queued", "starting", "running", "waiting"]);
 
@@ -29,14 +30,24 @@ const TOKEN = process.env.T3_MCP_BEARER_TOKEN;
 
 let sid = null;
 let seq = 0;
-async function rpc(method, params) {
+async function rpc(method, params, attempt = 0) {
   const headers = {
     "content-type": "application/json",
     accept: "application/json, text/event-stream",
     authorization: `Bearer ${TOKEN}`,
   };
   if (sid) headers["mcp-session-id"] = sid;
-  const res = await fetch(URL_, { method: "POST", headers, body: JSON.stringify({ jsonrpc: "2.0", id: ++seq, method, params }) });
+  let res;
+  try {
+    res = await fetch(URL_, { method: "POST", headers, body: JSON.stringify({ jsonrpc: "2.0", id: ++seq, method, params }) });
+  } catch (e) {
+    // 传输层失败（ECONNRESET / fetch failed）重试一次；MCP 的读接口都可重放。
+    if (attempt < 1) {
+      await new Promise((r) => setTimeout(r, 800));
+      return rpc(method, params, attempt + 1);
+    }
+    throw e;
+  }
   sid = res.headers.get("mcp-session-id") || sid;
   const text = await res.text();
   const m = text.match(/^data: (.*)$/m);
@@ -48,6 +59,22 @@ async function call(name, args) {
   const r = await rpc("tools/call", { name, arguments: args });
   if (r.isError) throw new Error(`${name}: ${r.content?.[0]?.text ?? "error"}`);
   return r.structuredContent ?? JSON.parse(r.content[0].text);
+}
+
+// 有界并发：一次把所有候选线程同时展开会把 MCP 连接打满，
+// 表现为部分线程「取详情失败、字段全空」，巡检据此误判成「还在推进」。
+async function pool(items, limit, fn) {
+  const out = new Array(items.length);
+  let next = 0;
+  const worker = async () => {
+    for (;;) {
+      const i = next++;
+      if (i >= items.length) return;
+      out[i] = await fn(items[i]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, worker));
+  return out;
 }
 
 const clip = (s, n = CHARS) => {
@@ -428,8 +455,7 @@ async function snapshotEnv(env) {
   const all = await listAll(env.isLocal ? null : env.environmentId);
   const top = all.filter((t) => !isSubagent(t));
   const candidates = top.filter((t) => !isReviewBot(t) && t.threadId !== SELF);
-  const enriched = await Promise.all(
-    candidates.map(async (t) => {      const base = {
+  const enriched = await pool(candidates, CONC, async (t) => {      const base = {
         id: t.threadId,
         link: t.link,
         title: clip(t.title, 80),
@@ -451,8 +477,8 @@ async function snapshotEnv(env) {
         const lastMsgMs = Date.parse(tail.lastMsgAt ?? "") || 0;
         const health = [];
         const prs = livePrs
-          ? await Promise.all(
-              livePrs.map(async (p) => {
+          ? await pool(
+              livePrs, CONC, async (p) => {
                 let tag = `${p.repository}#${p.number}:${p.state}${p.watching === false ? "(unwatched)" : ""}`;
                 if (p.state !== "open") return tag;
                 const live = await prLiveOf(tag, p.url);
@@ -461,8 +487,7 @@ async function snapshotEnv(env) {
                 health.push(live);
                 if (p.watching !== false && live.latestAt && Date.parse(live.latestAt) > lastMsgMs) tag += "(stale)";
                 return tag;
-              }),
-            )
+            })
           : base.prs;
         const prHealth = health.map((h) => ({
           pr: `#${h.num}`,
@@ -479,10 +504,10 @@ async function snapshotEnv(env) {
         }));
         return { ...base, prs, ...tail, ...needsWatchOf(prs), ...convergenceOf(health), ...(prHealth.length ? { prHealth } : {}) };
       } catch (e) {
-        return { ...base, error: String(e.message ?? e) };
+        // 取不到详情 ≠ 线程没事：标成 incomplete，报告必须逐条交代（否则会被当成「推进中」）。
+        return { ...base, error: String(e.message ?? e), incomplete: true };
       }
-    }),
-  );
+  });
   // 占用名额的线程：有活跃 run 的（含 Fast Ship 审查线程），或 PR 仍 open、最近 2 小时内跑过的（两轮审查之间
   // 线程会暂时 completed，但工作树和编译资源还占着）。PR 已合并/关闭、没有 PR 又没在跑的线程不占名额。
   // 不用 updatedAt：同步会批量刷新它。
@@ -527,8 +552,10 @@ async function main() {
     if (l.status === "reachable") envs.push({ environmentId: l.environmentId, label: l.label });
     else unreachable.push({ environmentId: l.environmentId, label: l.label, status: l.status, error: l.lastError });
   }
-  const results = await Promise.all(
-    envs.map((e) => snapshotEnv(e).catch((err) => ({ environmentId: e.environmentId, label: e.label, error: String(err.message ?? err) }))),
+  const results = await pool(
+    envs.map((e) => () => snapshotEnv(e).catch((err) => ({ environmentId: e.environmentId, label: e.label, error: String(err.message ?? err) }))),
+    2,
+    (run) => run(),
   );
   console.log(JSON.stringify({ generatedAt: new Date().toISOString(), unreachable, environments: results }, null, 1));
 }
