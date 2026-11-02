@@ -91,6 +91,8 @@ node <技能目录>/scripts/patrol-snapshot.mjs --self <本线程 id> > /tmp/t3-
 
 **先过 `failedTopLevel`**：里面的每条都按判定表「run failed」那行处理——有工作树、任务没做完的直接恢复继续，不因为它在候选之外就跳过。
 
+**再扫一遍本轮新建的 issue 编码**：报告里出现「已建 issue」「转出为后续 issue」的，回读那几条（`GET /api/issues/{id}`），看标题与正文有没有 `\uFFFD` 或残留 GBK 字节。写入方常把这种乱码判成「终端 GBK 显示问题」而放过——实际库里就是坏的、不可逆。发现就按原文（PR 审查正文、GitHub 原文）重建；重建后同样要回读确认。
+
 **再做监听体检，它不在判定表里**：快照里 `needsWatch` 为 true 的线程一律直接 `watch_pull_request` 代挂（传 `threadId`、`environmentId`、`url`，取 `needsWatchPrs`），报告里记一行。代挂不改变线程状态，与判定表选的「不打扰」并存：线程收轮时撤监听是常态，缺监听几乎每轮都会出现，等它停到能判「空等」再补已经晚了一整轮。因此扫描时先看 `needsWatch`，再看 PR 结论时间。
 
 | 现状 | 动作 |
@@ -127,7 +129,7 @@ node <技能目录>/scripts/patrol-snapshot.mjs --self <本线程 id> > /tmp/t3-
 
 **拿不准时**：先按「在等产品决策」那行找依据，有依据就定案并落地；只有规则冲突、或要改用户可见的行为又无先例可循，才交给用户。
 
-**完成标准**：候选清单上每个线程都各自有一个判定和一个动作（「不打扰」也要有自己的举证，不能沿用兄弟线程的），`needsWatch` 为 true 的都已代挂监听，`needsConvergenceAudit` 为 true 的都发了收敛审计（或已有审计在落地中），`failedTopLevel` 为空或每条都有了处理，发出的每条消息都已成功返回。
+**完成标准**：候选清单上每个线程都各自有一个判定和一个动作（「不打扰」也要有自己的举证，不能沿用兄弟线程的），`needsWatch` 为 true 的都已代挂监听，`needsConvergenceAudit` 为 true 的都发了收敛审计（或已有审计在落地中），`failedTopLevel` 为空或每条都有了处理，本轮新建的 issue 都已回读且无 `\uFFFD`，发出的每条消息都已成功返回。
 
 ## 4. 汇报
 
