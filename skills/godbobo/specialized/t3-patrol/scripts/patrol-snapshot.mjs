@@ -88,7 +88,8 @@ const clipEnds = (s, n = CHARS) => {
   const head = Math.floor(n * 0.4);
   return `${t.slice(0, head)} …[略]… ${t.slice(t.length - (n - head))}`;
 };
-const isReviewBot = (t) => /^代码审查 · PR #\d+/.test(t.title);
+// Fast Ship 发起的审查线程：结论走 Fast Ship 接口提交，失败由 Fast Ship 重派，巡检不接手。
+export const isReviewBot = (t) => /^(?:代码|视觉)审查 · PR #\d+/.test(t.title ?? "");
 const isSubagent = (t) => t.parentThreadId || t.threadId.startsWith("thread:delegated-task:");
 // 代理派活的执行线程：首条消息就是派活模板。它们做完即完成，验收由派活方负责，不该占巡检候选。
 // 判据只能用内容，不能用 `mcp:launch:` 前缀——那只是 launch 方式，代理也会用它建长期验收/总单线程。

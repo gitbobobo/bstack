@@ -56,7 +56,7 @@ node <技能目录>/scripts/patrol-snapshot.mjs --self <本线程 id> > /tmp/t3-
 ```
 
 - 输出结构的读法：
-  - **候选**：`environments[].candidates`（已剔除子代理线程、首条消息是派活模板且没有工作树的执行线程、「代码审查 · PR #N」线程和本线程；剔除数量在 `delegatedExcluded`）。每条带 `link`、`status`、`prs`、`lastMsgAt`、最近 3 次 run、`pendingRequestCount`、`task`（首条用户消息）、`tail`（最后 4 条消息，保留首尾共 600 字——代理常在长汇报末尾才提问）。
+  - **候选**：`environments[].candidates`（已剔除子代理线程、首条消息是派活模板且没有工作树的执行线程、Fast Ship 审查线程（「代码审查 · PR #N」「视觉审查 · PR #N」）和本线程；剔除数量在 `delegatedExcluded`）。每条带 `link`、`status`、`prs`、`lastMsgAt`、最近 3 次 run、`pendingRequestCount`、`task`（首条用户消息）、`tail`（最后 4 条消息，保留首尾共 600 字——代理常在长汇报末尾才提问）。
   - **监听状态**：`prs` 里 open PR 标 `(unwatched)`；已挂监听但 review/评论时间晚于 `lastMsgAt` 标 `(stale)`；需代挂的列在 `needsWatchPrs`（`needsWatch` 为 true）。
   - **命名状态**：标题是原文堆砌、超宽或缺 open PR 号的标 `needsRename`，原因在 `renameReasons`；环境级汇总在 `needsRenameThreads`。
   - **审查健康度（逐 PR）**：`prHealth[]` 带 `openHours`、`rounds`、`latestAt`、`inline24h`/`inlineP0P2`、`failChecks`/`pendingChecks`、`mergeable`、`checksVia`（`fj` 或 `rest`）。判定「在途审查者」「检查还在跑」「`latestAt` 晚于 `lastMsgAt`」直接用这里，不必再手算。`needsConvergenceAudit` 为 true 的列在 `convergenceAuditPrs`，带时长/轮次/当日 P0–P2 条数，直接当审计题头。github.com 的 PR 走 `gh`；其他宿主（Forgejo/Gitea）自动改走 REST：宿主依次取 PR 自己的 URL、`fj auth list`、`FORGEJO_BASE`、`~/.agents/env/forgejo.sh`，凭据取 `FORGEJO_TOKEN`、该文件或本机 git credential helper，都不用手配。CI 状态优先问本机 `fj`（`fj pr status <owner>/<repo>#N`，`checksVia` 记为 `fj`），没装或未登录时退回 REST `/commits/{sha}/statuses`（`checksVia: rest`）。
