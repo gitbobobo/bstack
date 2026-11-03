@@ -58,6 +58,7 @@ node <技能目录>/scripts/patrol-snapshot.mjs --self <本线程 id> > /tmp/t3-
 - 输出结构的读法：
   - **候选**：`environments[].candidates`（已剔除子代理线程、首条消息是派活模板且没有工作树的执行线程、「代码审查 · PR #N」线程和本线程；剔除数量在 `delegatedExcluded`）。每条带 `link`、`status`、`prs`、`lastMsgAt`、最近 3 次 run、`pendingRequestCount`、`task`（首条用户消息）、`tail`（最后 4 条消息，保留首尾共 600 字——代理常在长汇报末尾才提问）。
   - **监听状态**：`prs` 里 open PR 标 `(unwatched)`；已挂监听但 review/评论时间晚于 `lastMsgAt` 标 `(stale)`；需代挂的列在 `needsWatchPrs`（`needsWatch` 为 true）。
+  - **命名状态**：标题是原文堆砌、超宽或缺 open PR 号的标 `needsRename`，原因在 `renameReasons`；环境级汇总在 `needsRenameThreads`。
   - **审查健康度（逐 PR）**：`prHealth[]` 带 `openHours`、`rounds`、`latestAt`、`inline24h`/`inlineP0P2`、`failChecks`/`pendingChecks`、`mergeable`、`checksVia`（`fj` 或 `rest`）。判定「在途审查者」「检查还在跑」「`latestAt` 晚于 `lastMsgAt`」直接用这里，不必再手算。`needsConvergenceAudit` 为 true 的列在 `convergenceAuditPrs`，带时长/轮次/当日 P0–P2 条数，直接当审计题头。github.com 的 PR 走 `gh`；其他宿主（Forgejo/Gitea）自动改走 REST：宿主依次取 PR 自己的 URL、`fj auth list`、`FORGEJO_BASE`、`~/.agents/env/forgejo.sh`，凭据取 `FORGEJO_TOKEN`、该文件或本机 git credential helper，都不用手配。CI 状态优先问本机 `fj`（`fj pr status <owner>/<repo>#N`，`checksVia` 记为 `fj`），没装或未登录时退回 REST `/commits/{sha}/statuses`（`checksVia: rest`）。
   - **核不到实况**：`prs` 标 `(health-unavailable)` 表示该 PR 的 gh 与 Forgejo 两条通道都失败。这时不要判「不打扰」：先用 `git credential fill` 确认宿主凭据可用，再按 Forgejo API（`GET /api/v1/repos/{owner}/{repo}/pulls/{n}`、`/reviews`、`/issues/{n}/comments`、`/commits/{sha}/statuses`）手工核一次；仍核不到就写进「需要你决定」，把 PR URL 和报错带上。
   - **空转迹象**（仅活跃状态 preparing/queued/starting/running/waiting）：`distinctRecentCommands`（最近 30 个工具调用里不同命令数）、`sampleCommand`、`minutesSinceLastMessage`。
@@ -74,15 +75,9 @@ node <技能目录>/scripts/patrol-snapshot.mjs --self <本线程 id> > /tmp/t3-
 1. `pendingRequestCount` 大于 0 时，用 `t3_pending_request`（`action:"list"`，带 `threadId` 和 `environmentId`）读出待答问题。
 2. 从 `task` 和 `tail` 里，用一句**具体的话**写清它在做什么：哪个 issue/PR、要解决什么问题（例如「PR #636：把 Android 的 test-hygiene 门禁对齐到桌面和 OHOS」）。只写「实施 Fast Ship 问题 157d51e8」这种话，用户没法判断。
 3. 有 PR 且需要查实况时（包括所有「自称在等审查」的线程）：`gh pr view <N> --repo <owner/repo> --json headRefOid,reviews,comments,statusCheckRollup --jq '{head:.headRefOid, review:(.reviews|last|.submittedAt), comment:(.comments|last|.createdAt), checks:[.statusCheckRollup[]|.conclusion]|unique}'`，和线程最后一条消息比较。
-4. **顺手命名**：标题是侧栏里的唯一识别入口，自动生成的标题（`/t3-orchestrator 1. 将以下问题标记为进行中…`、`Act as the review sub-agent…`）没被截断也只看得见半句话，等于没有标题。需要改的用 `t3_thread_update`（`action:"rename"`、`title`、`threadId`，带该环境的 `environmentId`）改成本轮第 2 点那句的压缩版，格式 `<标识> <主题>[-<段>]`，宽度 ≤ 20 个汉字（ASCII 算半个，侧栏才不会截断）：
 
-   - 标识：有 open PR 用 `#<PR 号>`，无 PR 但有 issue 用 `INT-<号>`，都没有用类别词（`审查`、`巡检`、`调研`）。
-   - 主题：3–10 字说清这件事，去掉 `feat(...)`/`fix(...)`、仓库名与「实施/处理」这类不载信息的词。
-   - 段：同一需求拆到多端时加 `-Android`、`-Windows`、`-Swift`，否则同 issue 的几个线程在侧栏长得一模一样。
+**完成标准**：每个候选都写出了一句具体在做什么。
 
-   例：`#685 歌词-Android`、`#683 INT-1378 验收`、`INT-1550 灌队取消守卫`、`审查 #653 R4`。只改三类：含 `/t3-orchestrator`、`Act as`、`## ` 或换行的原文堆砌；宽度超过 20 个汉字；标识过期（PR 已建但标题里没号、换了段）。已经是短标题且无这些痕迹的当作用户自己起的，不动。状态、轮次、模型名不进标题：它们每轮都变，会让标题抖动，还会刷新 `updatedAt` 干扰停滞判定。
-
-**完成标准**：每个候选都写出了一句具体在做什么；需要命名的线程都已按格式改完标题。
 
 ## 3. 判定并行动
 
@@ -95,6 +90,8 @@ node <技能目录>/scripts/patrol-snapshot.mjs --self <本线程 id> > /tmp/t3-
 **再扫一遍本轮新建的 issue 编码**：报告里出现「已建 issue」「转出为后续 issue」的，回读那几条（`GET /api/issues/{id}`），看标题与正文有没有 `\uFFFD` 或残留 GBK 字节。写入方常把这种乱码判成「终端 GBK 显示问题」而放过——实际库里就是坏的、不可逆。发现就按原文（PR 审查正文、GitHub 原文）重建；重建后同样要回读确认。
 
 **再做监听体检，它不在判定表里**：快照里 `needsWatch` 为 true 的线程一律直接 `watch_pull_request` 代挂（传 `threadId`、`environmentId`、`url`，取 `needsWatchPrs`），报告里记一行。代挂不改变线程状态，与判定表选的「不打扰」并存：线程收轮时撤监听是常态，缺监听几乎每轮都会出现，等它停到能判「空等」再补已经晚了一整轮。因此扫描时先看 `needsWatch`，再看 PR 结论时间。
+
+**再做命名体检，同样不在判定表里**：`needsRenameThreads` 里的每条一律改名，格式见 [references/naming.md](references/naming.md)，报告里记一行。静止、已交付的线程也改——侧栏认的是标题，不看线程在不在跑。
 
 | 现状 | 动作 |
 | --- | --- |
@@ -130,7 +127,7 @@ node <技能目录>/scripts/patrol-snapshot.mjs --self <本线程 id> > /tmp/t3-
 
 **拿不准时**：技术与收敛问题交顾问（`M7`/`M14`），产品问题先按「在等产品决策」那行找依据、找不到交顾问（`M15`）。交给用户的只剩不可逆动作、规则冲突和顾问也定不了的问题。
 
-**完成标准**：候选清单上每个线程都各自有一个判定和一个动作（「不打扰」也要有自己的举证，不能沿用兄弟线程的），`needsWatch` 为 true 的都已代挂监听，`needsConvergenceAudit` 为 true 的都发了收敛审计（或已有审计在落地中），`failedTopLevel` 为空或每条都有了处理，本轮新建的 issue 都已回读且无 `\uFFFD`，发出的每条消息都已成功返回。
+**完成标准**：候选清单上每个线程都各自有一个判定和一个动作（「不打扰」也要有自己的举证，不能沿用兄弟线程的），`needsWatch` 为 true 的都已代挂监听，`needsRenameThreads` 里的都已改名，`needsConvergenceAudit` 为 true 的都发了收敛审计（或已有审计在落地中），`failedTopLevel` 为空或每条都有了处理，本轮新建的 issue 都已回读且无 `\uFFFD`，发出的每条消息都已成功返回。
 
 ## 4. 汇报
 
@@ -143,6 +140,8 @@ node <技能目录>/scripts/patrol-snapshot.mjs --self <本线程 id> > /tmp/t3-
 本轮新建的交接线程、等待空位的交接和 settle 掉的线程单列一节，写明交接自哪个线程、发到哪台设备；等待空位的补上目标环境当前在跑的线程数。已交付、等用户验收的一次性任务另列一节「已交付」，每条一行。本轮发了收敛审计提醒的线程另列一节「久审未收敛」，附上取证的数字和你的判断。
 
 首次运行或环境有增减时，在报告开头附上环境对照表。
+
+固定一节「例行复核」，每项写条数：监听体检（代挂几条）、命名体检（改名几条）、久审未收敛、issue 编码（回读几条、乱码几条）。
 
 **状态按证据写**：报告里每个状态都要追到本轮的一次读取。发了消息、没回读，就写「已发送」；写「已采纳」「正在跑门禁」「已标注」，必须是本轮读到了对方线程、PR 或 issue 的实况，并且写的是被读的那个对象。
 

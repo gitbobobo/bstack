@@ -26,7 +26,7 @@
    - `projectId` 取目标环境里同一仓库的项目（`t3_thread_list` 找同仓库的近期线程，用它的 `projectId`）；
    - `modelSelection` 取 `{instanceId:"pi", model:<SKILL.md「模型优先级」里当前可用档位>, options:{thinking:"medium"}}`；
    - `workspaceStrategy` 取 `{type:"worktree", baseRef:<仓库默认分支>, startFromOrigin:true}`；
-   - 标题按 SKILL.md 的命名格式（`#PR 号 / INT-号 + 主题 + 端`），用该项目以往标题的语言和写法；
+   - 标题按 [naming.md](naming.md) 的格式，用该项目以往标题的语言和写法；
    - `message` 原样贴交接提示词，开头如有斜杠命令就保持在第一行，末尾另起一行写 `> 交接自 <来源线程 link>`。
 
    交接写的是多段接力（如「先发 A 设备，合并后换新 PR 号再发 B 设备」），本轮只建第一段，并在 message 末尾再加一行 `> 后续：合并后按同一提示词换新 PR 号交接给 <下一台设备>`，让新线程收尾时给出下一段的交接。

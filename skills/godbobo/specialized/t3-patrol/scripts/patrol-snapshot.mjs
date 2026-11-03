@@ -439,6 +439,19 @@ function needsWatchOf(prs) {
   return unwatched.length ? { needsWatch: true, needsWatchPrs: unwatched } : { needsWatch: false };
 }
 
+// 命名体检：标题是侧栏里唯一的识别入口。三类必须改：原文堆砌（raw）、超宽（wide，>20 个汉字，ASCII 算半个）、
+// 有 open PR 却没带号（stale-id）。算成字段而不是靠巡检记得去看——靠记得的那一步漏过好几天。
+const titleWidth = (s) => [...s].reduce((w, ch) => w + (ch.charCodeAt(0) < 128 ? 0.5 : 1), 0);
+export function renameOf(title, prs) {
+  const t = String(title ?? "");
+  const reasons = [];
+  if (/\/t3-orchestrator|Act as|## |\n/.test(t)) reasons.push("raw");
+  if (titleWidth(t.trim()) > 20) reasons.push("wide");
+  const openNums = (prs ?? []).filter((p) => /:open\b/.test(p)).map((p) => p.match(/#(\d+):/)?.[1]).filter(Boolean);
+  if (openNums.length && !openNums.some((n) => new RegExp(`#${n}(?!\\d)`).test(t))) reasons.push("stale-id");
+  return reasons.length ? { needsRename: true, renameReasons: reasons } : { needsRename: false };
+}
+
 // 久审未收敛：开放时长或轮次越线、且 24 小时内还有 P0–P2 行内意见。
 // 这类线程看起来最健康（一直在跑、一直有新结论），却正是最该发收敛审计的。
 function convergenceOf(health) {
@@ -502,10 +515,10 @@ async function snapshotEnv(env) {
           mergeable: h.mergeable ?? null,
           checksVia: h.checksFrom ?? null,
         }));
-        return { ...base, prs, ...tail, ...needsWatchOf(prs), ...convergenceOf(health), ...(prHealth.length ? { prHealth } : {}) };
+        return { ...base, prs, ...tail, ...needsWatchOf(prs), ...renameOf(t.title, prs), ...convergenceOf(health), ...(prHealth.length ? { prHealth } : {}) };
       } catch (e) {
         // 取不到详情 ≠ 线程没事：标成 incomplete，报告必须逐条交代（否则会被当成「推进中」）。
-        return { ...base, error: String(e.message ?? e), incomplete: true };
+        return { ...base, ...renameOf(t.title, base.prs), error: String(e.message ?? e), incomplete: true };
       }
   });
   // 占用名额的线程：有活跃 run 的（含 Fast Ship 审查线程），或 PR 仍 open、最近 2 小时内跑过的（两轮审查之间
@@ -536,6 +549,7 @@ async function snapshotEnv(env) {
     candidates: real,
     delegatedExcluded: enriched.length - real.length,
     failedTopLevel,
+    needsRenameThreads: real.filter((x) => x.needsRename).map((x) => ({ id: x.id, title: x.title, reasons: x.renameReasons })),
   };
 }
 
