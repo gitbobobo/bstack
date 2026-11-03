@@ -90,6 +90,8 @@ const clipEnds = (s, n = CHARS) => {
 };
 // Fast Ship 发起的审查线程：结论走 Fast Ship 接口提交，失败由 Fast Ship 重派，巡检不接手。
 export const isReviewBot = (t) => /^(?:代码|视觉)审查 · PR #\d+/.test(t.title ?? "");
+// 额度探测线程：巡检自己在「0. 前提」里建、当轮 settle，不是待判任务；失败本身就是探测结果，也不进 failedTopLevel。
+export const isProbe = (t) => /^额度探测$/.test(String(t.title ?? "").trim());
 const isSubagent = (t) => t.parentThreadId || t.threadId.startsWith("thread:delegated-task:");
 // 代理派活的执行线程：首条消息就是派活模板。它们做完即完成，验收由派活方负责，不该占巡检候选。
 // 判据只能用内容，不能用 `mcp:launch:` 前缀——那只是 launch 方式，代理也会用它建长期验收/总单线程。
@@ -468,7 +470,7 @@ async function snapshotEnv(env) {
   const now = Date.now();
   const all = await listAll(env.isLocal ? null : env.environmentId);
   const top = all.filter((t) => !isSubagent(t));
-  const candidates = top.filter((t) => !isReviewBot(t) && t.threadId !== SELF);
+  const candidates = top.filter((t) => !isReviewBot(t) && !isProbe(t) && t.threadId !== SELF);
   const enriched = await pool(candidates, CONC, async (t) => {      const base = {
         id: t.threadId,
         link: t.link,
@@ -542,7 +544,7 @@ async function snapshotEnv(env) {
   // 把误杀的线程留在这份名单里，巡检每轮必须逐个过——静默消失比多算几条候选危险得多。
   const realIds = new Set(real.map((x) => x.id));
   const failedTopLevel = top
-    .filter((t) => ["failed", "interrupted", "cancelled"].includes(t.status) && !realIds.has(t.threadId))
+    .filter((t) => ["failed", "interrupted", "cancelled"].includes(t.status) && !realIds.has(t.threadId) && !isProbe(t))
     .map((t) => ({ id: t.threadId, link: t.link, title: clip(t.title, 60), status: t.status, updatedAt: t.updatedAt }));
   return {
     environmentId: env.environmentId,
