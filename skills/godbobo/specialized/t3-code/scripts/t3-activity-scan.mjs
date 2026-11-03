@@ -81,7 +81,7 @@ async function scanThread(env, t, since) {
       if (i.position >= end || i.position <= after) continue;
       if (Date.parse(i.updatedAt) < since) { stop = true; continue; }
       const tx = `${i.text ?? ""} ${i.title ?? ""}`;
-      if (i.type === "dynamic_tool" || i.type === "command_execution") for (const m of tx.matchAll(/skills\/([\w-]+)\/SKILL\.md/g)) reads.add(m[1]);
+      if (i.type === "dynamic_tool" || i.type === "command_execution") for (const m of tx.matchAll(/skills[\\/]+([\w-]+)[\\/]+SKILL\.md/g)) reads.add(m[1]);
       for (const m of tx.matchAll(/\$([a-z][\w-]+)/g)) rec.mentions[m[1]] = (rec.mentions[m[1]] ?? 0) + 1;
       if (i.type === "user_message") rec.users.push({ p: i.position, by: i.createdBy, at: i.updatedAt?.slice(5, 16), text: flat(tx, 400) });
     }
