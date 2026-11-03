@@ -57,9 +57,12 @@ node <技能目录>/scripts/patrol-snapshot.mjs --self <本线程 id> > /tmp/t3-
 
 - 输出结构的读法：
   - **候选**：`environments[].candidates`（已剔除子代理线程、首条消息是派活模板且没有工作树的执行线程、Fast Ship 审查线程（「代码审查 · PR #N」「视觉审查 · PR #N」）和本线程；剔除数量在 `delegatedExcluded`）。每条带 `link`、`status`、`prs`、`lastMsgAt`、最近 3 次 run、`pendingRequestCount`、`task`（首条用户消息）、`tail`（最后 4 条消息，保留首尾共 600 字——代理常在长汇报末尾才提问）。
-  - **监听状态**：`prs` 里 open PR 标 `(unwatched)`；已挂监听但 review/评论时间晚于 `lastMsgAt` 标 `(stale)`；需代挂的列在 `needsWatchPrs`（`needsWatch` 为 true）。
-  - **命名状态**：标题是原文堆砌、超宽或缺 open PR 号的标 `needsRename`，原因在 `renameReasons`；环境级汇总在 `needsRenameThreads`。
-  - **审查健康度（逐 PR）**：`prHealth[]` 带 `openHours`、`rounds`、`latestAt`、`inline24h`/`inlineP0P2`、`failChecks`/`pendingChecks`、`mergeable`、`checksVia`（`fj` 或 `rest`）。判定「在途审查者」「检查还在跑」「`latestAt` 晚于 `lastMsgAt`」直接用这里，不必再手算。`needsConvergenceAudit` 为 true 的列在 `convergenceAuditPrs`，带时长/轮次/当日 P0–P2 条数，直接当审计题头。github.com 的 PR 走 `gh`；其他宿主（Forgejo/Gitea）自动改走 REST：宿主依次取 PR 自己的 URL、`fj auth list`、`FORGEJO_BASE`、`~/.agents/env/forgejo.sh`，凭据取 `FORGEJO_TOKEN`、该文件或本机 git credential helper，都不用手配。CI 状态优先问本机 `fj`（`fj pr status <owner>/<repo>#N`，`checksVia` 记为 `fj`），没装或未登录时退回 REST `/commits/{sha}/statuses`（`checksVia: rest`）。
+  - **体检清单（环境级）**：三项体检各一份，每条带线程 `id`，逐条处理即可。
+    - `needsWatchThreads`：有 open PR 没挂监听（`prs`、`urls`）。
+    - `needsRenameThreads`：标题是原文堆砌、超宽或缺 open PR 号（`reasons`）。
+    - `convergenceAuditThreads`：久审未收敛（`prs` 带时长/轮次/当日 P0–P2 条数，直接当审计题头）。
+  - **监听状态**：`prs` 里 open PR 标 `(unwatched)`；已挂监听但 review/评论时间晚于 `lastMsgAt` 标 `(stale)`。
+  - **审查健康度（逐 PR）**：`prHealth[]` 带 `openHours`、`rounds`、`latestAt`、`inline24h`/`inlineP0P2`、`failChecks`/`pendingChecks`、`mergeable`、`checksVia`（取数通道）。判定「在途审查者」「检查还在跑」「`latestAt` 晚于 `lastMsgAt`」直接用这里，不必再手算。宿主与凭据由脚本自己解析，不用手配。
   - **核不到实况**：`prs` 标 `(health-unavailable)` 表示该 PR 的 gh 与 Forgejo 两条通道都失败。这时不要判「不打扰」：先用 `git credential fill` 确认宿主凭据可用，再按 Forgejo API（`GET /api/v1/repos/{owner}/{repo}/pulls/{n}`、`/reviews`、`/issues/{n}/comments`、`/commits/{sha}/statuses`）手工核一次；仍核不到就写进「需要你决定」，把 PR URL 和报错带上。
   - **空转迹象**（仅活跃状态 preparing/queued/starting/running/waiting）：`distinctRecentCommands`（最近 30 个工具调用里不同命令数）、`sampleCommand`、`minutesSinceLastMessage`。
   - **容量**：`activeTopLevel` 与 `occupying`（[references/handoff.md](references/handoff.md) 第 3 步用）。
@@ -85,23 +88,23 @@ node <技能目录>/scripts/patrol-snapshot.mjs --self <本线程 id> > /tmp/t3-
 
 消息正文见 [references/messages.md](references/messages.md)（M1–M15），`M<n>` 即取那条模板照发；收尾交接见 [references/handoff.md](references/handoff.md)。
 
-**先过 `failedTopLevel`**：里面的每条都按判定表「run failed」那行处理——有工作树、任务没做完的直接恢复继续，不因为它在候选之外就跳过。
+**先过 `failedTopLevel`**：里面的每条都按判定表第一行（run failed）处理——有工作树、任务没做完的直接恢复继续，不因为它在候选之外就跳过。
 
 **再扫一遍本轮新建的 issue 编码**：报告里出现「已建 issue」「转出为后续 issue」的，回读那几条（`GET /api/issues/{id}`），看标题与正文有没有 `\uFFFD` 或残留 GBK 字节。写入方常把这种乱码判成「终端 GBK 显示问题」而放过——实际库里就是坏的、不可逆。发现就按原文（PR 审查正文、GitHub 原文）重建；重建后同样要回读确认。
 
-**再做监听体检，它不在判定表里**：快照里 `needsWatch` 为 true 的线程一律直接 `watch_pull_request` 代挂（传 `threadId`、`environmentId`、`url`，取 `needsWatchPrs`），报告里记一行。代挂不改变线程状态，与判定表选的「不打扰」并存：线程收轮时撤监听是常态，缺监听几乎每轮都会出现，等它停到能判「空等」再补已经晚了一整轮。因此扫描时先看 `needsWatch`，再看 PR 结论时间。
+**再做监听体检，它不在判定表里**：`needsWatchThreads` 里的每条一律直接 `watch_pull_request` 代挂（传 `threadId`、`environmentId`、`url`，`url` 取该条的 `urls`），报告里记一行。代挂不改变线程状态，与判定表选的「不打扰」并存：线程收轮时撤监听是常态，缺监听几乎每轮都会出现，等它停到能判「空等」再补已经晚了一整轮。因此扫描时先过这份清单，再看 PR 结论时间。
 
 **再做命名体检，同样不在判定表里**：`needsRenameThreads` 里的每条一律改名，格式见 [references/naming.md](references/naming.md)，报告里记一行。静止、已交付的线程也改——侧栏认的是标题，不看线程在不在跑。
 
 | 现状 | 动作 |
 | --- | --- |
+| run failed / interrupted / cancelled，或最新 run 停在 queued 超过 30 分钟 | 连续两个 failed，或报错是额度/上下文耗尽类 → 换档后发 `M4`；其余瞬时失败 → `M12`；换过模型仍失败列「需要你决定」。线程没恢复就执行不了任何消息，所以这一行排在最前 |
 | 发过收敛审计后，PR 描述仍没有「交付范围」一节，或仍在逐条修范围外意见 | 第一次发 `M1`；再次命中发 `M14`（顾问复审）；`M14` 之后仍命中才列「需要你决定」 |
-| `needsConvergenceAudit` 为 true，且本线程 24 小时内没收到过收敛审计 | 数字取 `convergenceAuditPrs`，再按文件/日期分布取证，发 `M2`，报告单列 |
+| 在 `convergenceAuditThreads` 里，且本线程 24 小时内没收到过收敛审计 | 数字取该条的 `prs`，再按文件/日期分布取证，发 `M2`，报告单列 |
 | 正在运行但空转：`distinctRecentCommands` 小于 5，或 `minutesSinceLastMessage` 超过 60 | 先看重复命令在查什么（能查到就自己查），`t3_thread_interrupt` 后发 `M3` |
-| 正在运行（有活跃 run），`minutesSinceLastMessage` 小于 30，且 `needsConvergenceAudit` 不为 true | 不打扰。久审不收敛的线程恰恰“看起来最健康”，会永远停在这一档，所以上一条异常必须先命中 |
+| 正在运行（有活跃 run），`minutesSinceLastMessage` 小于 30，且不在 `convergenceAuditThreads` 里 | 不打扰。久审不收敛的线程恰恰“看起来最健康”，会永远停在这一档，所以上一条异常必须先命中 |
 | 上一条消息是 `【巡检】`，之后没有新的提交或实质进展 | 不再重复推，列进「需要你决定」并附卡点 |
 | 空等：PR 仍 open、线程已停超过 30 分钟、最新 HEAD 上已没有在途的审查者和检查 | 按尾部分流，一律发消息：已收敛 → `M10`；问技术取舍或遗留项 → 对应行；仍有未处理的审查意见 → `M9` |
-| run failed / interrupted / cancelled，或最新 run 停在 queued 超过 30 分钟 | 连续两个 failed，或报错是额度/上下文耗尽类 → 换档后发 `M4`；其余瞬时失败 → `M12`；换过模型仍失败列「需要你决定」 |
 | 在等用户做产品决策（用户看得见的行为、文案、交互要改） | 先找依据，按序：原任务首条消息与关联 issue 的背景、已定决策（「正式版全新安装」这类前提常常已经回答了问题）→ 跨端怎么拆、收敛纪律、仓库约定 → 同类先例。找得到就定案并发进线程执行；找不到就发 `M15`，让顾问按原任务目标定案。只有不可逆动作（删用户数据、动生产、强推/直推主分支）、规则互相冲突、顾问也给不出依据，才列「需要你决定」 |
 | 在请求原任务已覆盖的授权（提交、推送、按模板建 PR、复审、重挂监听） | `M5` |
 | 在问遗留项怎么办（flaky、范围外缺陷、要不要跟进） | `M6` |
@@ -127,7 +130,7 @@ node <技能目录>/scripts/patrol-snapshot.mjs --self <本线程 id> > /tmp/t3-
 
 **拿不准时**：技术与收敛问题交顾问（`M7`/`M14`），产品问题先按「在等产品决策」那行找依据、找不到交顾问（`M15`）。交给用户的只剩不可逆动作、规则冲突和顾问也定不了的问题。
 
-**完成标准**：候选清单上每个线程都各自有一个判定和一个动作（「不打扰」也要有自己的举证，不能沿用兄弟线程的），`needsWatch` 为 true 的都已代挂监听，`needsRenameThreads` 里的都已改名，`needsConvergenceAudit` 为 true 的都发了收敛审计（或已有审计在落地中），`failedTopLevel` 为空或每条都有了处理，本轮新建的 issue 都已回读且无 `\uFFFD`，发出的每条消息都已成功返回。
+**完成标准**：候选清单上每个线程都各自有一个判定和一个动作（「不打扰」也要有自己的举证，不能沿用兄弟线程的），`needsWatchThreads` 里的都已代挂监听，`needsRenameThreads` 里的都已改名，`convergenceAuditThreads` 里的都发了收敛审计（或已有审计在落地中），`failedTopLevel` 为空或每条都有了处理，本轮新建的 issue 都已回读且无 `\uFFFD`，发出的每条消息都已成功返回。
 
 ## 4. 汇报
 

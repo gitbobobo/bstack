@@ -337,7 +337,7 @@ async function forgejoLiveOf(repo, num, hint) {
           latestAt: latest ? new Date(latest).toISOString() : null,
           failChecks,
           pendingChecks,
-          mergeable: fjStatus?.mergeable ?? null,
+          mergeable: fjStatus?.mergeable ?? (typeof pr.mergeable === "boolean" ? (pr.mergeable ? "Can be merged" : "Conflicting") : null),
           checksFrom: fjStatus ? "fj" : "rest",
           openHours,
           reviewRounds,
@@ -490,11 +490,13 @@ async function snapshotEnv(env) {
         // latestAt 晚于线程最后消息说明有新结论而线程没反应——标 (stale)，按「监听掉了」处理。
         const lastMsgMs = Date.parse(tail.lastMsgAt ?? "") || 0;
         const health = [];
+        const unwatchedUrls = [];
         const prs = livePrs
           ? await pool(
               livePrs, CONC, async (p) => {
                 let tag = `${p.repository}#${p.number}:${p.state}${p.watching === false ? "(unwatched)" : ""}`;
                 if (p.state !== "open") return tag;
+                if (p.watching === false && p.url) unwatchedUrls.push(p.url);
                 const live = await prLiveOf(tag, p.url);
                 if (!live) return tag;
                 if (live.unavailable) return `${tag}(health-unavailable)`;
@@ -516,7 +518,7 @@ async function snapshotEnv(env) {
           mergeable: h.mergeable ?? null,
           checksVia: h.checksFrom ?? null,
         }));
-        return { ...base, prs, ...tail, ...needsWatchOf(prs), ...renameOf(t.title, prs), ...convergenceOf(health), ...(prHealth.length ? { prHealth } : {}) };
+        return { ...base, prs, ...tail, ...needsWatchOf(prs), ...(unwatchedUrls.length ? { needsWatchUrls: unwatchedUrls } : {}), ...renameOf(t.title, prs), ...convergenceOf(health), ...(prHealth.length ? { prHealth } : {}) };
       } catch (e) {
         // 取不到详情 ≠ 线程没事：标成 incomplete，报告必须逐条交代（否则会被当成「推进中」）。
         return { ...base, ...renameOf(t.title, base.prs), error: String(e.message ?? e), incomplete: true };
@@ -550,7 +552,10 @@ async function snapshotEnv(env) {
     candidates: real,
     delegatedExcluded: enriched.length - real.length,
     failedTopLevel,
+    // 三项体检各给一份环境级清单，巡检逐条处理、逐条对账，不必再遍历候选找开关。
+    needsWatchThreads: real.filter((x) => x.needsWatch).map((x) => ({ id: x.id, link: x.link, prs: x.needsWatchPrs, urls: x.needsWatchUrls ?? [] })),
     needsRenameThreads: real.filter((x) => x.needsRename).map((x) => ({ id: x.id, title: x.title, reasons: x.renameReasons })),
+    convergenceAuditThreads: real.filter((x) => x.needsConvergenceAudit).map((x) => ({ id: x.id, link: x.link, prs: x.convergenceAuditPrs })),
   };
 }
 
