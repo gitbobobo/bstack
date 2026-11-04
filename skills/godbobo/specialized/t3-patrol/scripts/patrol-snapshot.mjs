@@ -8,7 +8,7 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const args = process.argv.slice(2);
@@ -17,6 +17,8 @@ const opt = (name, dflt) => {
   return i >= 0 && args[i + 1] ? args[i + 1] : dflt;
 };
 const SELF = opt("self", null);
+const SKILL_DIR = dirname(dirname(fileURLToPath(import.meta.url)));
+const MODEL_LADDER = JSON.parse(readFileSync(join(SKILL_DIR, "references", "model-ladder.json"), "utf8"));
 const TAIL = Number(opt("tail", 4));
 const CHARS = Number(opt("chars", 600));
 const CONC = Number(opt("concurrency", 6));
@@ -545,7 +547,36 @@ async function snapshotEnv(env) {
   const realIds = new Set(real.map((x) => x.id));
   const failedTopLevel = top
     .filter((t) => ["failed", "interrupted", "cancelled"].includes(t.status) && !realIds.has(t.threadId) && !isProbe(t))
-    .map((t) => ({ id: t.threadId, link: t.link, title: clip(t.title, 60), status: t.status, updatedAt: t.updatedAt }));
+    .map((t) => ({
+      id: t.threadId,
+      link: t.link,
+      title: clip(t.title, 60),
+      status: t.status,
+      model: `${t.providerInstanceId}/${t.model}`,
+      hasWorktree: Boolean(t.worktreePath),
+      prs: (t.pullRequests ?? []).map((p) => `${p.repository}#${p.number}:${p.state}`),
+      updatedAt: t.updatedAt,
+      source: "filtered",
+    }));
+  // 失败清单同时收候选内与候选外失败线程。判定表只负责动作；这份清单负责「一个都不漏」。
+  const failedThreads = [
+    ...real
+      .filter((x) => ["failed", "interrupted", "cancelled"].includes(x.status))
+      .map((x) => ({
+        id: x.id,
+        link: x.link,
+        title: x.title,
+        status: x.status,
+        model: x.model,
+        hasWorktree: x.hasWorktree,
+        prs: x.prs,
+        runs: x.runs,
+        task: x.task,
+        tail: x.tail,
+        source: "candidates",
+      })),
+    ...failedTopLevel,
+  ];
   return {
     environmentId: env.environmentId,
     label: env.label,
@@ -554,9 +585,12 @@ async function snapshotEnv(env) {
     candidates: real,
     delegatedExcluded: enriched.length - real.length,
     failedTopLevel,
+    failedThreads,
     // 三项体检各给一份环境级清单，巡检逐条处理、逐条对账，不必再遍历候选找开关。
     needsWatchThreads: real.filter((x) => x.needsWatch).map((x) => ({ id: x.id, link: x.link, prs: x.needsWatchPrs, urls: x.needsWatchUrls ?? [] })),
-    needsRenameThreads: real.filter((x) => x.needsRename).map((x) => ({ id: x.id, title: x.title, reasons: x.renameReasons })),
+    needsRenameThreads: real
+      .filter((x) => x.needsRename)
+      .map((x) => ({ id: x.id, title: x.title, reasons: x.renameReasons, prs: x.prs, task: x.task, tail: x.tail })),
     convergenceAuditThreads: real.filter((x) => x.needsConvergenceAudit).map((x) => ({ id: x.id, link: x.link, prs: x.convergenceAuditPrs })),
   };
 }
@@ -579,7 +613,7 @@ async function main() {
     2,
     (run) => run(),
   );
-  console.log(JSON.stringify({ generatedAt: new Date().toISOString(), unreachable, environments: results }, null, 1));
+  console.log(JSON.stringify({ generatedAt: new Date().toISOString(), modelLadder: MODEL_LADDER, unreachable, environments: results }, null, 1));
 }
 
 // 技能常经符号链接安装：比较 realpath，否则直接运行时静默不执行。

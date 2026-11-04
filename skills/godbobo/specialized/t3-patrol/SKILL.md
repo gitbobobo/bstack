@@ -30,11 +30,11 @@ description: 代表用户巡检、定案各 T3 环境未结线程。仅定时任
 
 四个环境共用同一订阅的额度池，一个环境耗尽，其他环境也一样——判定和换模型都全局看一次，不逐环境试探。
 
-- 新建线程、换模型统一按这个顺序取：`pi/cliproxyapi/glm-5.3-flash` → `acpRegistry_devin/swe-2-high`（devin harness）→ `pi/cliproxyapi/deepseek-v4.1-flash`（兜底）。思考档统一 medium：pi 档用 `{thinking:"medium"}`，devin 档用 `{thought_level:"medium"}`。换模把 instanceId、model、options 一起交给 `t3_thread_configure`，新建线程写进 `modelSelection`。
+- 模型阶梯的唯一事实源是 [references/model-ladder.json](references/model-ladder.json)；快照顶层回带 `modelLadder`。新建线程、换模型、建探测都只准从本轮快照的 `modelLadder` 逐项取 `instanceId`/`model`/`options`；没有快照就先读这份文件。凭记忆写模型名、写到 `modelLadder` 之外的实例，都按「没重读技能」处理，立刻改用当前值重发。批量恢复失败线程优先跑 `scripts/patrol-tier.mjs --snapshot <快照> --to <档位序号/name/fallback>`，一条命令完成换档、M4 与回读；`--dry-run` 先看清单，`cancelled` 默认跳过。
 - **档位每轮独立判，不继承上一轮**：本轮没看到额度失败，就当首选档可用，新建和换模都用它。上一轮切过档不是继续用低档的理由。
 - **判「某档不可用」要当轮取证**：本轮探测线程失败，或同一档有多条线程连续 failed。单次瞬时失败、同模型其他线程却正常 → 不是额度问题，别换档。
-- 上一轮确有线程因额度（`model_usage_exhausted`、quota）失败的，本轮先建一个极简探测线程确认（标题 `额度探测`，任务只写「回复一句 ok 即可，不要做别的」，建在当前项目且不建工作树）：通过就把档位定回首选，失败才降一档并在报告里写明。探测线程用完当轮 settle（或归档）。首选与次选都判不可用时自动降到 deepseek 兜底档（同样先探测通过再用），它是优先级列表里的一员，不需要用户点头；兜底档也失败才列「需要你决定」。
-- 报错先归因再换档：`API 返回了 HTML 页面而不是 JSON` 这类是调用路径/凭证问题（Fast Ship 要带 `/api/` 前缀），不是模型坏；把现象扣到模型头上会白白切掉一整档。`413 Request Entity Too Large` 是该线程上下文超出路由的请求体上限，不是额度：只给这一条改用 deepseek 兜底档，档位判定不受影响。秒级失败（发起后约 1 秒内结束）连续两个档都这样，就是大上下文线程：直接换 deepseek 重发，不列「需要你决定」（#755、#166、#167 都靠它跑通）。
+- **探测只用来回升档位，不用来阻塞恢复**：上一轮确有额度（`model_usage_exhausted`、quota）失败、本轮还没新失败时，先建极简探测线程确认首选档是否恢复（标题 `额度探测`，任务只写「回复一句 ok 即可，不要做别的」，建在当前项目且不建工作树），用完当轮 settle（或归档）。本轮 `failedThreads` 里已经有多条同档失败，它们就是证据：不建探测、不判定等待，直接按 `modelLadder` 换下一档并逐条重发；下一档也当轮失败就继续降，直到兜底档。兜底档仍失败才列「需要你决定」。
+- 报错先归因再换档：`API 返回了 HTML 页面而不是 JSON` 这类是调用路径/凭证问题（Fast Ship 要带 `/api/` 前缀），不是模型坏；把现象扣到模型头上会白白切掉一整档。`413 Request Entity Too Large` 是该线程上下文超出路由的请求体上限，不是额度：只给这一条改用兜底档，档位判定不受影响。秒级失败（发起后约 1 秒内结束）连续两个档都这样，就是大上下文线程：直接换兜底档重发，不列「需要你决定」（#755、#166、#167 都靠它跑通）。
 - 任务书或项目约定指定了模型时以任务书为准，巡检不替它换。
 - 报告开头写一句本轮用的模型档位及依据（探测结果或本轮额度失败）。
 
@@ -44,7 +44,7 @@ description: 代表用户巡检、定案各 T3 环境未结线程。仅定时任
 - **发送三步**：`t3_thread_send` 返回 `starting` 只说明消息进了队列，线程能不能跑起来要看 run。每条消息都走完这三步：
   1. **发前对档**：线程当前模型是本轮判定不可用的档，先 `t3_thread_configure` 换到当前可用档再发（任务书指定模型的除外）。
   2. **发后回读**：本轮的消息全部发完后等 2 分钟，逐条读该线程最新 run（`t3_thread_read` 的 `recentRuns`，`runLimit` 1）。
-  3. **当轮补救**：run 在跑或已 completed 才算落地；failed 就按判定表第一行归因、换档重发，再回读一次。同一线程本轮只补救一次，仍失败列「需要你决定」。上下文用尽补不了时，把补救写成下一轮开场第一件事并在报告里声明，不许只写「没能在本轮补发」就结束。
+  3. **当轮补救**：run 在跑或已 completed 才算落地；failed 就按判定表第一行归因、换档重发，再回读一次。同一线程本轮只补救一次，仍失败列「需要你决定」。上下文不足也要先走「低上下文应急路径」把能发的补救发出去；恢复失败线程是可以批量做的动作，留到下一轮就是空等一小时。
 - **settle 只有这一个入口**：PR 已合并、`$pr-finish` 跑完，按 [references/handoff.md](references/handoff.md) 交接完再 settle。没有 PR 或 issue 的线程是用户自己开的，可能置顶停留，巡检不 settle、不归档，最多列进报告。
 - **代用户行事**：线程自设的门槛（「等你明确收尾指令」「要不要合并」「请确认后我再继续」）不改变判定，这些答复由你按判定表代答。人工验收也由你代答，包括任务书或共识要求的实体设备验收：审查与自动化证据齐了就算验收通过，合并后真有问题用户会另开问题。任务书里的「未授权合并」「收敛即交回」同样由你代答：它限制的是执行线程自作主张，巡检就是用户的那一声授权——PR 收敛就发 `M10` 合并它自己的 PR，在报告「已定案」里记一笔。收敛就收尾、有依据就定案，结论用 `【巡检】` 发进线程让它执行；只写进报告不落地等于没做。
 - **巡检不做技术裁决**：技术方向、收敛路径、交付范围、拆不拆 PR、修在哪个 PR，由实现线程自己咨询方向顾问（`pr-review-loop` 方向审计、`$t3-orchestrator` `--task design`）后定。巡检只发模板让它去问、去落地，不转述、不概括顾问结论，也不替它下结论；「只修 P0/P1」「不开第 N 轮」「范围定为这几项」这类收敛指令巡检不下——按严重级别筛意见会放过范围内的真问题，轮数上限也只能由审计定。巡检看得到的只是证据：账本或 PR 描述里有没有顾问定性、定下的交付范围有没有写进 PR 描述，据此选 `M2`/`M1`/`M14`。
@@ -60,17 +60,19 @@ node <技能目录>/scripts/patrol-snapshot.mjs --self <本线程 id> > /tmp/t3-
 ```
 
 - 输出结构的读法：
+  - **模型阶梯**：顶层 `modelLadder`，由 `references/model-ladder.json` 生成；所有换模/探测只准从这里取实例与参数。
   - **候选**：`environments[].candidates`（已剔除子代理线程、首条消息是派活模板且没有工作树的执行线程、Fast Ship 审查线程（「代码审查 · PR #N」「视觉审查 · PR #N」）、「额度探测」线程和本线程；剔除数量在 `delegatedExcluded`）。每条带 `link`、`status`、`prs`、`lastMsgAt`、最近 3 次 run、`pendingRequestCount`、`task`（首条用户消息）、`tail`（最后 4 条消息，保留首尾共 600 字——代理常在长汇报末尾才提问）。
+  - **失败清单**：`environments[].failedThreads` 合并候选内失败线程与 `failedTopLevel`，每条带 `id`/`link`/`title`/`status`/`model`/`source`；候选内的还带 `task`/`tail`/`runs`/`prs`。这是每轮第一份行动清单，逐条处理，不许只扫自己刚推过的线程。
   - **体检清单（环境级）**：三项体检各一份，每条带线程 `id`，逐条处理即可。
     - `needsWatchThreads`：有 open PR 没挂监听（`prs`、`urls`）。
-    - `needsRenameThreads`：标题是原文堆砌、超宽或缺 open PR 号（`reasons`）。
+    - `needsRenameThreads`：标题是原文堆砌、超宽或缺 open PR 号（`reasons`），同时带 `prs`/`task`/`tail` 作为命名依据。
     - `convergenceAuditThreads`：久审未收敛（`prs` 带时长/轮次/当日 P0–P2 条数，直接当审计题头）。
   - **监听状态**：`prs` 里 open PR 标 `(unwatched)`；已挂监听但 review/评论时间晚于 `lastMsgAt` 标 `(stale)`。
   - **审查健康度（逐 PR）**：`prHealth[]` 带 `openHours`、`rounds`、`latestAt`、`inline24h`/`inlineP0P2`、`failChecks`/`pendingChecks`、`mergeable`、`checksVia`（取数通道）。判定「在途审查者」「检查还在跑」「`latestAt` 晚于 `lastMsgAt`」直接用这里，不必再手算。宿主与凭据由脚本自己解析，不用手配。
   - **核不到实况**：`prs` 标 `(health-unavailable)` 表示该 PR 的 gh 与 Forgejo 两条通道都失败。这时不要判「不打扰」：先用 `git credential fill` 确认宿主凭据可用，再按 Forgejo API（`GET /api/v1/repos/{owner}/{repo}/pulls/{n}`、`/reviews`、`/issues/{n}/comments`、`/commits/{sha}/statuses`）手工核一次；仍核不到就写进「需要你决定」，把 PR URL 和报错带上。
   - **空转迹象**（仅活跃状态 preparing/queued/starting/running/waiting）：`distinctRecentCommands`（最近 30 个工具调用里不同命令数）、`sampleCommand`、`minutesSinceLastMessage`。
   - **容量**：`activeTopLevel` 与 `occupying`（[references/handoff.md](references/handoff.md) 第 3 步用）。
-  - **失败对账**：`failedTopLevel` 列出被候选过滤排除、但状态是 failed/interrupted/cancelled 的顶层线程。每轮逐个看——过滤规则一改就可能误杀真线程，静默消失比多算几条候选危险得多。
+  - **失败对账**：`failedTopLevel` 列出被候选过滤排除、但状态是 failed/interrupted/cancelled 的顶层线程；行动时看合并后的 `failedThreads`——过滤规则一改就可能误杀真线程，静默消失比多算几条候选危险得多。
 - 按环境分段用 `jq` 或 `read` 取这个文件。某个线程的 `tail` 不够判断时，再单独用 `t3_thread_read` 补读那一个线程（`afterPosition` 取 `itemCount - 60`，`limit` 10，`maxCharsPerItem` 1500）。
 - 以往运行巡检的线程也会出现在候选里（标题含 t3-patrol 或巡检），判定时跳过。
 - 脚本退出码 2 表示缺 `T3_MCP_URL`/`T3_MCP_BEARER_TOKEN`：改用 `t3_thread_list`（`allProjects:true`、`settled:false`，按 `nextCursor` 翻完）和上面的 `t3_thread_read` 参数手工取证，取到的每条只记判定要用的字段。
@@ -92,17 +94,19 @@ node <技能目录>/scripts/patrol-snapshot.mjs --self <本线程 id> > /tmp/t3-
 
 消息正文见 [references/messages.md](references/messages.md)（M1–M15），`M<n>` 即取那条模板照发；收尾交接见 [references/handoff.md](references/handoff.md)。
 
-**先过 `failedTopLevel`**：里面的每条都按判定表第一行（run failed）处理——有工作树、任务没做完的直接恢复继续，不因为它在候选之外就跳过。
+**低上下文应急路径**：上下文快尽时只压缩诊断，不压缩恢复。先做三件可批量完成的事：跑 `patrol-tier.mjs` 处理全部 `failedThreads`、代挂 `needsWatchThreads`、回读本轮已发消息；命名、收敛审计、issue 编码来不及就单列「本轮未做」。没巡检到的线程不许写成「不打扰」，可执行的恢复动作也不许写成「下一轮第一件事」。
+
+**先过 `failedThreads`**：每条都按判定表第一行处理。`source:"filtered"` 的也要恢复，不因为它在候选之外就跳过；`task`/`tail` 为空不影响发 `M4`，恢复要点写「继续你被中断的工作」即可。`cancelled` 先看尾部：用户主动取消或正在自行处理的线程不重启，列明依据；其余按失败恢复。
 
 **再扫一遍本轮新建的 issue 编码**：报告里出现「已建 issue」「转出为后续 issue」的，回读那几条（`GET /api/issues/{id}`），看标题与正文有没有 `\uFFFD` 或残留 GBK 字节。写入方常把这种乱码判成「终端 GBK 显示问题」而放过——实际库里就是坏的、不可逆。发现就按原文（PR 审查正文、GitHub 原文）重建；重建后同样要回读确认。
 
 **再做监听体检，它不在判定表里**：`needsWatchThreads` 里的每条一律直接 `watch_pull_request` 代挂（传 `threadId`、`environmentId`、`url`，`url` 取该条的 `urls`），报告里记一行。工具说明里「调用后结束本轮」是写给给自己 PR 挂监听的线程的；巡检传 `threadId` 替别的线程挂，挂完接着巡检。代挂不改变线程状态，与判定表选的任何动作并存，包括 `M10`：`$pr-finish` 整合目标分支后会推送、触发新一轮审查，等回报静默才合并，正需要监听唤醒。线程收轮时撤监听是常态，缺监听几乎每轮都会出现，等它停到能判「空等」再补已经晚了一整轮。因此扫描时先过这份清单，再看 PR 结论时间。
 
-**再做命名体检，同样不在判定表里**：`needsRenameThreads` 里的每条一律改名，格式见 [references/naming.md](references/naming.md)，报告里记一行。静止、已交付的线程也改——侧栏认的是标题，不看线程在不在跑。
+**再做命名体检，同样不在判定表里**：`needsRenameThreads` 里的每条一律改名，格式见 [references/naming.md](references/naming.md)，报告里记一行。清单已带 `prs`/`task`/`tail`；先用这些字段取主题，确实不够再补读该线程。静止、已交付的线程也改——侧栏认的是标题，不看线程在不在跑。
 
 | 现状 | 动作 |
 | --- | --- |
-| run failed / interrupted / cancelled，或最新 run 停在 queued 超过 30 分钟 | 连续两个 failed，或报错是额度/上下文耗尽类 → 换档后发 `M4`；其余瞬时失败 → `M12`；换过模型仍失败列「需要你决定」。线程没恢复就执行不了任何消息，所以这一行排在最前 |
+| run failed / interrupted，或非用户主动取消的 cancelled，或最新 run 停在 queued 超过 30 分钟 | 连续两个 failed，或报错是额度/上下文耗尽类 → 换档后发 `M4`；其余瞬时失败 → `M12`；换过模型仍失败列「需要你决定」。线程没恢复就执行不了任何消息，所以这一行排在最前 |
 | 发过收敛审计后：① PR 描述仍没有「交付范围」一节，或仍在逐条修范围外意见；② 路径已落地，但上次审计或 `M14` 之后同一子系统又连续三轮有需修复的有效意见（轮次对照上次审计时的 `prHealth.rounds`） | ① 第一次发 `M1`，再次命中发 `M14`（顾问复审）；② 直接发 `M14`，不等 24 小时窗口。`M14` 之后仍命中才列「需要你决定」 |
 | 在 `convergenceAuditThreads` 里，且本线程 24 小时内没收到过收敛审计 | 数字取该条的 `prs`，再按文件/日期分布取证，发 `M2`，报告单列 |
 | 正在运行但空转：`distinctRecentCommands` 小于 5，或 `minutesSinceLastMessage` 超过 60 | 先看重复命令在查什么（能查到就自己查），`t3_thread_interrupt` 后发 `M3` |
@@ -134,7 +138,7 @@ node <技能目录>/scripts/patrol-snapshot.mjs --self <本线程 id> > /tmp/t3-
 
 **拿不准时**：技术与收敛问题交顾问（`M7`/`M14`），产品问题先按「在等产品决策」那行找依据、找不到交顾问（`M15`）。交给用户的只剩不可逆动作、规则冲突和顾问也定不了的问题。
 
-**完成标准**：候选清单上每个线程都各自有一个判定和一个动作（「不打扰」也要有自己的举证，不能沿用兄弟线程的），`needsWatchThreads` 里的都已代挂监听，`needsRenameThreads` 里的都已改名，`convergenceAuditThreads` 里的都发了收敛审计（或已有审计在落地中），`failedTopLevel` 为空或每条都有了处理，本轮新建的 issue 都已回读且无 `\uFFFD`，发出的每条消息都已按「发送三步」回读，run 在跑、已 completed 或已列进「需要你决定」。
+**完成标准**：候选清单上每个线程都各自有一个判定和一个动作（「不打扰」也要有自己的举证，不能沿用兄弟线程的），`needsWatchThreads` 里的都已代挂监听，`needsRenameThreads` 里的都已改名，`convergenceAuditThreads` 里的都发了收敛审计（或已有审计在落地中），`failedThreads` 为空或每条都有处理结论（含「用户取消，不重启」），本轮新建的 issue 都已回读且无 `\uFFFD`，发出的每条消息都已按「发送三步」回读，run 在跑、已 completed 或已列进「需要你决定」。低上下文走了应急路径时，未完成项已单列「本轮未做」，没有把它们包装成已巡检。
 
 ## 4. 汇报
 
@@ -150,7 +154,7 @@ node <技能目录>/scripts/patrol-snapshot.mjs --self <本线程 id> > /tmp/t3-
 
 首次运行或环境有增减时，在报告开头附上环境对照表。
 
-固定一节「例行复核」，每项写条数：监听体检（代挂几条）、命名体检（改名几条）、久审未收敛、issue 编码（回读几条、乱码几条）。
+固定一节「例行复核」，每项写条数：失败对账（`failedThreads` 几条、恢复几条、用户取消保留几条）、监听体检（代挂几条）、命名体检（改名几条）、久审未收敛、issue 编码（回读几条、乱码几条）。走应急路径时紧跟一节「本轮未做」，只列没完成的体检与未巡检线程，不写补偿承诺。
 
 **状态按证据写**：报告里每个状态都要追到本轮的一次读取。发出的消息按「发送三步」回读到的 run 写「已落地」「补救后已落地」或失败原因；写「已采纳」「正在跑门禁」「已标注」，必须是本轮读到了对方线程、PR 或 issue 的实况，并且写的是被读的那个对象。
 

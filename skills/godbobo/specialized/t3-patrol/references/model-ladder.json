@@ -1,0 +1,27 @@
+[
+  {
+    "name": "pi/cliproxyapi/glm-5.3-flash",
+    "instanceId": "pi",
+    "model": "cliproxyapi/glm-5.3-flash",
+    "options": {
+      "thinking": "medium"
+    }
+  },
+  {
+    "name": "acpRegistry_devin/swe-2-high",
+    "instanceId": "acpRegistry_devin",
+    "model": "swe-2-high",
+    "options": {
+      "thought_level": "medium"
+    }
+  },
+  {
+    "name": "pi/cliproxyapi/deepseek-v4.1-flash",
+    "instanceId": "pi",
+    "model": "cliproxyapi/deepseek-v4.1-flash",
+    "options": {
+      "thinking": "medium"
+    },
+    "fallback": true
+  }
+]
