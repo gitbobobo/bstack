@@ -13,7 +13,7 @@
 
 ## 有提示词时按顺序处理
 
-1. **定目标环境**：交接里写了设备名就直接用；只写技术栈（如「Android + Rust」）时，查来源仓库文档里的设备分工，换算成设备；交接没指定设备，仓库也没有设备分工，就留在来源线程所在的环境。设备按 SKILL.md「0. 前提」的环境对照表找到环境。
+1. **定目标环境**：交接里写了设备名就直接用；只写技术栈（如「Android + Rust」）时，查来源仓库文档里的设备分工，换算成设备；交接没指定设备，仓库也没有设备分工，就留在来源线程所在的环境。设备按 [SKILL.md「0. 前提」](../SKILL.md#0-前提)的环境对照表找到环境。
 
    设备在对照表里找不到、目标环境不可达、目标环境里没有这个仓库的项目，或者交接写的是「以后再安排」：都不交接，列进「需要你决定」，来源线程先不 settle。
 
@@ -27,7 +27,7 @@
 
    - `t3_thread_launch` 带上目标环境的 `environmentId`；
    - `projectId` 取目标环境里同一仓库的项目（`t3_thread_list` 找同仓库的近期线程，用它的 `projectId`）；
-   - `modelSelection` 按当前可用档位取（SKILL.md「模型优先级」）：pi 档 `{instanceId:"pi", model:<档位>, options:[{id:"thinking", value:"medium"}]}`；devin 档 `{instanceId:"acpRegistry_devin", model:"swe-2-high", options:[{id:"thought_level", value:"medium"}]}`；
+   - `modelSelection` 按 [故障恢复「模型优先级」](recovery.md#模型优先级) 判定，从本轮 modelLadder 取 instanceId/model/options；按 t3_thread_launch 当前参数格式转换 options，不在此另存模型参数；
    - `workspaceStrategy` 取 `{type:"worktree", baseRef:<仓库默认分支>, startFromOrigin:true}`；
    - 标题按 [naming.md](naming.md) 的格式，用该项目以往标题的语言和写法；
    - `message` 原样贴交接提示词，开头如有斜杠命令就保持在第一行，末尾另起一行写 `> 交接自 <来源线程 link>`。
