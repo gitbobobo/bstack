@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // 巡检失败恢复：按快照里的 modelLadder 批量换档、发送 M4、等待后回读 run。
-// 用法：node patrol-tier.mjs --snapshot /tmp/t3-patrol-snapshot.json --to fallback [--dry-run]
+// 用法：node patrol-tier.mjs --snapshot /tmp/t3-patrol-snapshot.json --to fallback [--dry-run] [--skip <id|link|title>]
 // 依赖 T3_MCP_URL、T3_MCP_BEARER_TOKEN（与 patrol-snapshot.mjs 相同）。
 
 import { readFileSync, realpathSync } from "node:fs";
@@ -16,6 +16,7 @@ const SNAPSHOT = opt("snapshot", "/tmp/t3-patrol-snapshot.json");
 const TO = opt("to", "fallback");
 const DRY_RUN = has("dry-run");
 const INCLUDE_CANCELLED = has("include-cancelled");
+const SKIP = new Set(args.flatMap((x, i) => (x === "--skip" && args[i + 1] ? args[i + 1].split(",") : [])).map((x) => x.trim()).filter(Boolean));
 const DELAY_MS = Number(opt("delay-ms", 120000));
 
 const URL_ = process.env.T3_MCP_URL;
@@ -79,16 +80,25 @@ async function main() {
   const tier = tierOf(ladder, TO);
   if (!tier) throw new Error(`找不到目标档位：${TO}`);
   const jobs = [];
+  const skipped = [];
   for (const env of snap.environments ?? []) {
     for (const t of env.failedThreads ?? []) {
       if (!["failed", "interrupted", "cancelled"].includes(t.status)) continue;
-      if (t.status === "cancelled" && !INCLUDE_CANCELLED) continue;
-      jobs.push({ environmentId: env.environmentId, label: env.label, ...t });
+      const job = { environmentId: env.environmentId, label: env.label, ...t };
+      if (SKIP.has(t.id) || SKIP.has(t.link) || SKIP.has(t.title)) {
+        skipped.push(job);
+        continue;
+      }
+      if (t.status === "cancelled" && !INCLUDE_CANCELLED) {
+        skipped.push({ ...job, reason: "cancelled" });
+        continue;
+      }
+      jobs.push(job);
     }
   }
   const plan = jobs.map((t) => ({ environmentId: t.environmentId, threadId: t.id, title: t.title, status: t.status, from: t.model, to: `${tier.instanceId}/${tier.model}` }));
   if (DRY_RUN) {
-    console.log(JSON.stringify({ to: tier.name ?? `${tier.instanceId}/${tier.model}`, count: plan.length, plan }, null, 2));
+    console.log(JSON.stringify({ to: tier.name ?? `${tier.instanceId}/${tier.model}`, count: plan.length, skipped: skipped.map((t) => ({ threadId: t.id, title: t.title, status: t.status, reason: t.reason ?? "skip" })), plan }, null, 2));
     return;
   }
   if (!URL_ || !TOKEN) {

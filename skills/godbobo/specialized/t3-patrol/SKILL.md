@@ -30,7 +30,7 @@ description: 代表用户巡检、定案各 T3 环境未结线程。仅定时任
 
 四个环境共用同一订阅的额度池，一个环境耗尽，其他环境也一样——判定和换模型都全局看一次，不逐环境试探。
 
-- 模型阶梯的唯一事实源是 [references/model-ladder.json](references/model-ladder.json)；快照顶层回带 `modelLadder`。新建线程、换模型、建探测都只准从本轮快照的 `modelLadder` 逐项取 `instanceId`/`model`/`options`；没有快照就先读这份文件。凭记忆写模型名、写到 `modelLadder` 之外的实例，都按「没重读技能」处理，立刻改用当前值重发。批量恢复失败线程优先跑 `scripts/patrol-tier.mjs --snapshot <快照> --to <档位序号/name/fallback>`，一条命令完成换档、M4 与回读；`--dry-run` 先看清单，`cancelled` 默认跳过。
+- 模型阶梯的唯一事实源是 [references/model-ladder.json](references/model-ladder.json)；快照顶层回带 `modelLadder`。新建线程、换模型、建探测都只准从本轮快照的 `modelLadder` 逐项取 `instanceId`/`model`/`options`；没有快照就先读这份文件。凭记忆写模型名、写到 `modelLadder` 之外的实例，都按「没重读技能」处理，立刻改用当前值重发。批量恢复失败线程优先跑 `scripts/patrol-tier.mjs --snapshot <快照> --to <档位序号/name/fallback>`，一条命令完成换档、M4 与回读；先 `--dry-run` 核清单，用户取消、已定案保留、任务书指定模型的条目用 `--skip <id|link|title>` 排除，`cancelled` 默认跳过。
 - **档位每轮独立判，不继承上一轮**：本轮没看到额度失败，就当首选档可用，新建和换模都用它。上一轮切过档不是继续用低档的理由。
 - **判「某档不可用」要当轮取证**：本轮探测线程失败，或同一档有多条线程连续 failed。单次瞬时失败、同模型其他线程却正常 → 不是额度问题，别换档。
 - **探测只用来回升档位，不用来阻塞恢复**：上一轮确有额度（`model_usage_exhausted`、quota）失败、本轮还没新失败时，先建极简探测线程确认首选档是否恢复（标题 `额度探测`，任务只写「回复一句 ok 即可，不要做别的」，建在当前项目且不建工作树），用完当轮 settle（或归档）。本轮 `failedThreads` 里已经有多条同档失败，它们就是证据：不建探测、不判定等待，直接按 `modelLadder` 换下一档并逐条重发；下一档也当轮失败就继续降，直到兜底档。兜底档仍失败才列「需要你决定」。
