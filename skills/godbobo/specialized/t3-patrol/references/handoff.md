@@ -27,7 +27,7 @@
 
    - `t3_thread_launch` 带上目标环境的 `environmentId`；
    - `projectId` 取目标环境里同一仓库的项目（`t3_thread_list` 找同仓库的近期线程，用它的 `projectId`）；
-   - `modelSelection` 取 `{instanceId:"pi", model:<SKILL.md「模型优先级」里当前可用档位>, options:{thinking:"medium"}}`；
+   - `modelSelection` 按当前可用档位取（SKILL.md「模型优先级」）：pi 档 `{instanceId:"pi", model:<档位>, options:[{id:"thinking", value:"medium"}]}`；devin 档 `{instanceId:"acpRegistry_devin", model:"swe-2-high", options:[{id:"thought_level", value:"medium"}]}`；
    - `workspaceStrategy` 取 `{type:"worktree", baseRef:<仓库默认分支>, startFromOrigin:true}`；
    - 标题按 [naming.md](naming.md) 的格式，用该项目以往标题的语言和写法；
    - `message` 原样贴交接提示词，开头如有斜杠命令就保持在第一行，末尾另起一行写 `> 交接自 <来源线程 link>`。

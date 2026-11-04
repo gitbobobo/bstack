@@ -30,7 +30,7 @@ description: 代表用户巡检、定案各 T3 环境未结线程。仅定时任
 
 四个环境共用同一订阅的额度池，一个环境耗尽，其他环境也一样——判定和换模型都全局看一次，不逐环境试探。
 
-- 新建线程、换模型统一按这个顺序取：`pi/cliproxyapi/glm-5.3-flash` → `pi/cliproxyapi/deepseek-v4.1-flash`（兜底），`options` 一律 `{thinking:"medium"}`。换模只在 pi harness 内进行（swe-2/opus 现只在 devin harness 上，pi 线程换不过去）。
+- 新建线程、换模型统一按这个顺序取：`pi/cliproxyapi/glm-5.3-flash` → `acpRegistry_devin/swe-2-high`（devin harness）→ `pi/cliproxyapi/deepseek-v4.1-flash`（兜底）。思考档统一 medium：pi 档用 `{thinking:"medium"}`，devin 档用 `{thought_level:"medium"}`。换模把 instanceId、model、options 一起交给 `t3_thread_configure`，新建线程写进 `modelSelection`。
 - **档位每轮独立判，不继承上一轮**：本轮没看到额度失败，就当首选档可用，新建和换模都用它。上一轮切过档不是继续用低档的理由。
 - **判「某档不可用」要当轮取证**：本轮探测线程失败，或同一档有多条线程连续 failed。单次瞬时失败、同模型其他线程却正常 → 不是额度问题，别换档。
 - 上一轮确有线程因额度（`model_usage_exhausted`、quota）失败的，本轮先建一个极简探测线程确认（标题 `额度探测`，任务只写「回复一句 ok 即可，不要做别的」，建在当前项目且不建工作树）：通过就把档位定回首选，失败才降一档并在报告里写明。探测线程用完当轮 settle（或归档）。首选与次选都判不可用时自动降到 deepseek 兜底档（同样先探测通过再用），它是优先级列表里的一员，不需要用户点头；兜底档也失败才列「需要你决定」。
