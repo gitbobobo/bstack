@@ -67,6 +67,7 @@ node <技能目录>/scripts/patrol-snapshot.mjs --self <本线程 id> > /tmp/t3-
     - `needsWatchThreads`：有 open PR 没挂监听（`prs`、`urls`）。
     - `needsRenameThreads`：标题是原文堆砌、超宽或缺 open PR 号（`reasons`），同时带 `prs`/`task`/`tail` 作为命名依据。
     - `convergenceAuditThreads`：久审未收敛（`prs` 带时长/轮次/当日 P0–P2 条数，直接当审计题头）。
+  - **体检计数**：`checks` 汇总 `candidates` 与各清单条数。汇报「例行复核」只能引用这里的数字；没读到 `checks` 或清单内容，不许写 0，也不许凭候选摘要估数。
   - **监听状态**：`prs` 里 open PR 标 `(unwatched)`；已挂监听但 review/评论时间晚于 `lastMsgAt` 标 `(stale)`。
   - **审查健康度（逐 PR）**：`prHealth[]` 带 `openHours`、`rounds`、`latestAt`、`inline24h`/`inlineP0P2`、`failChecks`/`pendingChecks`、`mergeable`、`checksVia`（取数通道）。判定「在途审查者」「检查还在跑」「`latestAt` 晚于 `lastMsgAt`」直接用这里，不必再手算。宿主与凭据由脚本自己解析，不用手配。
   - **核不到实况**：`prs` 标 `(health-unavailable)` 表示该 PR 的 gh 与 Forgejo 两条通道都失败。这时不要判「不打扰」：先用 `git credential fill` 确认宿主凭据可用，再按 Forgejo API（`GET /api/v1/repos/{owner}/{repo}/pulls/{n}`、`/reviews`、`/issues/{n}/comments`、`/commits/{sha}/statuses`）手工核一次；仍核不到就写进「需要你决定」，把 PR URL 和报错带上。
@@ -77,7 +78,7 @@ node <技能目录>/scripts/patrol-snapshot.mjs --self <本线程 id> > /tmp/t3-
 - 以往运行巡检的线程也会出现在候选里（标题含 t3-patrol 或巡检），判定时跳过。
 - 脚本退出码 2 表示缺 `T3_MCP_URL`/`T3_MCP_BEARER_TOKEN`：改用 `t3_thread_list`（`allProjects:true`、`settled:false`，按 `nextCursor` 翻完）和上面的 `t3_thread_read` 参数手工取证，取到的每条只记判定要用的字段。
 
-**完成标准**：每个可达环境的 `candidates` 数组都已取出并数过个数（判定表要覆盖数组里每一个线程；拿到空数组前先确认字段名没读错）；带 `error` 的环境或线程已用 MCP 工具补读或记进报告。
+**完成标准**：每个可达环境的 `candidates` 数组都已取出并数过个数（判定表要覆盖数组里每一个线程；拿到空数组前先确认字段名没读错），`checks` 计数也已读到；带 `error` 的环境或线程已用 MCP 工具补读或记进报告。
 
 ## 2. 写清每个线程在做什么
 
@@ -152,7 +153,7 @@ node <技能目录>/scripts/patrol-snapshot.mjs --self <本线程 id> > /tmp/t3-
 
 首次运行或环境有增减时，在报告开头附上环境对照表。
 
-固定一节「例行复核」，每项写条数：失败对账（`failedThreads` 几条、恢复几条、用户取消保留几条）、监听体检（代挂几条）、命名体检（改名几条）、久审未收敛、issue 编码（回读几条、乱码几条）。某项因工具或数据错误没做成，写错误与影响范围。
+固定一节「例行复核」，每项条数先引 `checks`：失败对账（`failedThreads` 几条、恢复几条、用户取消保留几条）、监听体检（`needsWatchThreads` 几条、代挂几条）、命名体检（`needsRenameThreads` 几条、改名几条）、久审未收敛（`convergenceAuditThreads` 几条）、issue 编码（回读几条、乱码几条）。某项因工具或数据错误没做成，写错误与影响范围。
 
 **状态按证据写**：报告里每个状态都要追到本轮的一次读取。发出的消息按「发送三步」回读到的 run 写「已落地」「补救后已落地」或失败原因；写「已采纳」「正在跑门禁」「已标注」，必须是本轮读到了对方线程、PR 或 issue 的实况，并且写的是被读的那个对象。
 

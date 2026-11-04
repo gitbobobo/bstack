@@ -577,6 +577,16 @@ async function snapshotEnv(env) {
       })),
     ...failedTopLevel,
   ];
+  // 三项体检各给一份环境级清单，巡检逐条处理、逐条对账，不必再遍历候选找开关。
+  const needsWatchThreads = real
+    .filter((x) => x.needsWatch)
+    .map((x) => ({ id: x.id, link: x.link, prs: x.needsWatchPrs, urls: x.needsWatchUrls ?? [] }));
+  const needsRenameThreads = real
+    .filter((x) => x.needsRename)
+    .map((x) => ({ id: x.id, title: x.title, reasons: x.renameReasons, prs: x.prs, task: x.task, tail: x.tail }));
+  const convergenceAuditThreads = real
+    .filter((x) => x.needsConvergenceAudit)
+    .map((x) => ({ id: x.id, link: x.link, prs: x.convergenceAuditPrs }));
   return {
     environmentId: env.environmentId,
     label: env.label,
@@ -586,12 +596,17 @@ async function snapshotEnv(env) {
     delegatedExcluded: enriched.length - real.length,
     failedTopLevel,
     failedThreads,
-    // 三项体检各给一份环境级清单，巡检逐条处理、逐条对账，不必再遍历候选找开关。
-    needsWatchThreads: real.filter((x) => x.needsWatch).map((x) => ({ id: x.id, link: x.link, prs: x.needsWatchPrs, urls: x.needsWatchUrls ?? [] })),
-    needsRenameThreads: real
-      .filter((x) => x.needsRename)
-      .map((x) => ({ id: x.id, title: x.title, reasons: x.renameReasons, prs: x.prs, task: x.task, tail: x.tail })),
-    convergenceAuditThreads: real.filter((x) => x.needsConvergenceAudit).map((x) => ({ id: x.id, link: x.link, prs: x.convergenceAuditPrs })),
+    needsWatchThreads,
+    needsRenameThreads,
+    convergenceAuditThreads,
+    // 汇报只允许引用这里的计数；从候选摘要或记忆里估数会把漏做的体检写成 0。
+    checks: {
+      candidates: real.length,
+      failedThreads: failedThreads.length,
+      needsWatchThreads: needsWatchThreads.length,
+      needsRenameThreads: needsRenameThreads.length,
+      convergenceAuditThreads: convergenceAuditThreads.length,
+    },
   };
 }
 
