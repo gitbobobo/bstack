@@ -19,7 +19,7 @@ node <技能目录>/scripts/patrol-snapshot.mjs --self <thread.threadId> > /tmp/
   - **体检计数**：`checks` 汇总 `candidates` 与各清单条数。汇报「例行复核」只能引用这里的数字；没读到 `checks` 或清单内容，不许写 0，也不许凭候选摘要估数。
   - **监听状态**：`prs` 里 open PR 标 `(unwatched)`；已挂监听但 review/评论时间晚于 `lastMsgAt` 标 `(stale)`。
   - **审查健康度（逐候选、逐 PR）**：`environments[].candidates[].prHealth[]` 带 `openHours`、`rounds`、`latestAt`、`inline24h`/`inlineP0P2`、`failChecks`/`pendingChecks`、`mergeable`、`checksVia`（取数通道）。这些聚合字段是补查线索；是否在途及是否已处理须核最新 HEAD、审查触发记录与线程活动。宿主与凭据由脚本自己解析，不用手配。
-  - **核不到实况**：`prs` 标 `(health-unavailable)` 表示该 PR 的 gh 与 Forgejo 两条通道都失败。这时不要判「不打扰」：在脚本内部用 `git credential fill` 获取宿主凭据，仅输出认证成功与否，再按 Forgejo API（`GET /api/v1/repos/{owner}/{repo}/pulls/{n}`、`/reviews`、`/issues/{n}/comments`、`/commits/{sha}/statuses`）手工核一次；仍核不到就写进「需要你决定」，把 PR URL 和报错带上。
+  - **核不到实况**：`prs` 标 `(health-unavailable)` 表示该 PR 的 gh 与 Forgejo 两条通道都失败。这时不要判「不打扰」：在脚本内部用 `git credential fill` 获取宿主凭据，仅输出认证成功与否，再按 Forgejo API（`GET /api/v1/repos/{owner}/{repo}/pulls/{n}`、`/reviews`、`/issues/{n}/comments`、`/commits/{sha}/statuses`）手工核一次；仍核不到就写进「阻塞」，带 PR URL、报错与恢复条件；需要用户提供权限或环境信息时再提问。
   - **空转迹象**（仅活跃状态 preparing/queued/starting/running/waiting）：`distinctRecentCommands`（最近 30 个工具调用里不同命令数）、`sampleCommand`、`minutesSinceLastMessage`。
   - **容量**：`activeTopLevel` 与 `occupying`（[handoff.md](handoff.md) 第 3 步用）。
   - **失败对账**：`failedTopLevel` 列出被候选过滤排除、但状态是 failed/interrupted/cancelled 的顶层线程；行动时看合并后的 `failedThreads`——过滤规则一改就可能误杀真线程，静默消失比多算几条候选危险得多。
