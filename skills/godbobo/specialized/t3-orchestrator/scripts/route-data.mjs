@@ -21,9 +21,10 @@
 // 白名单即全部：select/named/check 只从 MODELS.entries 出目标，不维护反例清单；
 // 清单外组合统一按「不在入口清单」处理（非点名 FAIL、用户点名 WARN）。
 //
-// harness 分工（用户定）：pi 经 cliproxyapi 调全部模型，额度与多提供商路由由 cliproxyapi
-// 负责，所以每个模型的首选入口都是 pi；codex（只跑 GPT）和 factory droid 是 cliproxyapi
-// 整体故障时的备用入口。
+// harness 分工（用户定，2026-11-04）：pi 经 cliproxyapi 调 glm/deepseek/grok/gpt 系（cliproxyapi 的
+// devin 订阅已移除，不再提供 opus/swe-2），仍是这些模型的首选入口；swe-2 只从 devin harness
+// （acpRegistry_devin）选，opus 从 devin/droid 选（均用户定）；codex（只跑 GPT）是 gpt-6.1-sol
+// 的备用入口，droid 是其余模型的备用入口。主代理不查额度，失败就换路。
 //
 // 用户级开关（只有用户能改）：
 //   - status: "named"    仅用户点名才用，自动调度与换路一律跳过
@@ -46,7 +47,7 @@ export const PROVIDER_RULES = {
 export const EFFORT_STANDARD = "high";
 export const EFFORT_MEDIUM = "medium";
 export const EFFORT_MEDIUM_MODELS = ["opus-5.5", "gpt-6.1-sol", "grok-4.7"];
-export const EFFORT_OPTION_IDS = ["thinking", "reasoningEffort", "reasoning_effort"];
+export const EFFORT_OPTION_IDS = ["thinking", "reasoningEffort", "reasoning_effort", "thought_level"];
 
 export const MODELS = {
   "opus-5.5": {
@@ -56,7 +57,9 @@ export const MODELS = {
     tasks: ["design"],
     vision: 82.0,
     entries: [
-      { provider: "pi", id: "cliproxyapi/claude-opus-5-5", options: { thinking: "medium" } },
+      // 用户定（2026-11-04）：opus 从 devin/droid 选择；cliproxyapi 的 devin 订阅已移除，pi 不再提供 opus
+      // claude 系 harness 优先级：devin > droid
+      { provider: "acpRegistry_devin", id: "claude-opus-5-5-medium", options: { thought_level: "medium" } },
       { provider: "acpRegistry_factory_droid", id: "claude-opus-5-5", options: { reasoning_effort: "high" } },
     ],
   },
@@ -65,6 +68,7 @@ export const MODELS = {
     status: "advisor",
     vision: 81.7,
     entries: [
+      // pi 入口经 cliproxyapi 的 codex 订阅提供（devin 版已随 devin 订阅移除，2026-11-04）
       { provider: "pi", id: "cliproxyapi/gpt-6.1-sol", options: { thinking: "medium" } },
       { provider: "codex", id: "gpt-6.1-sol", options: { reasoningEffort: "medium" } },
       { provider: "acpRegistry_factory_droid", id: "gpt-6.1-sol", options: { reasoning_effort: "high" } },
@@ -75,8 +79,8 @@ export const MODELS = {
     status: "auto",
     // 榜上无 SWE-2，取基座 Kimi K3 的 56.0；Cognition 只做了编码向后训练，未发布视觉数据。
     vision: 56.0,
-    // droid 目录没有 SWE-2，只有 pi 一个入口。
-    entries: [{ provider: "pi", id: "cliproxyapi/swe-2", options: { thinking: "high" } }],
+    // 用户定（2026-11-04）：swe-2 只从 devin 选；pi 的 swe-2 来自已移除的 devin 订阅，droid 目录也没有 SWE-2。
+    entries: [{ provider: "acpRegistry_devin", id: "swe-2-high", options: { thought_level: "high" } }],
   },
   "grok-4.7": {
     label: "Grok 4.7",
@@ -121,10 +125,10 @@ export const TASKS = {
 
 // 每行先排各模型的 pi 入口（模型优先级），再排备用 harness。
 export const ROUTES = {
-  // 用户确认首选 GLM flash，其次 SWE-2
+  // 用户确认首选 GLM flash，其次 SWE-2（swe-2 走 devin，用户定）
   general: [
     { model: "glm-5.3-flash", provider: "pi" },
-    { model: "swe-2", provider: "pi" },
+    { model: "swe-2", provider: "acpRegistry_devin" },
     { model: "deepseek-v4.1-flash", provider: "pi" },
     { model: "glm-5.3-flash", provider: "acpRegistry_factory_droid" },
     { model: "deepseek-v4.1-flash", provider: "acpRegistry_factory_droid" },
@@ -137,9 +141,9 @@ export const ROUTES = {
     { model: "gpt-6.1-sol", provider: "acpRegistry_factory_droid" },
     { model: "grok-4.7", provider: "acpRegistry_factory_droid" },
   ],
-  // 实现顾问：Opus 首选（用户定）。
+  // 实现顾问：Opus 首选（用户定），走 devin/droid（用户定）。
   design: [
-    { model: "opus-5.5", provider: "pi" },
+    { model: "opus-5.5", provider: "acpRegistry_devin" },
     { model: "gpt-6.1-sol", provider: "pi" },
     { model: "grok-4.7", provider: "pi" },
     { model: "gpt-6.1-sol", provider: "codex" },

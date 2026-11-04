@@ -74,9 +74,9 @@ test("check: 快速模式恒红", () => {
 test("check: 顾问不写实现，Opus 只做实现顾问（用户点名降级 warn）", () => {
   fail(["--provider", "pi", "--model", "cliproxyapi/gpt-6.1-sol", "--role", "implementation"], "顾问");
   ok(["--provider", "pi", "--model", "cliproxyapi/gpt-6.1-sol", "--role", "review"]);
-  fail(["--provider", "pi", "--model", "cliproxyapi/claude-opus-5-5", "--role", "review"], "只承担 design");
-  ok(["--provider", "pi", "--model", "cliproxyapi/claude-opus-5-5", "--role", "design"]);
-  ok(["--provider", "pi", "--model", "cliproxyapi/claude-opus-5-5", "--role", "review", "--user-named"]);
+  fail(["--provider", "acpRegistry_devin", "--model", "claude-opus-5-5-medium", "--role", "review"], "只承担 design");
+  ok(["--provider", "acpRegistry_devin", "--model", "claude-opus-5-5-medium", "--role", "design"]);
+  ok(["--provider", "acpRegistry_devin", "--model", "claude-opus-5-5-medium", "--role", "review", "--user-named"]);
 });
 
 test("check: droid 选项名与 autonomy_level", () => {
@@ -92,8 +92,13 @@ test("check --caps-file: 选项取值按目录校验", () => {
 
 // ============ route-data 不变量 ============
 
-test("route-data: 每个模型首选入口是 pi", () => {
-  for (const [k, m] of Object.entries(MODELS)) eq(m.entries[0].provider, "pi", k);
+test("route-data: 首选入口（用户定 2026-11-04）：swe-2 只走 devin，opus 从 devin/droid 选，其余首选 pi", () => {
+  eq(MODELS["swe-2"].entries.map((e) => e.provider), ["acpRegistry_devin"]);
+  eq(MODELS["opus-5.5"].entries.map((e) => e.provider), ["acpRegistry_devin", "acpRegistry_factory_droid"]);
+  for (const [k, m] of Object.entries(MODELS)) {
+    if (k === "swe-2" || k === "opus-5.5") continue;
+    eq(m.entries[0].provider, "pi", k);
+  }
 });
 
 test("route-data: 每个入口恰好一个档位选项；medium 模型在目录有 medium 时用 medium，否则 high", () => {
@@ -120,8 +125,8 @@ test("audit: 裁剪夹具上 route-data 全部入口 0 问题", () => {
 
 test("validateOptions / injectOptions", () => {
   const { providers } = loadProviders(CAPS_FILE);
-  eq(validateOptions("pi", "cliproxyapi/swe-2", { thinking: "low" }, providers).length, 1);
-  eq(validateOptions("pi", "cliproxyapi/swe-2", { thinking: "max" }, providers), []);
+  eq(validateOptions("acpRegistry_devin", "swe-2-high", { thought_level: "low" }, providers).length, 1);
+  eq(validateOptions("acpRegistry_devin", "swe-2-high", { thought_level: "max" }, providers), []);
   eq(injectOptions({ provider: "acpRegistry_factory_droid", id: "glm-5.3-flash", options: {} }, providers).autonomy_level, "auto-high");
   eq("fastMode" in injectOptions({ provider: "codex", id: "gpt-6.1-sol", options: {} }, providers), false);
 });
@@ -130,10 +135,10 @@ test("validateOptions / injectOptions", () => {
 
 const ids = (s) => s.map((i) => `${i.provider}/${i.id}`);
 
-test("expandRoute: 行内顺序即声明顺序，pi 入口先于备用 harness", () => {
+test("expandRoute: 行内顺序即声明顺序（swe-2 走 devin，其余首选 pi，备用 harness 垫后）", () => {
   eq(ids(expandRoute("general")).slice(0, 5), [
     "pi/cliproxyapi/glm-5.3-flash",
-    "pi/cliproxyapi/swe-2",
+    "acpRegistry_devin/swe-2-high",
     "pi/cliproxyapi/deepseek-v4.1-flash",
     "acpRegistry_factory_droid/glm-5.3-flash",
     "acpRegistry_factory_droid/deepseek-v4.1-flash",
@@ -154,7 +159,7 @@ test("expandRoute: general 不含顾问，review 不含 opus，design 含全部�
 test("select: 各任务首选", () => {
   eq(pickOf(select(["--task", "general"])), "pi/cliproxyapi/glm-5.3-flash");
   eq(pickOf(select(["--task", "review"])), "pi/cliproxyapi/gpt-6.1-sol");
-  eq(pickOf(select(["--task", "design"])), "pi/cliproxyapi/claude-opus-5-5");
+  eq(pickOf(select(["--task", "design"])), "acpRegistry_devin/claude-opus-5-5-medium");
 });
 
 test("select: --exclude 按行内顺序递补", () => {
@@ -179,7 +184,7 @@ test("select: pi 不可派时整体落到备用 harness", () => {
     p.constraints = ["Pi is disabled"];
   };
   const r = select(["--task", "general"], offPi);
-  eq(pickOf(r), "acpRegistry_factory_droid/glm-5.3-flash");
+  eq(pickOf(r), "acpRegistry_devin/swe-2-high");
   if (!r.stdout.includes("Pi is disabled")) throw new Error(r.stdout);
   eq(pickOf(select(["--task", "review"], offPi)), "codex/gpt-6.1-sol");
 });
@@ -192,8 +197,8 @@ test("select: --exclude-provider pi 整体落到备用 harness，计一次尝试
 });
 
 test("select: --vision 按视觉分数降序", () => {
-  eq(pickOf(select(["--task", "general", "--vision"])), "pi/cliproxyapi/swe-2");
-  eq(pickOf(select(["--task", "design", "--vision"])), "pi/cliproxyapi/claude-opus-5-5");
+  eq(pickOf(select(["--task", "general", "--vision"])), "acpRegistry_devin/swe-2-high");
+  eq(pickOf(select(["--task", "design", "--vision"])), "acpRegistry_devin/claude-opus-5-5-medium");
 });
 
 test("select: caps 文件超 30 分钟 → 告警且不可派判定标注过期", () => {

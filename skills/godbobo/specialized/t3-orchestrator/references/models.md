@@ -1,6 +1,6 @@
 # 模型参考
 
-调研日期：2026-10-11；harness 收敛为 pi / codex / droid：2026-10-27。模型 ID 以 `orchestrator_capabilities` 实时返回为准，这里的 ID 只是当时的快照。更新方法见文末「更新来源与标准」。
+调研日期：2026-10-11；harness 收敛为 pi / codex / droid：2026-10-27；2026-11-04 cliproxyapi 的 devin 订阅移除，devin harness 回归，swe-2/opus 改走 devin（用户定）。模型 ID 以 `orchestrator_capabilities` 实时返回为准，这里的 ID 只是当时的快照。更新方法见文末「更新来源与标准」。
 
 基准说明：FrontierCode（Cognition 维护，按代码能否合并评分）和 CursorBench 是第三方统一 harness 的榜单；Terminal-Bench、DeepSWE 多为厂商自报，不同版本不能横比。
 
@@ -8,8 +8,9 @@
 
 | 实例 | 用途 | 说明 |
 |---|---|---|
-| `pi` | 全部模型的首选入口 | 经 cliproxyapi（`~/.pi/agent/cliproxyapi.json`）调多个提供商，额度与渠道切换由 cliproxyapi 负责；模型 ID 形如 `cliproxyapi/<模型>`。pi 目录里的 `opencode-go/*`、`commandcode/*`、`opendesign/*` 不走 cliproxyapi，不进路由 |
-| `codex` | GPT 的备用入口 | cliproxyapi 整体故障时用 |
+| `pi` | glm/deepseek/grok/gpt 系的首选入口 | 经 cliproxyapi（`~/.pi/agent/cliproxyapi.json`）调多个提供商，额度与渠道切换由 cliproxyapi 负责；模型 ID 形如 `cliproxyapi/<模型>`。2026-11-04 起 devin 订阅已移除，不再提供 opus/swe-2。pi 目录里的 `opencode-go/*`、`commandcode/*`、`opendesign/*` 不走 cliproxyapi，不进路由 |
+| `codex` | gpt-6.1-sol 的备用入口 | 仅跑 GPT；也经 cliproxyapi 向 pi 提供 gpt-6.1-sol |
+| `acpRegistry_devin` | swe-2 与 opus 的主入口（用户定） | 模型 ID 自带档位后缀（`swe-2-high`、`claude-opus-5-5-medium`）；另有 `gpt-6-1-sol-medium` 可人工点名，不进自动路由 |
 | `acpRegistry_factory_droid` | 其余模型的备用入口 | 目录没有 SWE-2。需 droid ≥0.234.0（修复 acp-daemon `--mcp-servers`，[Factory-AI/factory#9](https://github.com/Factory-AI/factory/issues/9)） |
 
 ## 模型画像
@@ -39,8 +40,9 @@
 
 | harness | 选项名 | 备注 |
 |---|---|---|
-| pi | `thinking` | 取值集随模型而异（glm/deepseek 只到 high，swe-2 最低 medium） |
+| pi | `thinking` | 取值集随模型而异（glm/deepseek 只到 high） |
 | codex | `reasoningEffort` | 另有 `serviceTier`，保持 default 不用 priority |
+| devin | `thought_level` | 取值 medium/high/max；另有 `mode`、`speed`，保持默认不设 |
 | droid | `reasoning_effort` | snake_case；另有必传的 `autonomy_level`（调度一律 auto-high） |
 
 档位取值规则（用户定）：**主代理派发默认 `high`；Opus 5.5、GPT-6.1 Sol、Grok 4.7 用 `medium`**（`route-data.mjs` 的 `EFFORT_MEDIUM_MODELS`）。droid 的 `reasoning_effort` 没有 medium，这三个模型的 droid 入口仍用 `high`。每个入口显式声明一个档位选项，由 `route.test.mjs` 校验。
@@ -72,10 +74,10 @@ node scripts/route.mjs audit --caps-file /tmp/t3-caps.json   # 有问题逐条�
 
 ### 标准
 
-1. **只有用户能改的规则**：快速模式、点名专用（`status:"named"`）、harness 分工（pi 首选、codex/droid 备用）、顾问定位（`status:"advisor"` 不写实现）、任务限定（`MODELS.tasks`）这五类限制由用户决定。更新时可以提出建议，不能自行改动。模型不入选不需要登记——不写进 `MODELS` 即不可选。
+1. **只有用户能改的规则**：快速模式、点名专用（`status:"named"`）、harness 分工（glm/deepseek/grok/gpt 系首选 pi；swe-2 只走 devin、opus 走 devin/droid，均用户定；codex/droid 备用）、顾问定位（`status:"advisor"` 不写实现）、任务限定（`MODELS.tasks`）这几类限制由用户决定。更新时可以提出建议，不能自行改动。模型不入选不需要登记——不写进 `MODELS` 即不可选。
 2. **排序依据**：先看 FrontierCode 和 CursorBench 的分数和每任务成本；厂商自报数字只用来在第三方数据缺失或分数接近时参考，并在表里注明「厂商」。
 3. **加入自动路由**，须同时满足：
-   - cliproxyapi 能调（pi 入口排首位），codex/droid 有同模型时补为备用入口；
+   - cliproxyapi 能调（pi 入口排首位；swe-2/opus 例外，用户定走 devin），codex/droid 有同模型时补为备用入口；
    - 第三方榜上的分数比该行现有候选低不超过 5 分，且每任务成本更低；或者分数更高、成本相近；
    - 不属于用户限定的模型。
 4. **降级或移出**，满足任一即可：

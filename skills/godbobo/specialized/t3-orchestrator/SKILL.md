@@ -19,7 +19,7 @@ description: T3 Code 多 harness 编排。实现复杂任务或处理 issue 时�
 
 ## harness 与模型
 
-harness 只有三个：`pi` 经 cliproxyapi 调全部模型，额度与多提供商切换由 cliproxyapi 自动处理，是每个模型的首选入口；`codex`（GPT）和 `acpRegistry_factory_droid` 是 cliproxyapi 整体故障时的备用入口。主代理不查额度，失败就换路。
+harness 四个（用户定，2026-11-04）：`pi` 经 cliproxyapi 调 glm/deepseek/grok/gpt 系，额度与多提供商切换由 cliproxyapi 自动处理，是这些模型的首选入口；swe-2 只从 `acpRegistry_devin` 选，opus 从 devin/droid 选（cliproxyapi 的 devin 订阅已移除，不再提供 opus/swe-2）；`codex`（GPT）和 `acpRegistry_factory_droid` 是备用入口。主代理不查额度，失败就换路。
 
 ## 选目标由脚本裁决
 
