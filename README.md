@@ -53,13 +53,13 @@ PR 收尾：对最新目标分支一次性整合（默认 merge）并解决冲�
 
 ### t3-orchestrator
 
-T3 Code 多 harness 编排：只用 pi / codex / factory droid 三个 harness，pi 经 cliproxyapi 调全部模型（额度由 cliproxyapi 自动路由），codex、droid 作为 cliproxyapi 故障时的备用入口。选 harness/模型由 `route.mjs` 按固定规则裁决（`route-data.mjs` 是唯一事实源，`route.mjs audit` 核对路由数据与实时目录），delegate_task 派活验收（子代理一律 `runtimeMode:"full-access"`，不为它向用户索要授权；卡在 `approval_request` 就取消重派），失败自动换路续跑；实现顾问由 `--task design` 单独选出，Opus 只做实现顾问；非产品决策由主代理按「根治」取向自主拍板，命中方向顾问触发（审计、技术取舍、跨模块方案、高风险决策）就派一位顾问独立裁决，不停下等用户；附 `route-playground.mjs` 可视化路由沙盒。专用技能，仅限用户或技能点名时调用。
+T3 Code 多 harness 编排：pi / codex / devin / factory droid 四个 harness，pi 经 cliproxyapi 调 glm/deepseek/grok/gpt 系（额度由 cliproxyapi 自动路由）；swe-2 只走 devin、opus 走 devin/droid（用户定；cliproxyapi 的 devin 订阅已移除）。选 harness/模型由 `route.mjs` 按固定规则裁决（`route-data.mjs` 是唯一事实源，`route.mjs audit` 核对路由数据与实时目录），delegate_task 派活验收（子代理一律 `runtimeMode:"full-access"`，不为它向用户索要授权；卡在 `approval_request` 就取消重派），失败自动换路续跑；实现顾问由 `--task design` 单独选出，Opus 只做实现顾问；非产品决策由主代理按「根治」取向自主拍板，命中方向顾问触发（审计、技术取舍、跨模块方案、高风险决策）就派一位顾问独立裁决，不停下等用户；附 `route-playground.mjs` 可视化路由沙盒。专用技能，仅限用户或技能点名时调用。
 
 详见 [skills/godbobo/specialized/t3-orchestrator/SKILL.md](skills/godbobo/specialized/t3-orchestrator/SKILL.md)。
 
 ### t3-patrol
 
-跨 T3 环境巡检未结线程：先用 `scripts/patrol-snapshot.mjs` 经 T3 MCP 端点一次性收集各环境线程的精简快照（避免原始返回撑爆上下文），每轮做命名体检（脚本算出 `needsRename`），把原文堆砌、超宽或缺 PR 号的标题改写成「`#PR 号 / INT-号 + 主题 + 端`」方便侧栏识别和提及，用具体的话概括每个线程在做什么，再按用户惯常的处理方式代他行事：先做监听体检与 PR 健康体检（GitHub 走 `gh`、Forgejo 走 REST + 本机 `fj`，开了多久、多少轮、当日 P0–P2）再判定，报错了就让它继续（额度耗尽类按 glm-5.3-flash → swe-2 → deepseek 顺序换模，思考强度统一 medium），原任务已覆盖的授权直接放行，技术取舍与收敛路径交方向顾问裁决（巡检不自己下「只修 P0/P1」这类指令），监听掉了就让它重新挂上（挂了监听但 PR 新结论晚于线程最后消息也算），原地空转就让它停下换法，PR 停着没人会唤醒就按收敛推它收尾，遗留项按性质分流（flaky 记文档、独立问题建 issue），PR 久审不收敛时提醒它做收敛审计，PR 收敛后让它收尾；线程自设的「等你确认」不构成阻塞，产品决策先按原任务与 issue 找依据定案，找不到交方向顾问，只有不可逆动作、规则冲突或顾问也定不了才交回用户。收尾后按交接提示词在目标设备的环境新建线程继续，再 settle 来源线程；没有 PR/issue 的用户线程不 settle。适合挂成每小时一次的定时任务。专用技能。
+跨 T3 环境巡检未结线程：先用 `scripts/patrol-snapshot.mjs` 经 T3 MCP 端点一次性收集各环境线程的精简快照（避免原始返回撑爆上下文），每轮做命名体检（脚本算出 `needsRename`），把原文堆砌、超宽或缺 PR 号的标题改写成「`#PR 号 / INT-号 + 主题 + 端`」方便侧栏识别和提及，用具体的话概括每个线程在做什么，再按用户惯常的处理方式代他行事：先做监听体检与 PR 健康体检（GitHub 走 `gh`、Forgejo 走 REST + 本机 `fj`，开了多久、多少轮、当日 P0–P2）再判定，报错了就让它继续（额度耗尽类按 glm-5.3-flash → deepseek 顺序换模，思考强度统一 medium），原任务已覆盖的授权直接放行，技术取舍与收敛路径交方向顾问裁决（巡检不自己下「只修 P0/P1」这类指令），监听掉了就让它重新挂上（挂了监听但 PR 新结论晚于线程最后消息也算），原地空转就让它停下换法，PR 停着没人会唤醒就按收敛推它收尾，遗留项按性质分流（flaky 记文档、独立问题建 issue），PR 久审不收敛时提醒它做收敛审计，PR 收敛后让它收尾；线程自设的「等你确认」不构成阻塞，产品决策先按原任务与 issue 找依据定案，找不到交方向顾问，只有不可逆动作、规则冲突或顾问也定不了才交回用户。收尾后按交接提示词在目标设备的环境新建线程继续，再 settle 来源线程；没有 PR/issue 的用户线程不 settle。适合挂成每小时一次的定时任务。专用技能。
 
 详见 [skills/godbobo/specialized/t3-patrol/SKILL.md](skills/godbobo/specialized/t3-patrol/SKILL.md)。
 
