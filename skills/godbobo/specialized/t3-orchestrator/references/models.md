@@ -43,9 +43,9 @@
 | pi | `thinking` | 取值集随模型而异（glm/deepseek 只到 high） |
 | codex | `reasoningEffort` | 另有 `serviceTier`，保持 default 不用 priority |
 | devin | `thought_level` | 取值 medium/high/max；另有 `mode`、`speed`，保持默认不设 |
-| droid | `reasoning_effort` | snake_case；另有必传的 `autonomy_level`（调度一律 auto-high） |
+| droid | `reasoning_effort` | snake_case；取值 low/medium/high/xhigh/max（2026-11-04 目录新增 medium）；另有必传的 `autonomy_level`（调度一律 auto-high） |
 
-档位取值规则（用户定）：**主代理派发默认 `high`；Opus 5.5、GPT-6.1 Sol、Grok 4.7 用 `medium`**（`route-data.mjs` 的 `EFFORT_MEDIUM_MODELS`）。droid 的 `reasoning_effort` 没有 medium，这三个模型的 droid 入口仍用 `high`。每个入口显式声明一个档位选项，由 `route.test.mjs` 校验。
+档位取值规则（用户定）：**主代理派发默认 `high`；Opus 5.5、GPT-6.1 Sol、Grok 4.7 用 `medium`**（`route-data.mjs` 的 `EFFORT_MEDIUM_MODELS`）。早期 droid 的 `reasoning_effort` 没有 medium，这三个模型的 droid 入口曾用 `high`；2026-11-04 目录新增 medium 后，droid 入口同样用 `medium`（用户确认）。每个入口显式声明一个档位选项，由 `route.test.mjs` 校验。
 
 `fastMode` 不写进路由数据：`route.mjs` 只在目录规格里确实存在该选项时自动注入 `fastMode:false`。
 

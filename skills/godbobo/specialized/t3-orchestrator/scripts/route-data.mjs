@@ -41,9 +41,9 @@ export const PROVIDER_RULES = {
   // codex serviceTier 保持 default。
 };
 
-// 档位标准：主代理派发默认 high；EFFORT_MEDIUM_MODELS 里的模型用 medium（用户定），
-// 但 droid 的 reasoning_effort 没有 medium（只有 off/low/high/max），droid 入口仍用 high。
-// 每个入口显式声明一个档位选项（route.test.mjs 校验）。
+// 档位标准：主代理派发默认 high；EFFORT_MEDIUM_MODELS 里的模型用 medium（用户定）。
+// 每个入口显式声明一个档位选项（route.test.mjs 校验）；droid 目录现在也有 medium（2026-11-04 实时目录），
+// 三个 medium 模型的 droid 入口同样用 medium。
 export const EFFORT_STANDARD = "high";
 export const EFFORT_MEDIUM = "medium";
 export const EFFORT_MEDIUM_MODELS = ["opus-5.5", "gpt-6.1-sol", "grok-4.7"];
@@ -60,7 +60,7 @@ export const MODELS = {
       // 用户定（2026-11-04）：opus 从 devin/droid 选择；cliproxyapi 的 devin 订阅已移除，pi 不再提供 opus
       // claude 系 harness 优先级：devin > droid
       { provider: "acpRegistry_devin", id: "claude-opus-5-5-medium", options: { thought_level: "medium" } },
-      { provider: "acpRegistry_factory_droid", id: "claude-opus-5-5", options: { reasoning_effort: "high" } },
+      { provider: "acpRegistry_factory_droid", id: "claude-opus-5-5", options: { reasoning_effort: "medium" } },
     ],
   },
   "gpt-6.1-sol": {
@@ -71,7 +71,7 @@ export const MODELS = {
       // pi 入口经 cliproxyapi 的 codex 订阅提供（devin 版已随 devin 订阅移除，2026-11-04）
       { provider: "pi", id: "cliproxyapi/gpt-6.1-sol", options: { thinking: "medium" } },
       { provider: "codex", id: "gpt-6.1-sol", options: { reasoningEffort: "medium" } },
-      { provider: "acpRegistry_factory_droid", id: "gpt-6.1-sol", options: { reasoning_effort: "high" } },
+      { provider: "acpRegistry_factory_droid", id: "gpt-6.1-sol", options: { reasoning_effort: "medium" } },
     ],
   },
   "swe-2": {
@@ -88,7 +88,7 @@ export const MODELS = {
     vision: 63.5,
     entries: [
       { provider: "pi", id: "cliproxyapi/grok-4.7", options: { thinking: "medium" } },
-      { provider: "acpRegistry_factory_droid", id: "grok-4.7", options: { reasoning_effort: "high" } },
+      { provider: "acpRegistry_factory_droid", id: "grok-4.7", options: { reasoning_effort: "medium" } },
     ],
   },
   "glm-5.3-flash": {

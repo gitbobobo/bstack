@@ -461,20 +461,24 @@
        "type": "select",
        "options": [
         {
-         "id": "off",
-         "label": "Off"
-        },
-        {
          "id": "low",
          "label": "Low"
+        },
+        {
+         "id": "medium",
+         "label": "Medium"
         },
         {
          "id": "high",
          "label": "High"
         },
         {
+         "id": "xhigh",
+         "label": "Extra High"
+        },
+        {
          "id": "max",
-         "label": "Maximum"
+         "label": "Max"
         }
        ],
        "currentValue": "high"
@@ -521,20 +525,24 @@
        "type": "select",
        "options": [
         {
-         "id": "off",
-         "label": "Off"
-        },
-        {
          "id": "low",
          "label": "Low"
+        },
+        {
+         "id": "medium",
+         "label": "Medium"
         },
         {
          "id": "high",
          "label": "High"
         },
         {
+         "id": "xhigh",
+         "label": "Extra High"
+        },
+        {
          "id": "max",
-         "label": "Maximum"
+         "label": "Max"
         }
        ],
        "currentValue": "high"
@@ -581,20 +589,24 @@
        "type": "select",
        "options": [
         {
-         "id": "off",
-         "label": "Off"
-        },
-        {
          "id": "low",
          "label": "Low"
+        },
+        {
+         "id": "medium",
+         "label": "Medium"
         },
         {
          "id": "high",
          "label": "High"
         },
         {
+         "id": "xhigh",
+         "label": "Extra High"
+        },
+        {
          "id": "max",
-         "label": "Maximum"
+         "label": "Max"
         }
        ],
        "currentValue": "high"
@@ -641,20 +653,24 @@
        "type": "select",
        "options": [
         {
-         "id": "off",
-         "label": "Off"
-        },
-        {
          "id": "low",
          "label": "Low"
+        },
+        {
+         "id": "medium",
+         "label": "Medium"
         },
         {
          "id": "high",
          "label": "High"
         },
         {
+         "id": "xhigh",
+         "label": "Extra High"
+        },
+        {
          "id": "max",
-         "label": "Maximum"
+         "label": "Max"
         }
        ],
        "currentValue": "high"
@@ -701,20 +717,24 @@
        "type": "select",
        "options": [
         {
-         "id": "off",
-         "label": "Off"
-        },
-        {
          "id": "low",
          "label": "Low"
+        },
+        {
+         "id": "medium",
+         "label": "Medium"
         },
         {
          "id": "high",
          "label": "High"
         },
         {
+         "id": "xhigh",
+         "label": "Extra High"
+        },
+        {
          "id": "max",
-         "label": "Maximum"
+         "label": "Max"
         }
        ],
        "currentValue": "high"
