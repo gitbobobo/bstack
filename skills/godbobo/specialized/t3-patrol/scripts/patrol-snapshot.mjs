@@ -171,8 +171,9 @@ const roundOf = (texts) => {
   return n;
 };
 const P02 = /\bP[0-2]\b/;
+// 轮次线对齐 pr-review-loop 的预算上限（默认 3、最多 5）：越过它还在冒意见，就该发预算收口。
 const NEED_AUDIT = (openHours, reviewRounds, inlineP0P2) =>
-  Boolean(((openHours ?? 0) > 48 || (reviewRounds ?? 0) > 20) && (inlineP0P2 ?? 0) > 0);
+  Boolean(((openHours ?? 0) > 12 || (reviewRounds ?? 0) > 5) && (inlineP0P2 ?? 0) > 0);
 
 // 端点地址与凭据：环境变量 → ~/.agents/env/forgejo.sh → 本地工作树的 origin + git credential helper。
 function forgeConf() {
@@ -458,7 +459,7 @@ export function renameOf(title, prs) {
 }
 
 // 久审未收敛：开放时长或轮次越线、且 24 小时内还有 P0–P2 行内意见。
-// 这类线程看起来最健康（一直在跑、一直有新结论），却正是最该发收敛审计的。
+// 这类线程看起来最健康（一直在跑、一直有新结论），却正是最该发预算收口的。
 function convergenceOf(health) {
   const hit = (health ?? []).filter((h) => h?.needsConvergenceAudit);
   if (!hit.length) return { needsConvergenceAudit: false };
