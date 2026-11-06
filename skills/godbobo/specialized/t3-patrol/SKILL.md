@@ -53,7 +53,7 @@ node <技能目录>/scripts/patrol-snapshot.mjs --self <thread.threadId> > /tmp/
 - `pendingRequestCount > 0`：读 `t3_pending_request action:list` 的问题。
 - `task`/`tail` 是摘要，原任务验收条件、已定口径、交接与顾问结论需补读原文；正文与附加 issue ID 冲突时核派活来源及两条 issue，再按可追溯意图定案，无法确定才交用户。
 - 应有 PR 的线程缺 `prs`/`prHealth`，或 `lastMsgAt` 为 null、有 incomplete/error：补读线程及相关 PR；无 PR 任务不要求 PR 字段。补读仍不可得时记「证据不足」及影响，不能判健康或收敛。
-- `(stale)`、消息沉默超过 60 分钟、`distinctRecentCommands < 5` 都是补查信号。读最新 run 与 activity；长命令查其日志、进程、调度锁及预期时长。重复查询可能是在等有效工作，命令多样也不代表有进展。标题及同步的 updatedAt 不作进展证据。
+- `(stale)`、消息沉默超过 60 分钟、`distinctRecentCommands < 5` 都是补查信号。读最新 run 与 activity；长命令查其日志、进程、调度锁及预期时长。每轮判长任务仍有进展，须取得本轮日志增长、产物变化、进程 IO 或锁持有者活动等新证据；旧截图和上一轮判断只作基线。取不到增量则记证据不足及待核项。重复查询可能是在等有效工作，命令多样也不代表有进展。标题及同步的 updatedAt 不作进展证据。
 - 所有等审查、拟收尾及漏唤醒判断，核最新 HEAD 的审查触发、有效结论、未解决意见与 checks。GitHub 用 gh，Forgejo 用对应 REST；聚合时间、零 checks、mergeable 或「ready for merge」只能作线索。判「审查在途」须有晚于最新 HEAD 的触发（推送或评论时间）且该 HEAD 尚无结论；监听在位、线程自述「复审中」都不算。审查者缺席按目标线程 pr-review-loop 的重试/放弃规则处理，放弃等待单独记账，不能写成审查通过。
 
 **完成标准**：拟动作的依据来自本轮线程/PR 实况；运行进展、审查在途与缺失证据已区分。证据不足的线程保留状态并报告下一项所需证据。
