@@ -29,7 +29,7 @@ git 操作偏好：可审计粒度的规范提交、远程同步（未推送分�
 
 ### pr-review-loop
 
-开 PR 前确定模板，在描述里写清意图与范围；审查按预算推进：默认 3 轮，安全、数据、并发类 blocker 才延长到 5 轮，后续轮只核对改动代码与未关闭意见。意见按意图自行分级（blocker / should / nit / wrong），审查者的 P0–P2 只是线索，只为 blocker 和 should 推送，nit 一行回复不改代码；某轮只剩 nit 就收尾。Codex 只在首轮及其意见被修改时触发。同一 blocker 反复复发时按需读取方向审计。测试失败统一分诊、限制无效重跑，复用 diagnosing-bugs 定位根因；临时隔离须报告覆盖缺口与恢复安排。宿主回复接口按需读取引用文件，审查期间不追目标分支。
+开 PR 前确定模板，在描述里写清意图与范围；审查按预算推进：默认 3 轮，安全、数据、并发类 blocker 才延长到 5 轮，后续轮只核对改动代码与未关闭意见。意见按意图自行分级（blocker / should / nit / wrong），审查者的 P0–P2 只是线索，只为 blocker 和 should 推送，nit 一行回复不改代码；某轮只剩 nit 就收尾。同一 blocker 反复复发时按需读取方向审计。测试失败统一分诊、限制无效重跑，复用 diagnosing-bugs 定位根因；临时隔离须报告覆盖缺口与恢复安排。宿主回复接口按需读取引用文件，审查期间不追目标分支。
 
 详见 [skills/godbobo/general/pr-review-loop/SKILL.md](skills/godbobo/general/pr-review-loop/SKILL.md)。
 

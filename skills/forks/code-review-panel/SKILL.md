@@ -77,7 +77,7 @@ For each finding, include:
 
 ## Division of labor with pr-review-loop
 
-This skill runs before the push, while the change is still local. Once a PR exists, repeat local panels only at the user’s request or when the change materially expands risk. Review comments left on the PR by cloud bots (Codex, Code Bot, and similar) are handled by the convergence rules in `pr-review-loop`.
+This skill runs before the push, while the change is still local. Once a PR exists, repeat local panels only at the user’s request or when the change materially expands risk. Review comments left on the PR by review bots are handled by the convergence rules in `pr-review-loop`.
 
 ## Output Format
 
