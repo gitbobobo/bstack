@@ -2,13 +2,14 @@
 // 派活备选：从空位反推，只为有空位的仓库列候选，查重、粗排后给一张精简表，模型只在表里挑。
 // 取代「把全部候选导成文本逐段读」——那一步在首次接入新仓库时独占了一轮巡检的大半时间。
 //
-// 用法：node dispatch-plan.mjs --capacity <patrol-snapshot.mjs --capacity-only 的输出> [--per-slot 3] [--excerpt 200]
+// 用法：node dispatch-plan.mjs --capacity <patrol-snapshot.mjs --capacity-only 的输出> [--per-slot 3] [--excerpt 200] [--detail 800]
 // 输出 { slots, repos: [{ repo, slots, devices, shortlist, excluded, more }], skipped }：
 //   slots       本轮最多还能派几个（perRun、perDay 余量与各仓库空位之和取小；perDay 为 0 不限）；为 0 时不列候选
 //   devices     该仓库有空位的设备（alias、environmentId、projectId、free）
 //   shortlist   粗排后的前 max(5, 空位×per-slot) 条：ref、id、title、labels、excerpt、category（粗分类）、
 //               rank（越小越优先）、needsInfo（正文像在等补信息）、attempts
 //   excluded    已有未结线程或台账在派的问题（附依据）；more 是排在表外的候选数
+// --detail：表内每条再读一次详情，附 body（前 N 字）与 consensus（共识摘要），挑选时不必逐条 show；0 关闭。
 // 粗排只是排序提示：按标题与标签的关键词归类（崩溃/丢数据 → 门禁/构建/发版 → 安全 → 功能错误 → 性能 → 体验 → 重构），
 // 同类按「高 / 中 / 低」标记。挑选仍按 SKILL.md 第 3 步逐条判断。
 // 有 T3 MCP 会话时，再对表内问题在各设备该仓库的项目里 t3_thread_search 查重；没有会话只按标题与台账查重。
@@ -133,7 +134,9 @@ if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToP
     const { config, errors } = loadConfig();
     if (errors.length) throw new Error(errors.join("；"));
     const capacity = JSON.parse(readFileSync(file, "utf8"));
-    const excerpt = Number(opt("excerpt", 200));
+    const detail = Number(opt("detail", 800));
+    // 带详情时列表不再逐条取摘要（同一批详情会读两遍），needsInfo 改按详情正文判。
+    const excerpt = detail > 0 ? 0 : Number(opt("excerpt", 200));
     const plan = buildPlan({
       capacity,
       config,
@@ -142,6 +145,23 @@ if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToP
       listOf: (repo) => run("list", { repo, excerpt }),
       perSlot: Number(opt("per-slot", 3)),
     });
+    if (plan.slots > 0 && detail > 0) {
+      for (const r of plan.repos) {
+        for (const c of r.shortlist) {
+          try {
+            const d = run("show", { repo: r.repo, id: c.id });
+            const body = String(d.body ?? "").trim();
+            c.body = body.length > detail ? `${body.slice(0, detail)}…` : body;
+            if (d.consensus) c.consensus = typeof d.consensus === "string" ? d.consensus.slice(0, detail) : JSON.stringify(d.consensus).slice(0, detail);
+            delete c.excerpt;
+            c.needsInfo = rankOf({ ...c, excerpt: body }).needsInfo;
+          } catch (e) {
+            c.detailError = String(e.message ?? e);
+          }
+        }
+        r.shortlist.sort((a, b) => a.needsInfo - b.needsInfo);
+      }
+    }
     if (plan.slots > 0 && hasSession()) {
       await connect("t3-dispatch-plan");
       await searchDupes(plan, capacity);

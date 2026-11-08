@@ -30,12 +30,12 @@ description: 代表用户巡检、定案各 T3 环境未结线程。仅定时任
 ## 1. 快照与分诊
 
 ```bash
-node <技能目录>/scripts/patrol-snapshot.mjs --self <thread.threadId> > /tmp/t3-patrol-snapshot.json
+node <技能目录>/scripts/patrol-snapshot.mjs --self <thread.threadId> --brief /tmp/t3-patrol-brief.json > /tmp/t3-patrol-snapshot.json
 ```
 
 `--self` 从当前线程 `t3_thread_read` 返回的 `thread.threadId` 原样取。一轮只跑这一次全量快照；字段含义、失败与手工取证见 [快照与补读](references/snapshot.md)。
 
-1. 读顶层 `lastRound`、`triage`、`modelLadder`、`config`、`environmentsFile`，再按环境读 `candidates`、`failedThreads`、`needsWatchThreads`、`needsRenameThreads`、`convergenceAuditThreads` 和 `checks`。
+1. 一次读完 `/tmp/t3-patrol-brief.json`（不用 jq 另裁）：顶层 `lastRound`、`triage`、`modelLadder`、`config` 告警、`environmentsFile`；每个环境的 `checks`、`capacity`、`hot`（有事候选的判定字段）、`quiet`（每条一行）、`failedThreads`、`needsWatch` 计数、`needsRename`、`convergenceAudit`。摘要省掉的字段（完整 `tail`、`task`、清单原始条目）去 `/tmp/t3-patrol-snapshot.json` 按需查。
 2. 定档位：`lastRound.quotaFailure` 为假且本轮 `failedThreads` 没有额度失败，用首选档；其余按 [故障恢复](references/recovery.md#模型优先级) 判，全局判一次，任务书指定模型优先。
 3. 分诊看每个候选的 `triage` 与 `triageReasons`：
    - **有事**（`hot`）：进入第 2–4 步，逐条取证、判定、执行。`triageReasons` 是它被叫醒的原因，取证从这里入手。
@@ -123,7 +123,7 @@ node <技能目录>/scripts/patrol-evidence.mjs --thread <threadId>@<environment
 
 1. **发送前刷新**：目标线程在快照之后又有新 run 或新消息时（`patrol-evidence` 可见），按新状态重判，跳过过时提醒。
 2. **幂等**：比较本次拟动作与该线程里上一条 `【巡检】` 消息及之后的进展。相同请求且无新事实不重发；未启动查恢复，已接收却未执行查具体执行缺口，方案已被反例证伪走技术收敛。刚发请求不满 `thresholds.resendCooldownMinutes` 且无失败证据，记等待执行。
-3. 发前核档，按 recovery 处理不可用模型；发 `【巡检】` 前缀消息，带目标 environmentId、mode:auto。本轮的消息、改名、settle、interrupt 写成一个 calls 文件，用 `node <技能目录>/scripts/patrol-batch.mjs --calls <文件>` 一次执行（格式见脚本头注释）。保存 messageId、runId、delivery 和预期可观察结果。
+3. 发前核档，按 recovery 处理不可用模型；发 `【巡检】` 前缀消息，带目标 environmentId、mode:auto。本轮的消息、改名、settle、interrupt 写成一个 calls 文件，用 `node <技能目录>/scripts/patrol-batch.mjs --calls <文件>` 一次执行。文件是 UTF-8 JSON 数组，每项 `{"label":"M10 #28","tool":"t3_thread_send","args":{"environmentId":"…","threadId":"…","mode":"auto","message":"【巡检】…"}}`；改名用 `t3_thread_update`（`action:"rename"`、`title`），settle 用 `t3_thread_organize`（`action:"settle"`），回读用 `t3_thread_read`（`limit:1`）。保存 messageId、runId、delivery 和预期可观察结果。
 4. 全部发完后，用一条 `patrol-evidence` 批量回读（`--after` 取消息所在 position，或看 `recentRuns` 里对应 `runId`）。starting/queued 尚未启动时可再等一次，每次不超过 60 秒，累计约 2 分钟；仍排队记未启动及卡点。不要用不相关的最新 run 替代对应 run。
 5. run failed 按 recovery 归因后当轮补救一次，再验证；再次失败记录阻塞与恢复条件。已 running/completed 仅证实启动/结束，读到预期动作证据才能写执行。completed 却又在提问时重新判分支，不写任务完成。
 

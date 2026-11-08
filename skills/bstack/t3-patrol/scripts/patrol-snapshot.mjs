@@ -2,12 +2,13 @@
 // 巡检快照：经 T3 MCP 的 HTTP 端点一次性收集所有环境的候选线程与尾部消息，
 // 只输出判定需要的字段，避免把 t3_thread_list / t3_thread_read 的原始大 JSON 灌进上下文。
 //
-// 用法：node patrol-snapshot.mjs [--self <本线程 id>] [--tail 4] [--chars 600] [--capacity-only] [--full]
+// 用法：node patrol-snapshot.mjs [--self <本线程 id>] [--tail 4] [--chars 600] [--capacity-only] [--full] [--brief <文件>]
+// --brief 另把精简摘要（patrol-brief.mjs）写进指定文件，巡检一次读完。
 // --capacity-only 只输出各环境的容量、项目与未 settle 顶层线程标题（派活用），跳过候选详情与 PR 实况。
 // --full 强制全量分诊（所有候选按「有事」输出）。
 // 依赖 T3 向 harness 进程注入的 MCP 会话（ACP 类与 pi 有，Codex 没有；缺席时退出码 2，改用 MCP 工具手工取证）。
 
-import { existsSync, realpathSync, statfsSync } from "node:fs";
+import { existsSync, realpathSync, statfsSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -17,6 +18,7 @@ import { call, connect, hasSession, NO_SESSION, pool } from "./t3-mcp.mjs";
 import { configure as configurePr, prLiveOf } from "./pr-live.mjs";
 import { loadState } from "./patrol-state.mjs";
 import { fullRoundOf, triageOf, WAIT_MARK } from "./patrol-triage.mjs";
+import { briefOf } from "./patrol-brief.mjs";
 
 const args = process.argv.slice(2);
 const opt = (name, dflt) => {
@@ -482,7 +484,10 @@ async function main() {
   for (const u of unreachable) Object.assign(u, aliasOf.get(u.environmentId) ?? {});
   const triage = CAPACITY_ONLY ? undefined : { full: ROUND.full, ...(ROUND.full ? { reason: ROUND.reason } : { since: ROUND.since }) };
   const lastRound = STATE.lastRound ? { at: STATE.lastRound.at, tier: STATE.lastRound.tier, quotaFailure: STATE.lastRound.quotaFailure } : null;
-  console.log(JSON.stringify({ generatedAt, config, modelLadder, lastRound, triage, environmentsFile, unreachable, environments }, null, 1));
+  const snapshot = { generatedAt, config, modelLadder, lastRound, triage, environmentsFile, unreachable, environments };
+  const briefFile = opt("brief", null);
+  if (briefFile && !CAPACITY_ONLY) writeFileSync(briefFile, `${JSON.stringify(briefOf(snapshot), null, 1)}\n`);
+  console.log(JSON.stringify(snapshot, null, 1));
 }
 
 // 技能常经符号链接安装：比较 realpath，否则直接运行时静默不执行。
