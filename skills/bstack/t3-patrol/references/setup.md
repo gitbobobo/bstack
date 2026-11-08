@@ -74,9 +74,12 @@ node <t3-patrol 技能目录>/scripts/patrol-snapshot.mjs --self <当前线程 t
      title: "T3 巡检",
      prompt: "使用 t3-patrol 技能巡检。",
      schedule: { type: "interval", everyMs: <everyMinutes × 60000> },
-     bindToCurrentThread: true
+     bindToCurrentThread: true,
+     freshSession: true
    }
    ```
+
+   `freshSession` 让每轮在同一线程里开新会话，不带前几轮的上下文：跨轮事实在状态文件里，长上下文只会拖慢每一步。不绑定线程（每轮新建线程）会按工作树启动，巡检项目不是 git 仓库时直接准备失败，不要用。已有任务要改成 `freshSession` 时，T3 的更新接口会丢掉这个字段（只有新建时生效），所以在巡检线程里新建一个带 `freshSession: true` 的任务，确认后把旧任务 `enabled: false`。
 
    提示词只写这一句，规则都在技能里。已有任务的长提示词，问用户后改成这一句。
 5. 把返回的 `scheduledTaskId`、`boundThreadId` 和宿主的 `environmentId`（`t3_environment_links` 返回的顶层 `environmentId`）写进 `t3-patrol.json` 的 `schedule`，向用户报告 `nextRunAt`。
