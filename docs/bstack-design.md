@@ -24,13 +24,13 @@
 - JSON 格式，脚本零依赖读取；每个文件带 `version`，技能读到旧版本时自行迁移。
 - 不放密钥。各服务凭据留在自己的位置（`~/.config/fast-ship/`、gh/fj 登录、T3 `request_secret`）。
 - 每个有偏好的技能自带 `references/config.defaults.json`，它同时充当结构说明：用户文件只能覆盖其中已有的键且类型相同，对象逐键合并、数组整体替换；拼错的键与错类型记 `warnings` 并沿用默认值，文件损坏记 `errors` 并整份回落默认值。加载器与测试随技能自带（首个实现：`t3-patrol/scripts/patrol-config.mjs`），`BSTACK_CONFIG_DIR` 可改配置目录。
-- t3-orchestrator 的 `route-data.mjs` 混合了模型目录事实（入口、视觉分数）与用户偏好（路由顺序、模型状态），需要先拆开再配置化，放在第 3 步与 setup 一起做。
+- t3-orchestrator：`route-data.mjs` 保留为默认值，`route-config.mjs` 合并 `t3-orchestrator.json`，可覆盖模型状态、任务限定、入口、候选顺序和换路上限，也可新增模型；`PROVIDER_RULES`、任务类型与档位标准是技能规则，不进配置。
 
-## setup 技能
+## setup 技能（`bstack-setup`）
 
-用户主动调用（`disable-model-invocation: true`），合并现有 setup-env，作为新设备与偏好变更的唯一入口：
+用户主动调用（`disable-model-invocation: true`），由 setup-env 改名合并而来，作为新设备与偏好变更的唯一入口：
 
-1. 扫描已安装技能，列出带 `references/setup.md` 的技能及其状态（未配置 / 已配置 / 版本过旧）。
+1. 扫描已安装技能（`scripts/discover.mjs`），列出带 `references/setup.md` 的技能及其状态（未配置 / 已配置 / 版本过旧）。setup.md 的 frontmatter 声明 `config`（主配置文件名）与 `version`。
 2. 用户选择这次要配置或修改的技能。
 3. 逐个读取该技能的 `setup.md`：提问、写入、验证（巡检的验证是一次 dry-run）。
 4. 同步：询问是否用私有配置仓库在各环境同步。是则 `fj repo create bstack-config --private`（或 `gh repo create --private`），或克隆已有仓库。
@@ -41,6 +41,7 @@
 ### 配置仓库同步
 
 - 配置仓库是可选项；技能只读 `~/.config/bstack/`，不关心它是不是 git 仓库。
+- 由 `bstack-setup/scripts/config-repo.mjs` 实现（`status` / `init` / `clone` / `pull` / `commit`）；`secrets/` 与 `PAUSE` 只在本机，写进 `.gitignore`。
 - 写入：`pull --rebase` → 修改 → 每项改动一个提交 → 推送。
 - 读取：巡检每轮开始 `git pull --ff-only`，失败用本地版本并在报告里记一笔；其他设备在运行 setup 时拉取。
 
@@ -112,9 +113,9 @@ T3 只向 ACP 类 harness（droid、devin 等）的进程环境注入 `T3_ACP_MC
 |---|---|---|
 | 1 | 快照脚本改用 `T3_ACP_MCP_*` 通道 | 已完成 |
 | 2 | 配置骨架；t3-patrol 的模型阶梯、名额、阈值迁入配置，默认值等于现状 | 已完成 |
-| 3 | setup 技能（合并 setup-env），含私有配置仓库同步；拆分 t3-orchestrator 路由数据 | 待办 |
+| 3 | setup 技能（合并 setup-env），含私有配置仓库同步；拆分 t3-orchestrator 路由数据 | 已完成 |
 | 4 | 快照按池统计容量，handoff 第 3 步改用池 | 待办 |
 | 5 | `t3-dispatch` 与 fast-ship 适配器，先手动使用 | 待办 |
-| 6 | 接入巡检（dry-run → auto），补 t3-patrol `setup.md` 与定时任务创建 | 待办 |
+| 6 | 接入巡检（dry-run → auto），t3-patrol `setup.md` 补派活相关问题（setup.md 的设备、偏好与定时任务部分已在第 3 步完成） | 待办 |
 | 7 | GitHub / Forgejo 适配器 | 待办 |
 | 8 | 仓库改名 bstack：GitHub 仓库、安装文档、各设备重装、T3 项目路径、复盘定时任务里的路径 | 待办 |
