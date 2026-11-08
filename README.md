@@ -7,7 +7,7 @@
 - `skills/godbobo/general/`：通用原创技能
 - `skills/godbobo/specialized/`：专用原创技能
 - `skills/forks/`：分叉技能（导入时注明来源，保持可独立安装）
-- `docs/`：文档
+- `docs/`：文档（bstack 改造方案与进度见 [docs/bstack-design.md](docs/bstack-design.md)）
 
 技能的安装与更新步骤见 [docs/setup.md](docs/setup.md)（通过 `skills` CLI 安装到通用目录 + Claude Code，避免链接到所有 agent）。
 
