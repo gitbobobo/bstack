@@ -75,3 +75,18 @@ test("sccache：装了就写入 rustc-wrapper，已有 [build] 段合并，别�
   writeFileSync(join(other.env.CARGO_HOME, "config.toml"), '[build]\nrustc-wrapper = "ccache-rs"\n');
   assert.match(other.run().stdout, /其他\s+cargo:rustc-wrapper\s+ccache-rs/);
 });
+
+test("旧 setup-env 链接（含悬空）直接改指真源，不留备份", { skip: !posix }, async () => {
+  const { readdirSync, readlinkSync, realpathSync } = await import("node:fs");
+  const f = fixture();
+  const legacy = join(f.root, "skills", "setup-env", "rules", "AGENTS.md");
+  const target = join(f.home, ".codex", "AGENTS.md");
+  mkdirSync(dirname(target), { recursive: true });
+  symlinkSync(legacy, target);
+  assert.match(f.run("--check").stdout, /旧链接\s+codex/);
+  f.run();
+  const source = join(dirname(SCRIPT), "..", "rules", "AGENTS.md");
+  assert.equal(realpathSync(readlinkSync(target)), realpathSync(source));
+  assert.deepEqual(readdirSync(dirname(target)).filter((n) => n.includes(".bak-")), []);
+  assert.match(f.run("--check").stdout, /已链接\s+codex/);
+});

@@ -8,6 +8,7 @@
 // 退出码：0 全部就位；2 存在待处理项或部分失败；1 环境错误。
 //
 // 已有非空文件会先备份成 <path>.bak-<时间戳> 再替换；符号链接已指向真源则跳过。
+// 指向旧 setup-env 技能（本技能改名前）的链接直接改指真源，不备份。
 // Cursor 目标写入派生的 .mdc（包裹 alwaysApply frontmatter），不走符号链接。
 
 import { execFileSync } from "node:child_process";
@@ -23,6 +24,7 @@ import {
   renameSync,
   symlinkSync,
   statSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { homedir, platform } from "node:os";
@@ -35,6 +37,7 @@ const APPDATA = process.env.APPDATA || join(HOME, "AppData", "Roaming");
 const PI_DIR = process.env.PI_CODING_AGENT_DIR || join(HOME, ".pi", "agent");
 
 const SOURCE = resolve(dirname(fileURLToPath(import.meta.url)), "../rules/AGENTS.md");
+const LEGACY_SOURCE = /[\\/]setup-env[\\/]rules[\\/]AGENTS\.md$/;
 
 // 各 harness 的全局规则文件路径。devin 文档同时会读 ~/.claude/CLAUDE.md，
 // claudeAgent 也读它，一份文件覆盖两家。
@@ -118,20 +121,22 @@ function cargoToolOutsidePath(name) {
   return null;
 }
 
-// 返回 { state, detail }；state: linked | copy-current | copy-stale | foreign-empty | foreign | absent
+// 返回 { state, detail }；state: linked | legacy | copy-current | copy-stale | foreign-empty | foreign | absent
 function inspect(t) {
   const path = t.path;
   if (!existsSync(path) && !lstatSync(path, { throwIfNoEntry: false })) return { state: "absent" };
   const st = lstatSync(path);
   if (st.isSymbolicLink()) {
     const target = resolve(dirname(path), readlinkSync(path));
+    let real = null;
     try {
-      return realpathSync(target) === sourceReal && !t.transform
-        ? { state: "linked" }
-        : { state: "foreign", detail: `符号链接指向 ${target}` };
+      real = realpathSync(target);
     } catch {
-      return { state: "foreign", detail: `悬空符号链接 → ${target}` };
+      // 悬空链接：旧技能卸载后常见，下面按目标路径判断。
     }
+    if (real === sourceReal && !t.transform) return { state: "linked" };
+    if (LEGACY_SOURCE.test(target)) return { state: "legacy", detail: `旧 setup-env 链接 → ${target}` };
+    return { state: "foreign", detail: real ? `符号链接指向 ${target}` : `悬空符号链接 → ${target}` };
   }
   const content = readFileSync(path, "utf8");
   if (content === expectedFor(t)) return { state: "copy-current" };
@@ -148,6 +153,8 @@ function apply(t, state) {
     const bak = `${path}.bak-${stamp}`;
     renameSync(path, bak);
     note = `备份到 ${bak}，`;
+  } else if (state === "legacy") {
+    unlinkSync(path);
   }
   if (t.transform || useCopy) {
     writeFileSync(path, expectedFor(t));
@@ -184,7 +191,7 @@ for (const t of TARGETS) {
   } else if (state !== "linked" && state !== "copy-current") {
     pending++;
   }
-  const label = { linked: "已链接", "copy-current": "副本一致", "copy-stale": "副本过期", absent: "缺失", foreign: "有别的内容", "foreign-empty": "空文件" }[state];
+  const label = { linked: "已链接", "copy-current": "副本一致", "copy-stale": "副本过期", absent: "缺失", legacy: "旧链接", foreign: "有别的内容", "foreign-empty": "空文件" }[state];
   console.log(`${label.padEnd(6)} ${t.harness.padEnd(20)} ${t.path}   ${cliInfo}${detail ? `（${detail}）` : ""}${action}`);
 }
 

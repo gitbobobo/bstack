@@ -51,6 +51,12 @@ npx skills ls -g
 - 输出中 Eve、PromptScript 报「不支持全局安装」属预期，可忽略
 - `Agents:` 一行是"可读取该技能的 agent"列表，并非实际创建的符号链接
 
+### 5. 初始化设备与偏好
+
+安装后在 agent 里调用 `$bstack-setup`：同步全局代理规则、体检本机，并按需配置各技能偏好（存于 `~/.config/bstack/`，可选私有仓库同步）。
+
+从旧版升级的设备：`bstack-setup` 取代了 `setup-env`。装好新技能并跑过一次设备初始化后，执行 `npx skills remove setup-env -g -y` 卸掉旧技能。
+
 ## 更新
 
 本仓库技能推新后，在任一目录执行：

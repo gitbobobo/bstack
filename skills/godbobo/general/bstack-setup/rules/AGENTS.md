@@ -25,7 +25,7 @@
 ## Windows 环境
 
 - exec 的 shell 依 harness 而定：devin 等 ACP 系是 cmd.exe，claude/codex/pi 是 Git Bash。报 `'xxx' 不是内部或外部命令` / `not recognized` 就是方言错了，立即按所在 shell 换写法，不要逐种试。
-- 路径以 `/mnt/<盘符>/` 开头或 `uname` 显示 Linux，说明落进了 WSL bash（pi 没配 `shellPath` 时会这样）：WSL 里的 `git` 读不了 Windows 工作树，也没有 `node`。改用 `git.exe`/`gh.exe`/`node.exe`，并提醒用户跑 `$setup-env` 体检。
+- 路径以 `/mnt/<盘符>/` 开头或 `uname` 显示 Linux，说明落进了 WSL bash（pi 没配 `shellPath` 时会这样）：WSL 里的 `git` 读不了 Windows 工作树，也没有 `node`。改用 `git.exe`/`gh.exe`/`node.exe`，并提醒用户跑 `$bstack-setup` 体检。
 - 超时（`timeout` 或 harness 自带的超时）只杀直接子进程，经 `powershell.exe`/`cmd.exe` 拉起的 cargo、node 等 Windows 子进程会继续跑，抢锁、写坏构建产物。长命令用 `Start-Process` 后台运行加日志轮询；命令超时后先按 PID 查有没有残留进程，再重跑。
 - cmd 方言：命令用 `&&`/`&` 连接（`;` 不是分隔符）；工具只有 `dir`/`type`/`findstr`/`rg`，没有 `ls`/`pwd`/`head`/`tail`/`wc`/`sed`/`awk`/`grep`/heredoc/PowerShell cmdlet；`more +N` 输入不足 N 行时输出为空，不能当跳行工具用。参数里的 `&`、`|`、`>`、括号会按 cmd 语义展开（URL、JSON 首当其冲），一律双引号包裹或写文件引用。
 - 多行或含引号的脚本写临时 `.mjs`/`.py` 文件再执行，不内联 `node -e`/`python -c`/`powershell -Command`——cmd 转义会吞内容。
