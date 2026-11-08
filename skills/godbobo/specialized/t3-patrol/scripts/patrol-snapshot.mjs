@@ -2,7 +2,8 @@
 // 巡检快照：经 T3 MCP 的 HTTP 端点一次性收集所有环境的候选线程与尾部消息，
 // 只输出判定需要的字段，避免把 t3_thread_list / t3_thread_read 的原始大 JSON 灌进上下文。
 //
-// 用法：node patrol-snapshot.mjs [--self <本线程 id>] [--tail 4] [--chars 600]
+// 用法：node patrol-snapshot.mjs [--self <本线程 id>] [--tail 4] [--chars 600] [--capacity-only]
+// --capacity-only 只输出各环境的容量、项目与未 settle 顶层线程标题（派活用），跳过候选详情与 PR 实况。
 // 依赖 T3 向 ACP 类 harness 注入的 T3_ACP_MCP_ENDPOINT、T3_ACP_MCP_AUTHORIZATION（缺席时退出码 2，改用 MCP 工具手工取证）。
 
 import { execFileSync } from "node:child_process";
@@ -23,6 +24,7 @@ const SELF = opt("self", null);
 const TAIL = Number(opt("tail", 4));
 const CHARS = Number(opt("chars", 600));
 const CONC = Number(opt("concurrency", 6));
+const CAPACITY_ONLY = args.includes("--capacity-only");
 // 生效的巡检偏好（默认值 + ~/.config/bstack/t3-patrol.json），启动时加载一次。
 const PREFS = loadConfig();
 const CFG = PREFS.config;
@@ -498,6 +500,66 @@ function convergenceOf(health) {
   };
 }
 
+// 占用名额的线程：有活跃 run 的（含 Fast Ship 审查线程），或 PR 仍 open、最近 2 小时内跑过的（两轮审查之间
+// 线程会暂时 completed，但工作树和编译资源还占着）。PR 已合并/关闭、没有 PR 又没在跑的线程不占名额。
+// 不用 updatedAt：同步会批量刷新它。
+const holdsOpenPr = (t) => !LIVE.has(t.status) && !isProbe(t) && (t.pullRequests ?? []).some((p) => p.state === "open");
+
+async function occupancyOf(env, top, lastRunEndedOf, now) {
+  const occupying = top.filter((t) => {
+    if (isProbe(t)) return false;
+    if (LIVE.has(t.status)) return true;
+    if (!holdsOpenPr(t)) return false;
+    const ended = Date.parse(lastRunEndedOf(t) ?? "");
+    return Number.isFinite(ended) && now - ended < CFG.capacity.occupyWindowHours * 3600 * 1000;
+  });
+  // 池按仓库身份归类；项目清单取不到时只给设备总数，并标 projectsError，免得把全部线程当成「*」池。
+  let projects = new Map();
+  let projectsError = null;
+  try {
+    projects = await listProjects(env.isLocal ? null : env.environmentId);
+  } catch (e) {
+    projectsError = String(e.message ?? e);
+  }
+  const capacity = {
+    ...capacityOf({
+      threads: occupying.map((t) => ({ title: clip(t.title, 40), projectId: t.projectId, reviewBot: isReviewBot(t), createdAt: t.createdAt })),
+      projects,
+      device: DEVICE_OF.get(env.environmentId),
+      cfg: CFG.capacity,
+      diskFreeGB: env.isLocal ? localDiskFreeGB() : null,
+      now,
+    }),
+    ...(projectsError ? { projectsError } : {}),
+  };
+  return { occupying, capacity, projects };
+}
+
+// --capacity-only：只算容量，供派活使用。只给 PR 仍 open 的已停线程读一次 run 记录，不读尾部消息与 PR 实况。
+// 另给项目清单（按仓库找 projectId）与未 settle 顶层线程的标题（按问题编号查重）。
+async function capacityEnv(env) {
+  const now = Date.now();
+  const scope = env.isLocal ? {} : { environmentId: env.environmentId };
+  const top = (await listAll(env.isLocal ? null : env.environmentId)).filter((t) => !isSubagent(t));
+  const ended = new Map();
+  await pool(top.filter(holdsOpenPr), CONC, async (t) => {
+    const r = await call("t3_thread_read", { threadId: t.threadId, limit: 1, maxCharsPerItem: 1, ...scope }).catch(() => null);
+    ended.set(t.threadId, (r?.recentRuns ?? []).map((x) => x.completedAt ?? x.startedAt ?? x.requestedAt).filter(Boolean).sort().at(-1) ?? null);
+  });
+  const { occupying, capacity, projects } = await occupancyOf(env, top, (t) => ended.get(t.threadId), now);
+  return {
+    environmentId: env.environmentId,
+    label: env.label,
+    activeTopLevel: occupying.length,
+    occupying: occupying.map((t) => clip(t.title, 40)),
+    capacity,
+    projects: [...projects].map(([id, identity]) => ({ id, canonicalKey: identity?.canonicalKey ?? null })),
+    openThreads: top
+      .filter((t) => !isProbe(t) && !isReviewBot(t))
+      .map((t) => ({ id: t.threadId, link: t.link, title: clip(t.title, 80), status: t.status, projectId: t.projectId, prs: (t.pullRequests ?? []).map((p) => `${p.repository}#${p.number}:${p.state}`) })),
+  };
+}
+
 async function snapshotEnv(env) {
   const now = Date.now();
   const all = await listAll(env.isLocal ? null : env.environmentId);
@@ -558,39 +620,10 @@ async function snapshotEnv(env) {
         return { ...base, ...renameOf(t.title, base.prs), error: String(e.message ?? e), incomplete: true };
       }
   });
-  // 占用名额的线程：有活跃 run 的（含 Fast Ship 审查线程），或 PR 仍 open、最近 2 小时内跑过的（两轮审查之间
-  // 线程会暂时 completed，但工作树和编译资源还占着）。PR 已合并/关闭、没有 PR 又没在跑的线程不占名额。
-  // 不用 updatedAt：同步会批量刷新它。
   const byId = new Map(enriched.map((x) => [x.id, x]));
-  const occupying = top.filter((t) => {
-    if (isProbe(t)) return false;
-    if (LIVE.has(t.status)) return true;
-    const prs = t.pullRequests ?? [];
-    if (!prs.some((p) => p.state === "open")) return false;
-    const ended = Date.parse(byId.get(t.threadId)?.lastRunEndedAt ?? "");
-    return Number.isFinite(ended) && now - ended < CFG.capacity.occupyWindowHours * 3600 * 1000;
-  });
+  const { occupying, capacity } = await occupancyOf(env, top, (t) => byId.get(t.threadId)?.lastRunEndedAt, now);
   const active = occupying.length;
   const occupyingTitles = occupying.map((t) => clip(t.title, 40));
-  // 池按仓库身份归类；项目清单取不到时只给设备总数，并标 projectsError，免得把全部线程当成「*」池。
-  let projects = new Map();
-  let projectsError = null;
-  try {
-    projects = await listProjects(env.isLocal ? null : env.environmentId);
-  } catch (e) {
-    projectsError = String(e.message ?? e);
-  }
-  const capacity = {
-    ...capacityOf({
-      threads: occupying.map((t) => ({ title: clip(t.title, 40), projectId: t.projectId, reviewBot: isReviewBot(t), createdAt: t.createdAt })),
-      projects,
-      device: DEVICE_OF.get(env.environmentId),
-      cfg: CFG.capacity,
-      diskFreeGB: env.isLocal ? localDiskFreeGB() : null,
-      now,
-    }),
-    ...(projectsError ? { projectsError } : {}),
-  };
   const real = enriched.filter((x) => !isDelegatedTask(x.task, x.hasWorktree));
   // 兜底对账：被任何过滤规则排除、但停在失败态的真实顶层线程。过滤规则一改就可能误杀，
   // 把误杀的线程留在这份名单里，巡检每轮必须逐个过——静默消失比多算几条候选危险得多。
@@ -675,7 +708,7 @@ async function main() {
     else unreachable.push({ environmentId: l.environmentId, label: l.label, status: l.status, error: l.lastError });
   }
   const results = await pool(
-    envs.map((e) => () => snapshotEnv(e).catch((err) => ({ environmentId: e.environmentId, label: e.label, error: String(err.message ?? err) }))),
+    envs.map((e) => () => (CAPACITY_ONLY ? capacityEnv(e) : snapshotEnv(e)).catch((err) => ({ environmentId: e.environmentId, label: e.label, error: String(err.message ?? err) }))),
     2,
     (run) => run(),
   );
