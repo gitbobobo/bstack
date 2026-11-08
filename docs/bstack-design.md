@@ -65,20 +65,26 @@ GitHub 与 Forgejo 合为一个托管平台适配器，底层分别走 `gh` 与 
 
 ## 容量池
 
+配置在 `t3-patrol.json` 的 `capacity.devices`（数组，整组替换），设备以 `environments.json` 的别名标识：
+
 ```json
 {
-  "pools": {
-    "pc":       [{ "repos": ["musiver"], "max": 5 }, { "repos": "*", "max": 4 }],
-    "mac-mini": [{ "repos": ["musiver"], "max": 4 }, { "repos": ["tma"], "max": 2 }, { "repos": "*", "max": 4 }],
-    "linux":    [{ "repos": ["musiver"], "max": 1 }, { "repos": "*", "max": 4 }],
-    "mbp":      [{ "repos": ["musiver", "tma", "stream_music"], "max": 3 }, { "repos": "*", "max": 4 }]
+  "capacity": {
+    "devices": [
+      { "device": "pc",       "pools": [{ "repos": ["musiver"], "max": 5 }, { "repos": "*", "max": 4 }] },
+      { "device": "mac-mini", "pools": [{ "repos": ["musiver"], "max": 4 }, { "repos": ["tma"], "max": 2 }, { "repos": "*", "max": 4 }] },
+      { "device": "linux",    "pools": [{ "repos": ["musiver"], "max": 1 }, { "repos": "*", "max": 4 }] },
+      { "device": "mbp",      "pools": [{ "repos": ["musiver", "tma", "stream-music"], "max": 3 }, { "repos": "*", "max": 4 }] }
+    ]
   }
 }
 ```
 
-- 仓库以 T3 项目的 `repositoryIdentity.canonicalKey` 标识（各环境 `projectId` 不同）。
+- 仓库以 T3 项目的 `repositoryIdentity.canonicalKey` 标识（各环境 `projectId` 不同）。`repos` 写完整 key 精确比对；只写仓库名时比对 key 的最后一段，会同时命中不同宿主上的同名仓库（如 `liuyincs/musiver`）。
 - 每个线程只落入第一个匹配的池；`"*"` 是上面未列出的仓库。「其他仓库 4 个」按每台设备各 4 个理解。
+- 设备总上限取设备条目的 `maxActiveThreads`，缺省为 `capacity.maxActiveThreads`（5）。池加起来超过总上限时总上限先到，需要并行更多时在设备条目里调高。
 - 占用沿用 `t3-patrol/references/handoff.md` 的定义：活跃 run 的顶层线程，加上 PR 仍 open、最近 2 小时内跑过的线程。审查线程（「代码审查 · PR #N」）只计入设备总数，不占仓库池。
+- 快照每个环境输出 `capacity`：设备总数、各池占用、按仓库的可建数 `freeByRepo`、本机剩余磁盘。计算在 `t3-patrol/scripts/patrol-capacity.mjs`。
 - 容量只约束巡检；用户手动开的线程照样占名额，但不受阻拦。空位先给等待中的交接，再给新问题。
 
 ## 巡检全流程
@@ -114,7 +120,7 @@ T3 只向 ACP 类 harness（droid、devin 等）的进程环境注入 `T3_ACP_MC
 | 1 | 快照脚本改用 `T3_ACP_MCP_*` 通道 | 已完成 |
 | 2 | 配置骨架；t3-patrol 的模型阶梯、名额、阈值迁入配置，默认值等于现状 | 已完成 |
 | 3 | setup 技能（合并 setup-env），含私有配置仓库同步；拆分 t3-orchestrator 路由数据 | 已完成 |
-| 4 | 快照按池统计容量，handoff 第 3 步改用池 | 待办 |
+| 4 | 快照按池统计容量，handoff 第 3 步改用池 | 已完成 |
 | 5 | `t3-dispatch` 与 fast-ship 适配器，先手动使用 | 待办 |
 | 6 | 接入巡检（dry-run → auto），t3-patrol `setup.md` 补派活相关问题（setup.md 的设备、偏好与定时任务部分已在第 3 步完成） | 待办 |
 | 7 | GitHub / Forgejo 适配器 | 待办 |
