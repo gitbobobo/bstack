@@ -53,7 +53,7 @@ PR 收尾：对最新目标分支一次性整合（默认 merge）并解决冲�
 
 ### t3-orchestrator
 
-T3 Code 多 harness 编排：pi / codex / devin / factory droid 四个 harness，pi 经 cliproxyapi 调 glm/deepseek/grok/gpt 系（额度由 cliproxyapi 自动路由）；swe-2 只走 devin、opus 走 devin/droid（用户定；cliproxyapi 的 devin 订阅已移除）。选 harness/模型由 `route.mjs` 按固定规则裁决（`route-data.mjs` 是唯一事实源，`route.mjs audit` 核对路由数据与实时目录），delegate_task 派活验收（子代理一律 `runtimeMode:"full-access"`，不为它向用户索要授权；卡在 `approval_request` 就取消重派），失败自动换路续跑；实现顾问由 `--task design` 单独选出，Opus 只做实现顾问；非产品决策由主代理按「根治」取向自主拍板，命中方向顾问触发（审计、技术取舍、跨模块方案、高风险决策）就派一位顾问独立裁决，不停下等用户；附 `route-playground.mjs` 可视化路由沙盒。专用技能，仅限用户或技能点名时调用。
+T3 Code 多 harness 编排：pi / codex / devin / factory droid 四个 harness，pi 经 cliproxyapi 调 glm/deepseek/grok/gpt 系（额度由 cliproxyapi 自动路由）；swe-2 只走 devin、opus 走 devin/droid（用户定；cliproxyapi 的 devin 订阅已移除）。选 harness/模型由 `route.mjs` 按固定规则裁决（默认值在 `route-data.mjs`，用户在 `~/.config/bstack/t3-orchestrator.json` 覆盖模型状态、入口与候选顺序，`route.mjs audit` 核对生效路由数据与实时目录），delegate_task 派活验收（子代理一律 `runtimeMode:"full-access"`，不为它向用户索要授权；卡在 `approval_request` 就取消重派），失败自动换路续跑；实现顾问由 `--task design` 单独选出，Opus 只做实现顾问；非产品决策由主代理按「根治」取向自主拍板，命中方向顾问触发（审计、技术取舍、跨模块方案、高风险决策）就派一位顾问独立裁决，不停下等用户；附 `route-playground.mjs` 可视化路由沙盒。专用技能，仅限用户或技能点名时调用。
 
 详见 [skills/godbobo/specialized/t3-orchestrator/SKILL.md](skills/godbobo/specialized/t3-orchestrator/SKILL.md)。
 

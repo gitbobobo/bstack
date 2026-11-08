@@ -1,4 +1,5 @@
-// 选择规则的唯一事实源。改选择行为只改这里，route.mjs 与 route.test.mjs 随之生效。
+// 选择规则的默认值。用户配置 ~/.config/bstack/t3-orchestrator.json 可覆盖模型状态、入口与路由行，
+// 合并规则见 route-config.mjs；route.mjs 读合并后的生效值，route.test.mjs 据本文件校验不变量。
 // 数据源与更新标准见 ../references/models.md「更新来源与标准」。
 //
 // 结构：

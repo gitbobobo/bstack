@@ -23,7 +23,7 @@ harness 四个（用户定，2026-11-04）：`pi` 经 cliproxyapi 调 glm/deepse
 
 ## 选目标由脚本裁决
 
-**选哪个 harness、哪个模型，一律跑 `route.mjs`，不查文档、不自己挑。** 固定输入固定输出：任务类型和已试入口进去，`PICK` 出来就是 `delegate_task` 的 `target`（`options` 已按规则注入好）。硬性规则全部编码在 `scripts/route-data.mjs` 与 `route.mjs`——脚本能拦的别靠记忆；`route.mjs table` 看当前生效数据。
+**选哪个 harness、哪个模型，一律跑 `route.mjs`，不查文档、不自己挑。** 固定输入固定输出：任务类型和已试入口进去，`PICK` 出来就是 `delegate_task` 的 `target`（`options` 已按规则注入好）。硬性规则全部编码在 `scripts/route-data.mjs`（默认值，用户配置可覆盖偏好部分）与 `route.mjs`——脚本能拦的别靠记忆；`route.mjs table` 看当前生效数据。
 
 ```bash
 # 选目标：--task 分类进去，pick/alternatives/skipped 出来
@@ -141,4 +141,4 @@ harness 拒绝执行工具时（例如 `Permission denied for this tool`、`was 
 
 用户要求更新模型参考时，按 [references/models.md](references/models.md) 末尾的「更新来源与标准」执行：先列出改动建议，用户确认后再改。
 
-改选择规则只改 `scripts/route-data.mjs`，改完跑 `node --test scripts/route.test.mjs`。
+`scripts/route-data.mjs` 是默认路由数据，改它要跑 `node --test scripts/route.test.mjs scripts/route-config.test.mjs`。用户在 `~/.config/bstack/t3-orchestrator.json` 覆盖模型状态、入口和候选顺序（经 bstack-setup 按 [references/setup.md](references/setup.md) 配置）；`route.mjs` 读取生效值，配置有问题时在输出里报 `WARN 配置`。

@@ -32,7 +32,7 @@
 
 ## 路由规则在哪里
 
-路由数据（模型状态与入口、ROUTES 组合优先级行、白名单递补）的唯一事实源是 `scripts/route-data.mjs`，结构见其文件头；`route.mjs table` 查看当前生效数据。画像表「状态」列对应 `MODELS.status`：自动 → `auto`、顾问 → `advisor`、点名 → `named`；「不用」即不写进 `MODELS`。括注的任务限定（如「仅实现顾问」）对应 `MODELS.tasks`。
+路由数据（模型状态与入口、ROUTES 组合优先级行、白名单递补）的默认值在 `scripts/route-data.mjs`，结构见其文件头；用户配置 `~/.config/bstack/t3-orchestrator.json` 可覆盖其中的模型状态、任务限定、入口、候选顺序与换路上限（规则见 `scripts/route-config.mjs`）。`route.mjs table` 查看当前生效数据及配置来源。画像表「状态」列对应 `MODELS.status`：自动 → `auto`、顾问 → `advisor`、点名 → `named`；「不用」即不写进 `MODELS`。括注的任务限定（如「仅实现顾问」）对应 `MODELS.tasks`。
 
 ## 选项与档位
 
@@ -55,7 +55,7 @@
 node scripts/route.mjs audit --caps-file /tmp/t3-caps.json   # 有问题逐条打印并 exit 1
 ```
 
-审计 `route-data.mjs` 全部 entries 与 ROUTES 候选的合并 options：provider/模型在目录里、选项名存在、取值在生效集内。`check --caps-file` 对手工拼的组合做同样的取值校验；select 时对注入后的最终 options 也跑一遍，非法入口直接进 skipped。
+审计生效路由数据（`route-data.mjs` 加用户配置）全部 entries 与 ROUTES 候选的合并 options：provider/模型在目录里、选项名存在、取值在生效集内。`check --caps-file` 对手工拼的组合做同样的取值校验；select 时对注入后的最终 options 也跑一遍，非法入口直接进 skipped。
 
 测试用的裁剪夹具 `scripts/fixtures/caps-trimmed.json` 只含 route-data 用到的 provider/模型/选项。目录变化后重新生成：取实时 `orchestrator_capabilities` 落盘，按 `route-data.mjs` 里 entries 的 provider/模型 id 过滤 providers 与 models（保留模型完整选项描述），并把 `canRunChildTask`/`canRunCrossProviderChildTask` 归一化为 true、`constraints` 清空后写回该文件。
 
@@ -91,4 +91,4 @@ node scripts/route.mjs audit --caps-file /tmp/t3-caps.json   # 有问题逐条�
 1. 对比 `orchestrator_capabilities` 的模型列表和 `scripts/route-data.mjs` 的 entries，找出新增、下线和改名的模型；选项规格变化后重新生成 `scripts/fixtures/caps-trimmed.json`。
 2. 按上面的来源核对新增模型与价格变化；核对完跑 `route.mjs audit --caps-file <实时 caps>` 确认全部入口目录可查、选项合法。
 3. 把建议的改动列成表（模型、原状态、新状态、理由、来源）交给用户确认。
-4. 用户确认后改 `scripts/route-data.mjs` 与本文件（画像表同步状态列），跑 `node --test scripts/route.test.mjs`，并更新调研日期。
+4. 用户确认后改 `scripts/route-data.mjs` 与本文件（画像表同步状态列），跑 `node --test scripts/route.test.mjs scripts/route-config.test.mjs`，并更新调研日期。只影响用户自己设备的偏好（如某个 harness 本机没有）改 `~/.config/bstack/t3-orchestrator.json`，不改默认值。

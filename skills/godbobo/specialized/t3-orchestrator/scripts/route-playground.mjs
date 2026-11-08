@@ -12,7 +12,7 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { PROVIDER_RULES, MODELS, TASKS, ADVISOR_TASKS, ROUTES, MAX_ATTEMPTS } from "./route-data.mjs";
+import { PROVIDER_RULES, MODELS, TASKS, ADVISOR_TASKS, ROUTES, MAX_ATTEMPTS } from "./route-config.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 

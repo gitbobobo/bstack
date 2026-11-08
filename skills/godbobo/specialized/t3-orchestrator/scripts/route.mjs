@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // 固定规则路由：输入任务类型（+已试入口），输出该用的 harness/模型/选项。
-// 规则全部来自 route-data.mjs；本文件只做展开与过滤，不含可调整的策略。
+// 规则来自 route-config.mjs（route-data.mjs 默认值 + 用户配置 ~/.config/bstack/t3-orchestrator.json）；
+// 本文件只做展开与过滤，不含可调整的策略。
 //
 // 子命令：
 //   route.mjs select --task <key> [--vision]
@@ -10,9 +11,9 @@
 //   route.mjs named <模型> [--provider <id>] [--caps-file ...] [--json]
 //   route.mjs check --provider <id> --model <id> [--role <role>] [--options '<json>'] [--user-named]
 //   route.mjs audit [--caps-file <path>] [--json]
-//                                     审计 route-data 全部入口与 ROUTES 行内 options
+//                                     审计生效路由数据全部入口与 ROUTES 行内 options
 //                                     是否「目录可查 + 取值合法」，有问题 exit 1
-//   route.mjs table [--json]          打印当前生效的路由数据（供人工核对）
+//   route.mjs table [--json]          打印当前生效的路由数据与配置来源（供人工核对）
 //   route.mjs tasks                   列出 --task 可用取值
 //
 // 退出码：0 选出/校验通过；1 无可用候选或校验违规；2 参数错误。
@@ -31,7 +32,7 @@ import { spawnSync } from "node:child_process";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { PROVIDER_RULES, MODELS, TASKS, ADVISOR_TASKS, ROUTES, MAX_ATTEMPTS } from "./route-data.mjs";
+import { PROVIDER_RULES, MODELS, TASKS, ADVISOR_TASKS, ROUTES, MAX_ATTEMPTS, CONFIG, CONFIG_NOTES } from "./route-config.mjs";
 
 const DIR = dirname(fileURLToPath(import.meta.url));
 const now = Date.now();
@@ -261,7 +262,7 @@ function gateCheck({ provider, model, role, options = {}, userNamed = false }, p
     if (status === "named") fails.push(`${resolved.label} 仅限用户点名才可用，自动调度与换路跳过`);
     if (status === "advisor" && role === "implementation") fails.push(`${resolved.label} 是顾问/审查专用，不承担 implementation 任务`);
     if (roleTask) fails.push(`${roleTask}（role=${role}）`);
-    if (!resolved) fails.push(`${provider}/${model} 不在 route-data.mjs 任何模型的入口清单内，自动调度不得选用`);
+    if (!resolved) fails.push(`${provider}/${model} 不在生效路由数据任何模型的入口清单内，自动调度不得选用`);
   } else {
     if (status === "named") warns.push(`${resolved.label} 为点名专用模型——本次按用户点名放行`);
     if (resolved?.status === "advisor" && role === "implementation") warns.push(`${resolved.label} 平时不写实现；用户点名时按用户说的`);
@@ -320,7 +321,7 @@ function expandRoute(taskKey) {
 
 function buildContext(opts) {
   const { providers, warnings, capsStaleMin } = loadProviders(opts["caps-file"]);
-  return { providers, capsStaleMin, warnings };
+  return { providers, capsStaleMin, warnings: [...CONFIG_NOTES, ...warnings] };
 }
 
 // 目录可派性：实例在清单、可派子任务、模型清单有此 ID。caps 快照过期时逐条标注，逼出复核。
@@ -509,7 +510,7 @@ function checkCmd(opts) {
     }
   }
   const { providers, warnings: capsWarnings } = opts["caps-file"] ? loadProviders(opts["caps-file"]) : { providers: undefined, warnings: [] };
-  for (const w of capsWarnings) console.log(`WARN ${w}`);
+  for (const w of [...CONFIG_NOTES, ...capsWarnings]) console.log(`WARN ${w}`);
   const { fails, warns } = gateCheck({ provider, model, role: opts.role, options, userNamed: opts["user-named"] }, providers);
   for (const w of warns) console.log(`WARN ${w}`);
   if (fails.length) {
@@ -522,7 +523,7 @@ function checkCmd(opts) {
 
 // ---------- audit ----------
 
-// 审计 route-data：全部 MODELS entries 与 ROUTES 候选的「入口 options + 行内 options」
+// 审计生效路由数据：全部 MODELS entries 与 ROUTES 候选的「入口 options + 行内 options」
 // 合并结果，逐条核对 provider/模型在目录里、选项名与取值合法。返回问题描述数组。
 function auditRouteData(providers) {
   const problems = [];
@@ -570,6 +571,7 @@ function auditRouteData(providers) {
 function auditCmd(opts) {
   const { providers, warnings } = loadProviders(opts["caps-file"]);
   const problems = auditRouteData(providers);
+  warnings.unshift(...CONFIG_NOTES);
   if (opts.json) {
     console.log(JSON.stringify({ problems, warnings }, null, 2));
   } else {
@@ -583,12 +585,12 @@ function auditCmd(opts) {
 // ---------- table / tasks ----------
 
 function tableCmd(opts) {
-  const data = { PROVIDER_RULES, MODELS, TASKS, ADVISOR_TASKS, ROUTES, MAX_ATTEMPTS };
+  const data = { CONFIG, PROVIDER_RULES, MODELS, TASKS, ADVISOR_TASKS, ROUTES, MAX_ATTEMPTS };
   console.log(opts.json ? JSON.stringify(data, null, 2) : renderTable(data));
 }
 
-function renderTable({ MODELS: ms, ROUTES: rs }) {
-  const lines = [];
+function renderTable({ CONFIG: cfg, MODELS: ms, ROUTES: rs }) {
+  const lines = [`配置来源：${cfg.source}`, ...CONFIG_NOTES.map((n) => `WARN ${n}`)];
   for (const [key, m] of Object.entries(ms)) {
     lines.push(`\n[${m.label}] status=${m.status}${m.tasks ? ` tasks=${m.tasks.join(",")}` : ""}${m.vision ? ` vision=${m.vision}` : ""}`);
     m.entries.forEach((e, i) => lines.push(`  ${i + 1}. ${e.provider} / ${e.id}  options=${JSON.stringify(e.options ?? {})}`));

@@ -7,8 +7,11 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
 import { mkdtempSync, writeFileSync, readFileSync, rmSync, symlinkSync, utimesSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { expandRoute, whitelistCands, loadProviders, validateOptions, injectOptions, auditRouteData } from "./route.mjs";
 import { MODELS, ROUTES, EFFORT_STANDARD, EFFORT_MEDIUM, EFFORT_MEDIUM_MODELS, EFFORT_OPTION_IDS } from "./route-data.mjs";
+
+// 本机 ~/.config/bstack/t3-orchestrator.json 不能影响默认路由的断言：先指向空目录再加载 route.mjs，子进程继承该变量。
+process.env.BSTACK_CONFIG_DIR = mkdtempSync(join(tmpdir(), "route-cfg-"));
+const { expandRoute, whitelistCands, loadProviders, validateOptions, injectOptions, auditRouteData } = await import("./route.mjs");
 
 const DIR = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = join(DIR, "route.mjs");
