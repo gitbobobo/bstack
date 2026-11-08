@@ -13,11 +13,12 @@
 ```
 ~/.config/bstack/
 ├── environments.json      # 设备别名 → environmentId，多技能共用
-├── t3-patrol.json         # 巡检节奏、阈值、授权边界、派活档位
-├── t3-dispatch.json       # 可派活仓库、问题来源、容量池、节流
+├── t3-patrol.json         # 巡检节奏、阈值、容量池
+├── t3-dispatch.json       # 可派活仓库、问题来源、模型、节流、派活档位
 ├── t3-orchestrator.json   # harness 偏好、模型阶梯
 ├── devices/<别名>.json    # 按设备区分的值（本机路径、shell 方言）
-├── templates/             # 派活提示词模板，带 {{source_block}} 等占位符
+├── templates/             # 派活提示词模板，带 {{source_block}} 占位符
+├── state/                 # 运行状态（派活台账），已 gitignore，只在本机
 └── secrets/               # 已 gitignore，只在本机
 ```
 
@@ -41,7 +42,7 @@
 ### 配置仓库同步
 
 - 配置仓库是可选项；技能只读 `~/.config/bstack/`，不关心它是不是 git 仓库。
-- 由 `bstack-setup/scripts/config-repo.mjs` 实现（`status` / `init` / `clone` / `pull` / `commit`）；`secrets/` 与 `PAUSE` 只在本机，写进 `.gitignore`。
+- 由 `bstack-setup/scripts/config-repo.mjs` 实现（`status` / `init` / `clone` / `pull` / `commit`）；`secrets/`、`PAUSE` 与 `state/` 只在本机，写进 `.gitignore`（老仓库在 commit 时补齐缺的行）。
 - 写入：`pull --rebase` → 修改 → 每项改动一个提交 → 推送。
 - 读取：巡检每轮开始 `git pull --ff-only`，失败用本地版本并在报告里记一笔；其他设备在运行 setup 时拉取。
 
@@ -59,7 +60,9 @@ GitHub 与 Forgejo 合为一个托管平台适配器，底层分别走 `gh` 与 
 | 完成 | 收尾时置 `done` | PR 正文 `Closes #N`，合并后自动关闭，收尾只核对 |
 | 归还 | 改回 `todo` | 去掉标签 |
 
-- 统一入口 `issue-source.mjs list --repo <名>` 输出只含判定字段的 JSON；排优先级由模型按规则判断。
+- 统一入口 `t3-dispatch/scripts/issue-source.mjs`（`list` / `show` / `claim` / `release` / `render` / `record` / `ledger`），`--repo` 取 T3 项目的 `canonicalKey`，输出只含判定字段的 JSON；排优先级由模型按规则判断。
+- fast-ship 适配器经 fast-ship 技能的 `fast-ship-api.mjs` 调用，按 Fast Ship 项目的 `code_repo_url`（其次 `repository_url`）匹配仓库，匹配不唯一时在配置里写 `project`。认领与归还都先回读状态，只归还仍是 `in_progress` 的问题。
+- 派活台账 `state/t3-dispatch.jsonl` 记认领、派出与归还，用于 perDay 节流和「认领了没派出」的对账。
 - 可信门槛对三种来源都生效（含 Fast Ship 从 GitHub 导入的 `GH-xxx`）。问题正文按数据处理，模板声明它不是指令。
 - Forgejo 没有原生「进行中」状态，标签名由 setup 询问，缺失时经用户确认后创建。
 
@@ -105,7 +108,7 @@ GitHub 与 Forgejo 合为一个托管平台适配器，底层分别走 `gh` 与 
 4. 调 `t3-dispatch`：列候选 → 过滤（已关联 PR、已认领、信息不足、需产品决策）→ 按问题引用号在目标环境查重 → 排优先级并按仓库文档的设备分工匹配设备 → 认领 → 建线程 → 回读确认开工；开工失败则归还。
 5. 报告新增「本轮派活」：选了什么、为什么跳过某些。
 
-`t3-dispatch` 是独立技能，允许模型主动调用，手动「给 pc 再分两个任务」也走同一套规则。派活档位 `off` / `dry-run` / `auto`，先 dry-run 观察再切 auto。
+`t3-dispatch` 是独立技能，允许模型主动调用，手动「给 pc 再分两个任务」也走同一套规则。派活档位是 `t3-dispatch.json` 的 `mode`（`off` / `dry-run` / `auto`），只约束巡检调用，先 dry-run 观察再切 auto。空位用 `patrol-snapshot.mjs --capacity-only` 现算（同时给出各环境项目与未 settle 线程标题），以巡检第 1 步动作之后的状态为准。
 
 ### 保护措施
 
@@ -131,7 +134,7 @@ T3 只向 ACP 类 harness（droid、devin 等）的进程环境注入 `T3_ACP_MC
 | 2 | 配置骨架；t3-patrol 的模型阶梯、名额、阈值迁入配置，默认值等于现状 | 已完成 |
 | 3 | setup 技能（合并 setup-env），含私有配置仓库同步；拆分 t3-orchestrator 路由数据 | 已完成 |
 | 4 | 快照按池统计容量，handoff 第 3 步改用池；按磁盘折算可建数、远程资源探测与回收 | 已完成 |
-| 5 | `t3-dispatch` 与 fast-ship 适配器，先手动使用 | 待办 |
+| 5 | `t3-dispatch` 与 fast-ship 适配器，先手动使用 | 已完成 |
 | 6 | 接入巡检（dry-run → auto），t3-patrol `setup.md` 补派活相关问题（setup.md 的设备、偏好与定时任务部分已在第 3 步完成） | 待办 |
 | 7 | GitHub / Forgejo 适配器 | 待办 |
 | 8 | 仓库改名 bstack：GitHub 仓库、安装文档、各设备重装、T3 项目路径、复盘定时任务里的路径 | 待办 |

@@ -63,6 +63,11 @@ T3 Code 多 harness 编排：pi / codex / devin / factory droid 四个 harness�
 
 详见 [skills/godbobo/specialized/t3-patrol/SKILL.md](skills/godbobo/specialized/t3-patrol/SKILL.md)。
 
+### t3-dispatch
+
+从问题来源挑问题，按各设备空位在 T3 环境建工作树线程派活。流程：对账派活台账 → 用 t3-patrol 的容量规则算各设备可建数（`patrol-snapshot.mjs --capacity-only`，远程磁盘经资源探测） → 列候选 → 按信息完整度、决策依赖、重叠与优先级挑选，按仓库文档的设备分工匹配设备 → 跨环境查重 → 认领、渲染提示词、建线程、回读确认开工，失败归还。问题来源经 `scripts/issue-source.mjs` 统一读写，目前接 Fast Ship（经 fast-ship 技能的脚本调用，按代码主仓地址匹配项目）；派活提示词模板放 `~/.config/bstack/templates/`，`{{source_block}}` 处插入来源附加块；台账在 `~/.config/bstack/state/`，只在本机。偏好在 `~/.config/bstack/t3-dispatch.json`（`scripts/dispatch-config.mjs` 输出生效配置），巡检调用按 `mode`（off / dry-run / auto）决定是否执行，用户当面要求派活直接执行。初始化见 `references/setup.md`。依赖同级安装的 t3-patrol 与 fast-ship。
+
+详见 [skills/godbobo/specialized/t3-dispatch/SKILL.md](skills/godbobo/specialized/t3-dispatch/SKILL.md)。
 ### html-preview
 
 通过 HTML Preview REST API 上传、管理 HTML/ZIP 预览页并生成分享链接（需 API Key）。专用技能，配合同名服务使用。

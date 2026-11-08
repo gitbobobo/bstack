@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "mode": "dry-run",
+  "model": {
+    "instanceId": "pi",
+    "model": "cliproxyapi/glm-5.3-flash",
+    "options": {
+      "thinking": "medium"
+    }
+  },
+  "runtimeMode": "full-access",
+  "limits": {
+    "perRun": 5,
+    "perDay": 20
+  },
+  "trustedUsers": [],
+  "repos": []
+}
