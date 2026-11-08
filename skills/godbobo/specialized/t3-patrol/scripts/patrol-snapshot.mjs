@@ -6,11 +6,12 @@
 // 依赖 T3 向 ACP 类 harness 注入的 T3_ACP_MCP_ENDPOINT、T3_ACP_MCP_AUTHORIZATION（缺席时退出码 2，改用 MCP 工具手工取证）。
 
 import { execFileSync } from "node:child_process";
-import { readFileSync, realpathSync } from "node:fs";
+import { readFileSync, realpathSync, statfsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfig, loadEnvironments } from "./patrol-config.mjs";
+import { capacityOf } from "./patrol-capacity.mjs";
 
 const args = process.argv.slice(2);
 const opt = (name, dflt) => {
@@ -24,6 +25,9 @@ const CONC = Number(opt("concurrency", 6));
 // 生效的巡检偏好（默认值 + ~/.config/bstack/t3-patrol.json），启动时加载一次。
 const PREFS = loadConfig();
 const CFG = PREFS.config;
+const KNOWN = loadEnvironments();
+const ALIAS_OF = new Map(Object.entries(KNOWN.environments).map(([alias, e]) => [e.environmentId, { alias, device: e.device }]));
+const DEVICE_OF = new Map(CFG.capacity.devices.map((d) => [KNOWN.environments[d.device]?.environmentId, d]).filter(([id]) => id));
 const LIVE = new Set(["preparing", "queued", "starting", "running", "waiting"]);
 
 const DEBUG = !!process.env.T3_PATROL_DEBUG;
@@ -112,6 +116,27 @@ async function listAll(environmentId) {
     out.push(...page.threads);
     if (page.nextCursor == null) return out;
     cursor = page.nextCursor;
+  }
+}
+
+async function listProjects(environmentId) {
+  const out = new Map();
+  let cursor = 0;
+  for (;;) {
+    const page = await call("t3_project_list", { limit: 100, cursor, ...(environmentId ? { environmentId } : {}) });
+    for (const p of page.projects) out.set(p.id, p.repositoryIdentity ?? null);
+    if (page.nextCursor == null) return out;
+    cursor = page.nextCursor;
+  }
+}
+
+// 只有本机能直接量磁盘；远程环境的磁盘信息拿不到，按名额判断。
+function localDiskFreeGB() {
+  try {
+    const s = statfsSync(homedir());
+    return Math.floor((s.bavail * s.bsize) / 1e9);
+  } catch {
+    return null;
   }
 }
 
@@ -545,6 +570,24 @@ async function snapshotEnv(env) {
   });
   const active = occupying.length;
   const occupyingTitles = occupying.map((t) => clip(t.title, 40));
+  // 池按仓库身份归类；项目清单取不到时只给设备总数，并标 projectsError，免得把全部线程当成「*」池。
+  let projects = new Map();
+  let projectsError = null;
+  try {
+    projects = await listProjects(env.isLocal ? null : env.environmentId);
+  } catch (e) {
+    projectsError = String(e.message ?? e);
+  }
+  const capacity = {
+    ...capacityOf({
+      threads: occupying.map((t) => ({ title: clip(t.title, 40), projectId: t.projectId, reviewBot: isReviewBot(t) })),
+      projects,
+      device: DEVICE_OF.get(env.environmentId),
+      maxActiveThreads: CFG.capacity.maxActiveThreads,
+    }),
+    ...(projectsError ? { projectsError } : {}),
+    ...(env.isLocal ? { diskFreeGB: localDiskFreeGB() } : {}),
+  };
   const real = enriched.filter((x) => !isDelegatedTask(x.task, x.hasWorktree));
   // 兜底对账：被任何过滤规则排除、但停在失败态的真实顶层线程。过滤规则一改就可能误杀，
   // 把误杀的线程留在这份名单里，巡检每轮必须逐个过——静默消失比多算几条候选危险得多。
@@ -596,6 +639,7 @@ async function snapshotEnv(env) {
     label: env.label,
     activeTopLevel: active,
     occupying: occupyingTitles,
+    capacity,
     candidates: real,
     delegatedExcluded: enriched.length - real.length,
     failedTopLevel,
@@ -634,8 +678,11 @@ async function main() {
   );
   const { modelLadder, version, ...prefs } = CFG;
   const config = { source: PREFS.source, warnings: PREFS.warnings, errors: PREFS.errors, ...prefs };
-  const known = loadEnvironments();
-  const aliasOf = new Map(Object.entries(known.environments).map(([alias, e]) => [e.environmentId, { alias, device: e.device }]));
+  const known = KNOWN;
+  const aliasOf = ALIAS_OF;
+  for (const d of CFG.capacity.devices) {
+    if (!known.environments[d.device]) config.warnings.push(`capacity.devices：设备 ${d.device} 不在 environments.json，它的池本轮不生效`);
+  }
   const linked = new Set([...envs, ...unreachable].map((e) => e.environmentId));
   // unlisted/missing 非空说明环境集合与 environments.json 不一致，对照表需要重新认。
   const environmentsFile = {

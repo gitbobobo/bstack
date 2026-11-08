@@ -59,7 +59,7 @@ T3 Code 多 harness 编排：pi / codex / devin / factory droid 四个 harness�
 
 ### t3-patrol
 
-跨 T3 环境巡检未结线程，适合每小时定时运行。逐线程核对快照与实际进展，再做故障恢复、预算收口（轮次越过审查预算且只剩非 blocker 时推线程停止修复并收尾）、代授权及交接；消息沉默和审查时间差先补查，「审查在途」须有晚于最新 HEAD 的触发证据，队列只清理已核实可被 PR 实况覆盖的系统通知。发送前刷新并去重，发送后区分已排队、已启动、已执行和已完成，报告保留未测与审查者缺席事实。仍有 blocker 的审计预测失败或反例由实现线程结合顾问意见处理根因，技术分歧不自动交回用户；用户决策与外部阻塞分开汇报。模型恢复、快照取证和交接细节按分支读取。模型阶梯、名额与阈值的默认值在 `references/config.defaults.json`，用户在 `~/.config/bstack/t3-patrol.json` 只写要改的键（`scripts/patrol-config.mjs` 输出生效配置，拼错的键与错类型报警告）；设备对照取自共用的 `environments.json`。初始化（认设备、验证快照通道、询问偏好、试跑、创建定时任务）见 `references/setup.md`，经 bstack-setup 运行。专用技能，仅定时任务点名时使用。
+跨 T3 环境巡检未结线程，适合每小时定时运行。逐线程核对快照与实际进展，再做故障恢复、预算收口（轮次越过审查预算且只剩非 blocker 时推线程停止修复并收尾）、代授权及交接；消息沉默和审查时间差先补查，「审查在途」须有晚于最新 HEAD 的触发证据，队列只清理已核实可被 PR 实况覆盖的系统通知。发送前刷新并去重，发送后区分已排队、已启动、已执行和已完成，报告保留未测与审查者缺席事实。仍有 blocker 的审计预测失败或反例由实现线程结合顾问意见处理根因，技术分歧不自动交回用户；用户决策与外部阻塞分开汇报。模型恢复、快照取证和交接细节按分支读取。模型阶梯、名额与阈值的默认值在 `references/config.defaults.json`，用户在 `~/.config/bstack/t3-patrol.json` 只写要改的键（`scripts/patrol-config.mjs` 输出生效配置，拼错的键与错类型报警告）；设备对照取自共用的 `environments.json`；可按设备、按仓库配置容量池，快照给出各仓库可建线程数。初始化（认设备、验证快照通道、询问偏好、试跑、创建定时任务）见 `references/setup.md`，经 bstack-setup 运行。专用技能，仅定时任务点名时使用。
 
 详见 [skills/godbobo/specialized/t3-patrol/SKILL.md](skills/godbobo/specialized/t3-patrol/SKILL.md)。
 

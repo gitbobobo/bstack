@@ -19,11 +19,16 @@
 
 2. **查重**：在目标环境用 `t3_thread_search` 搜 PR 号和来源线程 id，已有线程接过这段工作就跳过新建。
 
-3. **看容量**：远程环境拿不到负载和磁盘信息，以占用名额的线程数为准（快照里的 `activeTopLevel`，`occupying` 列出是哪些）。占用名额的是：有活跃 run 的顶层线程（含「代码审查 / 视觉审查 · PR #N」线程，不含子代理线程），以及 PR 仍 open、最近一次 run 在 `capacity.occupyWindowHours`（2 小时）内结束的线程——等审查的线程在两轮之间会暂时 completed，但工作树和编译资源还占着。PR 已合并或关闭（工作树已回收）、没有 PR 又没在跑的线程不占名额，所以来源线程本身通常不算。
+3. **看容量**：读快照里目标环境的 `environments[].capacity`（下称「容量」；配置项写作 `config.capacity.*`）。远程环境拿不到负载和磁盘信息，以占用名额的线程为准。占用名额的是：有活跃 run 的顶层线程（含「代码审查 / 视觉审查 · PR #N」线程，不含子代理线程），以及 PR 仍 open、最近一次 run 在 `config.capacity.occupyWindowHours`（2 小时）内结束的线程——等审查的线程在两轮之间会暂时 completed，但工作树和编译资源还占着。PR 已合并或关闭（工作树已回收）、没有 PR 又没在跑的线程不占名额，所以来源线程本身通常不算。
 
-   达到 `capacity.maxActiveThreads`（5 个）就本轮不建。目标是本机时另外跑 `df -h ~` 看剩余空间，不足 `capacity.minFreeDiskGB`（20 GB）也不建。满了就把这次交接记成「等待空位」：来源线程先不 settle，下一轮重新检查；同一环境有多个交接在等时，按来源线程收尾的先后顺序建，建到上限为止。
+   - **设备总数**：容量的 `used` / `max`，占用者在 `occupying`。上限取该设备在 `config.capacity.devices` 里的 `maxActiveThreads`，没写就是 `config.capacity.maxActiveThreads`（5 个）。
+   - **仓库池**：在 `config.capacity.devices` 里配置过的设备还按仓库分池（容量的 `pools`，每个占用线程只进第一个匹配的池，审查线程不占池）。
+   - **可建数**：目标仓库的 `canonicalKey` 在容量的 `freeByRepo` 里查，它已是设备空位与所属池空位的较小值；项目没有仓库身份时用 `freeOther`。容量带 `projectsError` 时池归类不可信，只按设备总数判断，并在「例行复核」记一笔。
+   - **磁盘**：目标是本机时看容量的 `diskFreeGB`（为 null 时跑 `df -h ~`），不足 `config.capacity.minFreeDiskGB`（20 GB）不建。
 
-4. **新建线程**（前提：第 3 步写出了目标环境的 `activeTopLevel`，且低于 `capacity.maxActiveThreads`）：
+   可建数为 0 就本轮不建，把这次交接记成「等待空位」并写明卡在设备总数还是哪个池：来源线程先不 settle，下一轮重新检查。空位先给等待中的交接；同一环境有多个交接在等时，按来源线程收尾的先后顺序建，每建一个从对应设备与池的空位里减一，建到为 0 为止。
+
+4. **新建线程**（前提：第 3 步写出了目标环境的容量占用与目标仓库的可建数，且可建数大于 0）：
 
    - `t3_thread_launch` 带上目标环境的 `environmentId`；
    - `projectId` 取目标环境里同一仓库的项目（`t3_thread_list` 找同仓库的近期线程，用它的 `projectId`）；

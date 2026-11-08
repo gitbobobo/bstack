@@ -30,7 +30,8 @@
   "capacity": {
     "maxActiveThreads": 5,
     "occupyWindowHours": 2,
-    "minFreeDiskGB": 20
+    "minFreeDiskGB": 20,
+    "devices": []
   },
   "thresholds": {
     "queuedMinutes": 30,

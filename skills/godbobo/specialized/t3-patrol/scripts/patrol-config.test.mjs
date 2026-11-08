@@ -112,3 +112,15 @@ test("environments.json：坏条目与重复 environmentId 丢弃并报警告；
     assert.equal(loadEnvironments({ env }).errors.length, 1);
   });
 });
+
+test("容量池：设备条目逐条校验，坏条目丢弃", () => {
+  withConfig({ capacity: { devices: [{ device: "pc", pools: [{ repos: ["musiver"], max: 5 }, { repos: "*", max: 4 }] }, { device: "x", pools: [{ repos: [], max: 1 }] }, 3] } }, (env) => {
+    const r = loadConfig({ env });
+    assert.deepEqual(r.config.capacity.devices, [
+      { device: "pc", pools: [{ repos: ["musiver"], max: 5 }, { repos: "*", max: 4 }] },
+      { device: "x", pools: [] },
+    ]);
+    assert.equal(r.warnings.length, 2);
+    assert.equal(r.config.capacity.maxActiveThreads, DEFAULTS.capacity.maxActiveThreads);
+  });
+});
