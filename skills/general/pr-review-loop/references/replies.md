@@ -1,6 +1,6 @@
 # 回复与宿主接口
 
-回复正文先写进 UTF-8 无 BOM 的临时文件，不要把中文内联在命令里。宿主按 PR URL 判断：github.com 用 `gh`；其他实例（Forgejo/Gitea）用本机 `fj`，缺命令或未登录时退回同名 REST 端点（`/api/v1/...`，凭据取 `FORGEJO_TOKEN`、`~/.agents/env/forgejo.sh` 或本机 git credential helper）。
+回复、更新描述与 REST 写请求先执行 [PR 写入隔离](pr-writes.md)，再用下表接口提交并回读确认。宿主按 PR URL 判断：github.com 用 `gh`；其他实例（Forgejo/Gitea）用本机 `fj`，缺命令或未登录时退回同名 REST 端点（`/api/v1/...`，凭据取 `FORGEJO_TOKEN`、`~/.agents/env/forgejo.sh` 或本机 git credential helper）。
 
 | 动作 | GitHub | Forgejo |
 | --- | --- | --- |

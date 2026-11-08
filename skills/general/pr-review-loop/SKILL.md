@@ -14,7 +14,7 @@ description: 在开 PR 前、收敛 PR 审查结论或处理测试失败时使�
 1. 用仓库自己的模版：`.github/PULL_REQUEST_TEMPLATE.md`（含全小写与 `.github/PULL_REQUEST_TEMPLATE/` 目录）、`docs/` 下的模版、`CONTRIBUTING.md` 指定的模版。整份按它的结构填满，冲突时以仓库为准；HTML 注释只当填写说明，正文不带注释。
 2. 仓库没有模版时用 [references/pr-template.md](references/pr-template.md)：占位项换成仓库的真实入口，无关小节删掉。
 3. 在描述里写清**意图**：必须交付的行为、必须保持的不变量、明确不做的范围。分级以它为准；已有 PR 先从原始需求恢复意图。
-4. 写满「创建 PR 前完成」再创建：GitHub `gh pr create --body-file '<文件>'`，Forgejo `fj pr create`，其他宿主按仓库入口提交同一份正文。
+4. 写满「创建 PR 前完成」后，按 [PR 写入隔离](references/pr-writes.md) 分配独占路径、核对目标并创建：GitHub `gh pr create --body-file '<文件>'`，Forgejo `fj pr create`，其他宿主按仓库入口提交同一份正文；远端回读一致才算创建完成。
 
 ## 测试失败处置
 
