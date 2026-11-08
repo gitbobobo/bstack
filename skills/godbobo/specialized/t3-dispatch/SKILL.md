@@ -17,7 +17,7 @@ description: 从问题来源挑问题，在各 T3 环境建工作树线程派活
 
 ## 1. 空位
 
-1. `node <t3-patrol 技能目录>/scripts/patrol-snapshot.mjs --capacity-only > /tmp/t3-dispatch-capacity.json`。每个环境带 `capacity`、`projects`（项目 id 与 `canonicalKey`）和 `openThreads`（未 settle 的顶层线程标题）。退出码 2 表示当前 harness 没有 T3 MCP 会话：用 `t3_environment_links`、`t3_project_list`、`t3_thread_list` 手工取同样的数。
+1. `node <t3-patrol 技能目录>/scripts/patrol-snapshot.mjs --capacity-only > /tmp/t3-dispatch-capacity.json`。每个环境带 `capacity`、`projects`（项目 id 与 `canonicalKey`）和 `openThreads`（未 settle 的顶层线程标题）。退出码 2 表示当前 harness 拿不到 T3 MCP 会话（如 Codex）：用 `t3_environment_links`、`t3_project_list`、`t3_thread_list` 手工取同样的数，按下面第 3 条的口径直接算可建数，不必拼成快照文件。
 2. 目标设备：`repos[].devices` 列出的设备；没写时取 `projects` 里有该仓库的所有环境。
 3. 每台目标设备的可建数是 `capacity.freeByRepo[<repo>]`，口径、磁盘与资源探测按 [t3-patrol handoff.md 第 3 步](../t3-patrol/references/handoff.md)。远程环境 `disk.freeGB` 为 null 时先做资源探测再重算；探测失败的设备本轮不派。
 4. 节流：本轮最多派 `limits.perRun` 个；`ledger` 的 `launched`（最近 24 小时）加本轮不超过 `limits.perDay`。
@@ -52,14 +52,14 @@ description: 从问题来源挑问题，在各 T3 环境建工作树线程派活
 
 逐条执行，每条做完再做下一条：
 
-1. **认领**：`issue-source.mjs claim --repo <repo> --id <问题 ID>`。失败说明问题已被认领或状态变了，跳过它。
+1. **认领**：`issue-source.mjs claim --repo <repo> --id <问题 ID>`，输出的 `at` 是认领时间。失败说明问题已被认领或状态变了，跳过它。
 2. **提示词**：推荐理由写进 UTF-8 文件，`issue-source.mjs render --repo <repo> --id <问题 ID> --reason-file <文件>`，输出的 `message` 就是线程首条消息，原样使用。
 3. **建线程**：`t3_thread_launch`
    - `environmentId` 取目标环境；`projectId` 取该环境 `projects` 里 `canonicalKey` 等于仓库的项目；
    - `title` 按 [t3-patrol naming.md](../t3-patrol/references/naming.md)，如 `INT-1234 主题`；
    - `modelSelection` 取配置的 `model`，`runtimeMode` 取配置的 `runtimeMode`，按 `t3_thread_launch` 当前参数格式转换；
-   - `workspaceStrategy` 取 `{type:"worktree", baseRef:<仓库默认分支>, startFromOrigin:true}`；
-   - `clientRequestId` 取 `t3-dispatch-<问题 ID>-<认领时间>`，重试同一次派活不会建出第二个线程。
+   - `workspaceStrategy` 取 `{type:"worktree", baseRef:<repos[].baseRef>, startFromOrigin:true}`；
+   - `clientRequestId` 取 `t3-dispatch-<问题 ID>-<认领输出的 at>`，重试同一次派活不会建出第二个线程。
 4. **记账**：`issue-source.mjs record --repo <repo> --id <问题 ID> --env <environmentId> --thread <threadId>`。
 5. **回读**：`t3_thread_read`（`limit` 1）确认 run 进入 starting 或 running，且 `worktreePath` 有值。`t3_thread_launch` 报错时 `release` 归还问题；线程建了但工作树准备失败，同样归还，并把线程 link 写进报告交给巡检恢复。
 6. **扣空位**：该设备与所属池的空位各减一，`disk.spareGB` 减去该池的 `footprintGB`。

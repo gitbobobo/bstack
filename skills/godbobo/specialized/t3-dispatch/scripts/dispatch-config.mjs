@@ -6,7 +6,7 @@
 // 合并规则与 environments.json 的读取复用 t3-patrol（两者同属 bstack，安装时同级排布）。
 //
 // repos 每项：{ repo: <T3 项目的 canonicalKey>, source: "fast-ship", project?: <来源里的项目 ID>,
-//              statuses?: [准入状态…], template?: <模板名>, devices?: [environments.json 别名…] }
+//              statuses?: [准入状态…], template?: <模板名>, devices?: [environments.json 别名…], baseRef?: <工作树起点分支，缺省 main> }
 
 import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -52,14 +52,15 @@ export function validateRepos(repos, warnings = []) {
       r.project !== undefined && !(typeof r.project === "string" && r.project) && "project 应为字符串",
       r.template !== undefined && !isName(r.template) && "template 应为模板文件名（不含 .md）",
       r.devices !== undefined && !(kind(r.devices) === "array" && r.devices.length && r.devices.every((d) => typeof d === "string" && d)) && "devices 应为非空别名数组",
+      r.baseRef !== undefined && !(typeof r.baseRef === "string" && r.baseRef.trim()) && "baseRef 应为分支名",
     ].filter(Boolean);
     if (bad.length) {
       warnings.push(`${at}：${bad.join("；")}，已忽略 ${r.repo}`);
       continue;
     }
-    for (const k of Object.keys(r)) if (!["repo", "source", "project", "statuses", "template", "devices"].includes(k)) warnings.push(`${at}.${k}：未知字段，已忽略`);
+    for (const k of Object.keys(r)) if (!["repo", "source", "project", "statuses", "template", "devices", "baseRef"].includes(k)) warnings.push(`${at}.${k}：未知字段，已忽略`);
     seen.add(repo);
-    out.push({ repo, source: r.source, ...(r.project ? { project: r.project } : {}), statuses: [...statuses], template: r.template ?? "default", ...(r.devices ? { devices: [...r.devices] } : {}) });
+    out.push({ repo, source: r.source, ...(r.project ? { project: r.project } : {}), statuses: [...statuses], template: r.template ?? "default", baseRef: r.baseRef?.trim() ?? "main", ...(r.devices ? { devices: [...r.devices] } : {}) });
   }
   return out;
 }

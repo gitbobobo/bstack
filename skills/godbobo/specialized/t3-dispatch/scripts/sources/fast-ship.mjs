@@ -93,7 +93,7 @@ export function list(api, { repo, project, statuses, trustedUsers = [], excerpt 
       const d = data(api("GET", `/api/projects/${pid}/issues?state=open&workflow_status=${status}&sort=updated_desc&page=${page}&page_size=${PAGE}`), "列问题");
       for (const issue of d.items) {
         const trusted = issue.source !== "github" || trustedSet.has(String(issue.author?.login ?? "").toLowerCase());
-        const s = summarize(issue, trusted, excerpt);
+        const s = summarize(issue, trusted, 0);
         if (s.prs > 0) skipped.push({ ref: s.ref, title: s.title, reason: `已关联 ${s.prs} 个 PR` });
         else if (!trusted) skipped.push({ ref: s.ref, title: s.title, reason: `GitHub 导入，作者 ${s.author} 不在 trustedUsers` });
         else candidates.push(s);
@@ -101,6 +101,8 @@ export function list(api, { repo, project, statuses, trustedUsers = [], excerpt 
       if (d.items.length < PAGE) break;
     }
   }
+  // 列表接口的 body 恒为空串，摘要只能逐条读详情。
+  if (excerpt > 0) for (const c of candidates) c.excerpt = clip(data(api("GET", `/api/issues/${c.id}`), "读问题").body, excerpt);
   return { repo, project: pid, statuses, candidates, skipped };
 }
 

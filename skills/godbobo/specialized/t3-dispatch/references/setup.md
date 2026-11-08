@@ -20,6 +20,7 @@ version: 1
    - `statuses`：准入的工作流状态，默认 `unset`（未设置）与 `todo`（待处理）。
    - `devices`：只派到哪些设备（environments.json 别名）；不写就是所有有该仓库项目的设备。
    - `template`：用哪份模板，默认 `default`。
+   - `baseRef`：工作树从哪个分支起，默认 `main`；仓库默认分支不是 `main` 时要写。
 3. Fast Ship 项目按代码主仓地址自动匹配。写完后跑 `node <技能目录>/scripts/issue-source.mjs list --repo <repo> --excerpt 0`：确认 `project` 是用户认的那个项目、候选数大致符合预期。匹配不到或匹配到多个时，按报错在该仓库条目里写 `project`。
 
 ## 2. 模板

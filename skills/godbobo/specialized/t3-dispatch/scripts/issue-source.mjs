@@ -4,7 +4,7 @@
 // 用法（--repo 取 t3-dispatch.json 里 repos[].repo）：
 //   node issue-source.mjs list    --repo <key> [--excerpt 400]       可派的候选与跳过原因（--excerpt 0 不带正文摘要）
 //   node issue-source.mjs show    --repo <key> --id <问题 ID>         单条详情（正文、共识、PR）
-//   node issue-source.mjs claim   --repo <key> --id <问题 ID>         认领（Fast Ship 置 in_progress），记入派活台账
+//   node issue-source.mjs claim   --repo <key> --id <问题 ID>         认领（Fast Ship 置 in_progress），记入派活台账；输出带认领时间 at
 //   node issue-source.mjs release --repo <key> --id <问题 ID>         归还到认领前的状态，记入台账
 //   node issue-source.mjs render  --repo <key> --id <问题 ID> [--reason-file <文件>]
 //                                                                    按 repos[].template 渲染派活提示词
@@ -33,7 +33,9 @@ export const ledgerPath = (env = process.env) => join(configDir(env), "state", "
 export function appendLedger(entry, env = process.env) {
   const file = ledgerPath(env);
   mkdirSync(dirname(file), { recursive: true });
-  appendFileSync(file, `${JSON.stringify({ at: new Date().toISOString(), ...entry })}\n`, "utf8");
+  const record = { at: new Date().toISOString(), ...entry };
+  appendFileSync(file, `${JSON.stringify(record)}\n`, "utf8");
+  return record;
 }
 
 export function readLedger(env = process.env) {
@@ -104,8 +106,8 @@ export function run(cmd, opts, { env = process.env, api } = {}) {
       return src.show(call, { id: need("id") });
     case "claim": {
       const r = src.claim(call, { id: need("id"), statuses: repoCfg.statuses });
-      appendLedger({ event: "claimed", ...base, id: r.id, ref: r.ref, prevStatus: r.prevStatus }, env);
-      return r;
+      const { at } = appendLedger({ event: "claimed", ...base, id: r.id, ref: r.ref, prevStatus: r.prevStatus }, env);
+      return { ...r, at };
     }
     case "release": {
       const id = need("id");

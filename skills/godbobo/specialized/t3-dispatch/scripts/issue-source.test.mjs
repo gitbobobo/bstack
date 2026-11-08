@@ -36,7 +36,8 @@ function fakeApi({ projects = [], issues = [] } = {}) {
       const all = [...byId.values()].filter((i) => (i.internal_meta?.workflow_status || "unset") === want);
       const size = Number(qs.get("page_size"));
       const page = Number(qs.get("page"));
-      return ok({ items: all.slice((page - 1) * size, page * size) });
+      // 真实列表接口不返回正文。
+      return ok({ items: all.slice((page - 1) * size, page * size).map((i) => ({ ...i, body: "" })) });
     }
     m = p.match(/^\/api\/issues\/([^/]+)(\/internal-meta)?$/);
     if (m && method === "GET") return byId.has(m[1]) ? ok(byId.get(m[1])) : { code: 40405, message: "not found" };
@@ -75,8 +76,9 @@ test("候选：按准入状态翻页取全；已关联 PR 与不可信的 GitHub
     issue(503, { internal_meta: { workflow_status: "in_progress" } }),
   ];
   const { api } = fakeApi({ issues });
-  const r = list(api, { repo: REPO, project: "p1", statuses: ["unset", "todo"], trustedUsers: ["owner"] });
+  const r = list(api, { repo: REPO, project: "p1", statuses: ["unset", "todo"], trustedUsers: ["owner"], excerpt: 400 });
   assert.equal(r.candidates.length, 121);
+  assert.ok(r.candidates.every((c) => c.excerpt === "正文"));
   assert.ok(r.candidates.some((c) => c.ref === "GH-2" && c.trusted));
   assert.deepEqual(r.skipped.map((s) => s.ref).sort(), ["GH-1", "INT-500"]);
   assert.ok(!r.candidates.some((c) => c.ref === "INT-503"));
@@ -144,7 +146,7 @@ test("配置：repos 逐条校验，坏条目丢弃并报警告", () => {
     ],
     w,
   );
-  assert.deepEqual(out, [{ repo: REPO, source: "fast-ship", statuses: ["unset", "todo"], template: "default", devices: ["pc"] }]);
+  assert.deepEqual(out, [{ repo: REPO, source: "fast-ship", statuses: ["unset", "todo"], template: "default", baseRef: "main", devices: ["pc"] }]);
   assert.equal(w.length, 5);
 });
 
@@ -159,7 +161,8 @@ test("CLI 流程：认领记台账、归还回到认领前状态、渲染用用�
     assert.deepEqual(warnings, []);
     assert.deepEqual(config.model, { instanceId: "x", model: "y" });
     const { api, byId } = fakeApi({ issues: [issue(7, { internal_meta: { workflow_status: "todo" } })] });
-    run("claim", { repo: REPO, id: "id-7" }, { env, api });
+    const claimed = run("claim", { repo: REPO, id: "id-7" }, { env, api });
+    assert.equal(claimed.at, readLedger(env)[0].at);
     run("record", { repo: REPO, id: "id-7", env: "e1", thread: "t1" }, { env, api });
     assert.deepEqual(readLedger(env).map((e) => e.event), ["claimed", "launched"]);
     assert.equal(run("release", { repo: REPO, id: "id-7" }, { env, api }).status, "todo");
