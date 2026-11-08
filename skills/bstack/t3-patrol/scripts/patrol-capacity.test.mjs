@@ -74,6 +74,8 @@ test("磁盘：扣掉保底与在建预留后按池的单线程占用折算；�
   assert.equal(c.freeByRepo["github.com/gitbobobo/skills"], 3);
   assert.equal(withDisk(c, 40).freeByRepo[MUSIVER], 0);
   assert.equal(withDisk(c, 40).freeByRepo["github.com/gitbobobo/skills"], 0);
+  const noTree = capacityOf({ threads: [...threads, { title: "巡检", projectId: "p-skills", createdAt: ago(0.2), worktree: false }], projects, device, cfg: CFG, now: NOW, diskFreeGB: 100 });
+  assert.equal(noTree.disk.reserveGB, 35, "没有工作树的线程不预留磁盘");
   const unknown = capacityOf({ threads, projects, device, cfg: CFG, now: NOW });
   assert.equal(unknown.disk.freeGB, null);
   assert.equal(unknown.freeByRepo[MUSIVER], 3);

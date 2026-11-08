@@ -70,7 +70,7 @@ export function repoMatches(pattern, identity) {
 export const poolIndexOf = (pools, identity) =>
   pools.findIndex((p) => p.repos === "*" || p.repos.some((r) => repoMatches(r, identity)));
 
-// threads: 占用名额的顶层线程 [{ title, projectId, reviewBot, createdAt }]；projects: Map<projectId, repositoryIdentity|null>
+// threads: 占用名额的顶层线程 [{ title, projectId, reviewBot, createdAt, worktree? }]；projects: Map<projectId, repositoryIdentity|null>
 // cfg: 生效配置的 capacity；diskFreeGB: 本机实测值，远程为 null。
 export function capacityOf({ threads, projects, device, cfg, diskFreeGB = null, now = Date.now() }) {
   const footprint = (p) => p?.footprintGB ?? cfg.defaultFootprintGB;
@@ -85,8 +85,9 @@ export function capacityOf({ threads, projects, device, cfg, diskFreeGB = null, 
       pools[i].used++;
       pools[i].occupying.push(t.title);
     }
+    // 没有工作树的线程（巡检、调研对话）不吃磁盘；worktree 未知时按有算，宁可少建。
     const age = now - Date.parse(t.createdAt ?? "");
-    if (age >= 0 && age < cfg.growthWindowHours * 3600 * 1000) {
+    if (t.worktree !== false && age >= 0 && age < cfg.growthWindowHours * 3600 * 1000) {
       reserveGB += i >= 0 ? pools[i].footprintGB : cfg.defaultFootprintGB;
       growing.push(t.title);
     }

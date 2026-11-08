@@ -15,7 +15,7 @@ version: 1
 
 ## 1. 认设备，写 `environments.json`
 
-1. 调 `t3_environment_links`，按 SKILL.md 第 0 步的方法认出每个环境是哪台设备。
+1. 调 `t3_environment_links`，按 [snapshot.md「设备对照」](snapshot.md#设备对照) 的方法认出每个环境是哪台设备。
 2. 给每个环境拟一个短别名（如 `pc`、`mac-mini`、`linux`、`mbp`），连同设备和依据列表给用户确认；用户可以改名。
 3. 合并写入，保留文件里已有的其他条目：
 
@@ -53,6 +53,7 @@ node <t3-patrol 技能目录>/scripts/patrol-snapshot.mjs --self <当前线程 t
   `repos` 写完整 `canonicalKey` 最稳；只写仓库名会命中不同宿主上的同名仓库。线程只进第一个匹配的池，`"*"` 收其余仓库，审查线程不占池。设备总上限 `maxActiveThreads` 缺省为各池 `max` 之和，即各池可以同时用满；只有用户想再压低总数时才写。
   `footprintGB` 是该池一个线程的峰值磁盘占用（工作树加构建产物），巡检用它把剩余磁盘折算成可建数。构建产物大的仓库要问；用户不清楚时，在该设备已有的工作树上量一次（`du -sh ~/.t3/worktrees/*`，远程设备经资源探测线程去量）给个建议值。没写的池用 `defaultFootprintGB`。
 - **阈值** `thresholds`：排队、沉默、审查等待、重发冷却等分钟数。多数用户沿用默认。
+- **分诊** `triage.fullEveryHours`：隔多少小时做一次全量巡检（其余轮次只深查有变化的线程）；`capacity.probeCacheHours`：远程磁盘探测结果的有效小时数。多数用户沿用默认。
 - **久审审计** `convergenceAudit`：PR 打开小时数、审查轮数。
 - **频率** `schedule.everyMinutes`：巡检间隔，最少 1 分钟。
 - **派活**：巡检第 5 步按 t3-dispatch 派新任务。`t3-dispatch.json` 还没写时，按 [t3-dispatch 初始化](../../t3-dispatch/references/setup.md) 配置可派活仓库、模板与档位，`mode` 先用 `dry-run`；用户不要巡检派活就写 `mode: "off"`。
@@ -60,7 +61,7 @@ node <t3-patrol 技能目录>/scripts/patrol-snapshot.mjs --self <当前线程 t
 ## 4. 写配置并试跑
 
 1. 按 bstack-setup「写配置」规则写 `t3-patrol.json`，然后跑 `node <t3-patrol 技能目录>/scripts/patrol-config.mjs`：退出码 0，`warnings` 与 `environments.warnings` 为空。
-2. 试跑：按 SKILL.md 第 1–3 步走一轮，只列每个候选拟采取的动作，不发送消息、不改线程；再按第 5 步出一份派活计划（不论 `mode`，只到 t3-dispatch 第 5 步），一并交给用户过目。用户对某类判定有异议时，回到第 3 步调整对应阈值。
+2. 试跑：按 SKILL.md 第 1–3 步走一轮（首轮没有状态记录，是全量），只列每个候选拟采取的动作，不发送消息、不改线程；再按第 5 步出一份派活计划（不论 `mode`，只到 t3-dispatch 第 5 步），一并交给用户过目。用户对某类判定有异议时，回到第 3 步调整对应阈值。
 
 ## 5. 定时任务
 

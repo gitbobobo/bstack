@@ -22,8 +22,9 @@ description: 从问题来源挑问题，在各 T3 环境建工作树线程派活
 
 1. `node <t3-patrol 技能目录>/scripts/patrol-snapshot.mjs --capacity-only > /tmp/t3-dispatch-capacity.json`。每个环境带 `capacity`、`projects`（项目 id 与 `canonicalKey`）和 `openThreads`（未 settle 的顶层线程标题）。退出码 2 表示当前 harness 拿不到 T3 MCP 会话（如 Codex）：用 `t3_environment_links`、`t3_project_list`、`t3_thread_list` 手工取同样的数，按下面第 3 条的口径直接算可建数，不必拼成快照文件。
 2. 目标设备：`repos[].devices` 列出的设备；没写时取 `projects` 里有该仓库的所有环境。
-3. 每台目标设备的可建数是 `capacity.freeByRepo[<repo>]`，口径、磁盘与资源探测按 [t3-patrol handoff.md 第 3 步](../t3-patrol/references/handoff.md)。远程环境 `disk.freeGB` 为 null 时 `freeByRepo` 只反映名额：名额已经是 0 的设备不探测，大于 0 的先做资源探测再重算；探测失败的设备本轮不派。
+3. 每台目标设备的可建数是 `capacity.freeByRepo[<repo>]`，口径、磁盘与资源探测按 [t3-patrol handoff.md 第 3 步](../t3-patrol/references/handoff.md)。远程环境 `disk.freeGB` 为 null（`disk.source` 为 null，没有未过期的探测记录）时 `freeByRepo` 只反映名额：名额已经是 0 的设备不探测，大于 0 的先做资源探测、记进状态文件再重算；探测失败的设备本轮不派。
 4. 节流：本轮最多派 `limits.perRun` 个；`ledger` 的 `launched`（最近 24 小时）加本轮不超过 `limits.perDay`。
+5. 所有目标设备的可建数都是 0，或节流余量为 0：到此为止，跳过第 2–6 步，直接按第 7 步报告空位。
 
 完成标准：每台目标设备写出可建数及其依据（名额、池、磁盘），卡在 0 的写明卡在哪。用户要的数量超过可建数时，按可建数派并说明原因。
 
