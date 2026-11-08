@@ -26,9 +26,9 @@
 
 ## 队列恢复
 
-queued 超过 `thresholds.queuedMinutes` 是补查信号。先读最新 `activeRunId`、recentRuns 与 `t3_queue action:list` 的全部分页：有活跃 run 就核进展；没有活跃 run 才调查排队项。
+queued 超过 `thresholds.queuedMinutes` 是补查信号。先用 `patrol-evidence.mjs --queue --thread <id>@<env> ...` 一次取齐各线程的 `activeRunId`、recentRuns 与全部排队项全文（系统 PR 通知已标 `prNotice`）：有活跃 run 就核进展；没有活跃 run 才调查排队项。
 
-1. 对拟取消项逐条 `read`：确认是系统生成的 PR 状态通知，且对应 PR 最新 HEAD、reviews、comments、checks 可重新读取并覆盖其内容。记录 queuedRunId、来源、PR、覆盖依据。用户指令、附件、无法识别或含未被覆盖信息的项保留。
+1. 对拟取消项逐条核对（`--queue` 已给全文，`truncated` 为真时再 `t3_queue action:read`）：确认是系统生成的 PR 状态通知，且对应 PR 最新 HEAD、reviews、comments、checks 可重新读取并覆盖其内容。记录 queuedRunId、来源、PR、覆盖依据。用户指令、附件、无法识别或含未被覆盖信息的项保留。
 2. 取消前刷新线程与队列；若已有活跃 run，回主流程判定。只对本轮核过且仍 queued 的 ID 执行 `cancel`。逐项记成功/失败，不对 list 返回项无条件全部取消。
 3. 回读剩余队列。全部阻塞项均已安全取消、仍无活跃 run 时，发一条「【巡检】队列中的陈旧 PR 通知已清理，请重读 <PR URL> 的最新状态，按账本继续」；保留了无法判定的阻塞项则报告证据缺口与恢复条件，只有需要用户辨认原意或授权时才列选项，不越过它们追加恢复消息。
 4. 按 [发送与动作验证](../SKILL.md#4-发送与动作验证)核对启动。成功启动只能证明本次恢复有效；报告分别写取消数、保留数、失败数与剩余数，调度故障根因另查。

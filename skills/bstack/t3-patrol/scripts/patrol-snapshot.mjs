@@ -65,7 +65,8 @@ async function listAll(environmentId) {
   const out = [];
   let cursor = 0;
   for (;;) {
-    const args = { allProjects: true, settled: false, limit: 100, cursor, ...(environmentId ? { environmentId } : {}) };
+    // 不带 includeSubagents:false 时列表含全部未 settle 的子代理线程（本机常有上百条），多翻页且每页慢上一倍。
+    const args = { allProjects: true, settled: false, includeSubagents: false, limit: 100, cursor, ...(environmentId ? { environmentId } : {}) };
     // 列表偶发 orchestration_error，重试一次；整个环境因一次抖动缺席代价太大。
     const page = await call("t3_thread_list", args).catch(async () => {
       await new Promise((r) => setTimeout(r, 1500));
@@ -219,8 +220,9 @@ function diskFor(env, now) {
 }
 
 // worktreeOf(t) 返回 true/false/undefined（未知按有工作树算磁盘预留）。
-async function occupancyOf(env, top, lastRunEndedOf, worktreeOf, now) {
-  const roots = await liveSubagentRoots(env.isLocal ? null : env.environmentId, top);
+// rootsP 是提前发起的 liveSubagentRoots：它要列全部活跃子代理，较慢，与候选取证并行。
+async function occupancyOf(env, top, lastRunEndedOf, worktreeOf, now, rootsP) {
+  const roots = await rootsP;
   const occupying = top.filter((t) => {
     if (isProbe(t)) return false;
     if (LIVE.has(t.status) || roots.has(t.threadId)) return true;
@@ -258,6 +260,7 @@ async function capacityEnv(env) {
   const now = Date.now();
   const scope = env.isLocal ? {} : { environmentId: env.environmentId };
   const top = (await listAll(env.isLocal ? null : env.environmentId)).filter((t) => !isSubagent(t));
+  const rootsP = liveSubagentRoots(env.isLocal ? null : env.environmentId, top);
   const ended = new Map();
   const worktree = new Map();
   const growing = (t) => now - Date.parse(t.createdAt ?? "") < CFG.capacity.growthWindowHours * 3600 * 1000;
@@ -267,7 +270,7 @@ async function capacityEnv(env) {
     ended.set(t.threadId, (r.recentRuns ?? []).map((x) => x.completedAt ?? x.startedAt ?? x.requestedAt).filter(Boolean).sort().at(-1) ?? null);
     worktree.set(t.threadId, Boolean(r.thread?.worktreePath));
   });
-  const { occupying, capacity, projects } = await occupancyOf(env, top, (t) => ended.get(t.threadId), (t) => (t.threadId === SELF ? false : worktree.get(t.threadId)), now);
+  const { occupying, capacity, projects } = await occupancyOf(env, top, (t) => ended.get(t.threadId), (t) => (t.threadId === SELF ? false : worktree.get(t.threadId)), now, rootsP);
   return {
     environmentId: env.environmentId,
     label: env.label,
@@ -288,6 +291,7 @@ async function snapshotEnv(env) {
   const now = Date.now();
   const all = await listAll(env.isLocal ? null : env.environmentId);
   const top = all.filter((t) => !isSubagent(t));
+  const rootsP = liveSubagentRoots(env.isLocal ? null : env.environmentId, top);
   const candidates = top.filter((t) => !isReviewBot(t) && !isProbe(t) && t.threadId !== SELF);
   const enriched = await pool(candidates, CONC, async (t) => {      const base = {
         id: t.threadId,
@@ -356,6 +360,7 @@ async function snapshotEnv(env) {
     (t) => byId.get(t.threadId)?.lastRunEndedAt,
     (t) => (t.threadId === SELF ? false : byId.get(t.threadId)?.hasWorktree),
     now,
+    rootsP,
   );
   const active = occupying.length;
   const occupyingTitles = occupying.map((t) => clip(t.title, 40));
@@ -450,7 +455,7 @@ async function main() {
   }
   const results = await pool(
     envs.map((e) => () => (CAPACITY_ONLY ? capacityEnv(e) : snapshotEnv(e)).catch((err) => ({ environmentId: e.environmentId, label: e.label, error: String(err.message ?? err) }))),
-    2,
+    4,
     (run) => run(),
   );
   const { modelLadder, version, ...prefs } = CFG;

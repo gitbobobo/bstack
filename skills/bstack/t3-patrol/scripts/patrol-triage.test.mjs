@@ -47,7 +47,9 @@ test("失败、待答请求、取证失败、久审、未消费结论都算有�
   assert.ok(tri({ status: "failed" }).triageReasons.includes("失败"));
   assert.ok(tri({ status: "completed", pendingRequestCount: 1 }).triageReasons.includes("待答请求"));
   assert.ok(tri({ status: "completed", incomplete: true }).triageReasons.includes("取证失败"));
-  assert.ok(tri({ status: "running", needsConvergenceAudit: true, recentToolCalls: 30, distinctRecentCommands: 12 }).triageReasons.includes("久审"));
+  // 久审本身不叫醒；有别的变化时一并标出。
+  assert.equal(tri({ status: "running", needsConvergenceAudit: true, recentToolCalls: 30, distinctRecentCommands: 12 }).triage, "quiet");
+  assert.deepEqual(tri({ status: "completed", needsConvergenceAudit: true, lastMsgAt: ago(10) }).triageReasons, ["上轮后有新活动", "久审"]);
   assert.ok(tri({ status: "completed", prs: ["o/r#1:open(stale)"] }).triageReasons.includes("结论未消费"));
 });
 

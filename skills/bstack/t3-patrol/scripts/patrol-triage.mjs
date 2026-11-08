@@ -37,7 +37,6 @@ export function triageOf(c, { since, thresholds, now = Date.now() }) {
   if (FAILED.has(c.status)) reasons.push("失败");
   if ((c.pendingRequestCount ?? 0) > 0) reasons.push("待答请求");
   if (QUEUED.has(c.status) && ms(c.lastRunEndedAt) && now - ms(c.lastRunEndedAt) > thresholds.queuedMinutes * 60000) reasons.push("排队超时");
-  if (c.needsConvergenceAudit) reasons.push("久审");
 
   if (RUNNING.has(c.status)) {
     if ((c.recentToolCalls ?? 0) >= 10 && (c.distinctRecentCommands ?? 99) < thresholds.minDistinctCommands) reasons.push("疑似空转");
@@ -57,6 +56,8 @@ export function triageOf(c, { since, thresholds, now = Date.now() }) {
     if (crossed(c.lastMsgAt, thresholds.idleQuestionMinutes) && /[？?]\s*$/.test(String(c.tail?.at(-1) ?? ""))) reasons.push("提问久未答");
   }
 
+  // 久审本身不叫醒线程：M2 有重发窗口，上一轮已审计且没有新变化时再看一遍只是重复。有别的变化或全量时才一并审。
+  if (c.needsConvergenceAudit && reasons.length) reasons.push("久审");
   const uniq = [...new Set(reasons)];
   if (uniq.length) return { triage: "hot", triageReasons: uniq };
   return { triage: "quiet", triageReasons: [RUNNING.has(c.status) || QUEUED.has(c.status) ? "在跑，信号正常" : "上轮后无变化"] };
