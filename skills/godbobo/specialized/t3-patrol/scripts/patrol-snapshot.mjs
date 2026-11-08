@@ -8,8 +8,9 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { loadConfig } from "./patrol-config.mjs";
 
 const args = process.argv.slice(2);
 const opt = (name, dflt) => {
@@ -17,12 +18,12 @@ const opt = (name, dflt) => {
   return i >= 0 && args[i + 1] ? args[i + 1] : dflt;
 };
 const SELF = opt("self", null);
-const SKILL_DIR = dirname(dirname(fileURLToPath(import.meta.url)));
-const MODEL_LADDER = JSON.parse(readFileSync(join(SKILL_DIR, "references", "model-ladder.json"), "utf8"));
 const TAIL = Number(opt("tail", 4));
 const CHARS = Number(opt("chars", 600));
 const CONC = Number(opt("concurrency", 6));
-const ACTIVE_MS = 2 * 3600 * 1000; // 有在审 PR 的线程，最近一次 run 结束多久内仍算占用
+// 生效的巡检偏好（默认值 + ~/.config/bstack/t3-patrol.json），启动时加载一次。
+const PREFS = loadConfig();
+const CFG = PREFS.config;
 const LIVE = new Set(["preparing", "queued", "starting", "running", "waiting"]);
 
 const DEBUG = !!process.env.T3_PATROL_DEBUG;
@@ -175,7 +176,7 @@ const roundOf = (texts) => {
 const P02 = /\bP[0-2]\b/;
 // 轮次线对齐 pr-review-loop 的预算上限（默认 3、最多 5）：越过它还在冒意见，就该发预算收口。
 const NEED_AUDIT = (openHours, reviewRounds, inlineP0P2) =>
-  Boolean(((openHours ?? 0) > 12 || (reviewRounds ?? 0) > 5) && (inlineP0P2 ?? 0) > 0);
+  Boolean(((openHours ?? 0) > CFG.convergenceAudit.openHours || (reviewRounds ?? 0) > CFG.convergenceAudit.reviewRounds) && (inlineP0P2 ?? 0) > 0);
 
 // 端点地址与凭据：环境变量 → ~/.agents/env/forgejo.sh → 本地工作树的 origin + git credential helper。
 function forgeConf() {
@@ -540,7 +541,7 @@ async function snapshotEnv(env) {
     const prs = t.pullRequests ?? [];
     if (!prs.some((p) => p.state === "open")) return false;
     const ended = Date.parse(byId.get(t.threadId)?.lastRunEndedAt ?? "");
-    return Number.isFinite(ended) && now - ended < ACTIVE_MS;
+    return Number.isFinite(ended) && now - ended < CFG.capacity.occupyWindowHours * 3600 * 1000;
   });
   const active = occupying.length;
   const occupyingTitles = occupying.map((t) => clip(t.title, 40));
@@ -631,7 +632,9 @@ async function main() {
     2,
     (run) => run(),
   );
-  console.log(JSON.stringify({ generatedAt: new Date().toISOString(), modelLadder: MODEL_LADDER, unreachable, environments: results }, null, 1));
+  const { modelLadder, version, ...prefs } = CFG;
+  const config = { source: PREFS.source, warnings: PREFS.warnings, errors: PREFS.errors, ...prefs };
+  console.log(JSON.stringify({ generatedAt: new Date().toISOString(), config, modelLadder, unreachable, environments: results }, null, 1));
 }
 
 // 技能常经符号链接安装：比较 realpath，否则直接运行时静默不执行。

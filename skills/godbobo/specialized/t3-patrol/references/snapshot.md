@@ -9,13 +9,14 @@ node <技能目录>/scripts/patrol-snapshot.mjs --self <thread.threadId> > /tmp/
 ```
 
 - 输出结构的读法：
-  - **模型阶梯**：顶层 `modelLadder`，由 `references/model-ladder.json` 生成；所有换模/探测只准从这里取实例与参数。
+  - **模型阶梯**：顶层 `modelLadder`，取自生效配置；所有换模/探测只准从这里取实例与参数。
+  - **偏好**：顶层 `config` 带名额、阈值、久审审计线及 `source`/`warnings`/`errors`，用法见 SKILL.md「偏好配置」。
   - **候选**：`environments[].candidates`（已剔除子代理线程、首条消息是派活模板且没有工作树的执行线程、Fast Ship 审查线程（「代码审查 · PR #N」「视觉审查 · PR #N」）、「额度探测」线程和本线程；剔除数量在 `delegatedExcluded`）。每条带 `link`、`status`、`prs`、`lastMsgAt`、最近 3 次 run、`pendingRequestCount`、`task`（首条用户消息）、`tail`（最后 4 条消息，保留首尾共 600 字——代理常在长汇报末尾才提问）。
   - **失败清单**：`environments[].failedThreads` 合并候选内失败线程与 `failedTopLevel`，每条带 `id`/`link`/`title`/`status`/`model`/`source`；候选内的还带 `task`/`tail`/`runs`/`prs`。这是每轮第一份行动清单，逐条处理，不许只扫自己刚推过的线程。
   - **体检清单（环境级）**：三项体检各一份，每条带线程 `id`，逐条处理即可。
     - `needsWatchThreads`：有 open PR 没挂监听（`prs`、`urls`）。
     - `needsRenameThreads`：标题是原文堆砌、超宽或缺 open PR 号（`reasons`），同时带 `prs`/`task`/`tail` 作为命名依据。
-    - `convergenceAuditThreads`：久审未收敛（`prs` 带时长/轮次/当日 P0–P2 条数，直接当审计题头）。
+    - `convergenceAuditThreads`：久审未收敛，即 PR 开着超过 `convergenceAudit.openHours`（12 小时）或审查超过 `convergenceAudit.reviewRounds`（5 轮），且当日仍有 P0–P2（`prs` 带时长/轮次/当日 P0–P2 条数，直接当审计题头）。
   - **体检计数**：`checks` 汇总 `candidates` 与各清单条数。汇报「例行复核」只能引用这里的数字；没读到 `checks` 或清单内容，不许写 0，也不许凭候选摘要估数。
   - **监听状态**：`prs` 里 open PR 标 `(unwatched)`；已挂监听但 review/评论时间晚于 `lastMsgAt` 标 `(stale)`。
   - **审查健康度（逐候选、逐 PR）**：`environments[].candidates[].prHealth[]` 带 `openHours`、`rounds`、`latestAt`、`inline24h`/`inlineP0P2`、`failChecks`/`pendingChecks`、`mergeable`、`checksVia`（取数通道）。这些聚合字段是补查线索；是否在途及是否已处理须核最新 HEAD、审查触发记录与线程活动。宿主与凭据由脚本自己解析，不用手配。

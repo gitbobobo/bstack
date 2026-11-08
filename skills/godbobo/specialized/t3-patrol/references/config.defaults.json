@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "modelLadder": [
+    {
+      "name": "pi/cliproxyapi/glm-5.3-flash",
+      "instanceId": "pi",
+      "model": "cliproxyapi/glm-5.3-flash",
+      "options": {
+        "thinking": "medium"
+      }
+    },
+    {
+      "name": "acpRegistry_devin/swe-2-high",
+      "instanceId": "acpRegistry_devin",
+      "model": "swe-2-high",
+      "options": {
+        "thought_level": "medium"
+      }
+    },
+    {
+      "name": "pi/cliproxyapi/deepseek-v4.1-flash",
+      "instanceId": "pi",
+      "model": "cliproxyapi/deepseek-v4.1-flash",
+      "options": {
+        "thinking": "medium"
+      },
+      "fallback": true
+    }
+  ],
+  "capacity": {
+    "maxActiveThreads": 5,
+    "occupyWindowHours": 2,
+    "minFreeDiskGB": 20
+  },
+  "thresholds": {
+    "queuedMinutes": 30,
+    "silenceMinutes": 60,
+    "minDistinctCommands": 5,
+    "reviewWaitMinutes": 30,
+    "idleQuestionMinutes": 30,
+    "resendCooldownMinutes": 30,
+    "convergenceResendHours": 24
+  },
+  "convergenceAudit": {
+    "openHours": 12,
+    "reviewRounds": 5
+  }
+}

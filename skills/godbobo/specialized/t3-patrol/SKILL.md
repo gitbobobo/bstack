@@ -26,6 +26,12 @@ description: 代表用户巡检、定案各 T3 环境未结线程。仅定时任
 
 对照表留在这条线程的对话里，之后几轮从上下文读取。
 
+### 偏好配置
+
+模型阶梯、名额和各类阈值取本轮快照的 `modelLadder` 与 `config`；快照跑不了时用 `node <技能目录>/scripts/patrol-config.mjs` 读取。默认值在 [config.defaults.json](references/config.defaults.json)，用户在 `~/.config/bstack/t3-patrol.json` 只写要改的键。下文括号里的数字是默认值，判定以本轮读到的配置为准。
+
+`config.warnings`（拼错的键、类型不符，均已按默认值处理）写进「例行复核」；`config.errors`（文件损坏，整份回落默认值）写进「阻塞」，附文件路径与报错。配置只读，修改交给用户或 setup 技能。
+
 ### 权限与证据
 
 - 巡检代答原任务覆盖的提交、推送、建 PR、复审、收尾授权。任务书中的「收敛即交回」「未授权合并」由巡检代答，收敛后可发 M10 合并线程自己的 PR；合并别人的 PR、删用户数据、动生产、直推/强推主分支交回用户。
@@ -53,7 +59,7 @@ node <技能目录>/scripts/patrol-snapshot.mjs --self <thread.threadId> > /tmp/
 - `pendingRequestCount > 0`：读 `t3_pending_request action:list` 的问题。
 - `task`/`tail` 是摘要，原任务验收条件、已定口径、交接与顾问结论需补读原文；正文与附加 issue ID 冲突时核派活来源及两条 issue，再按可追溯意图定案，无法确定才交用户。
 - 应有 PR 的线程缺 `prs`/`prHealth`，或 `lastMsgAt` 为 null、有 incomplete/error：补读线程及相关 PR；无 PR 任务不要求 PR 字段。补读仍不可得时记「证据不足」及影响，不能判健康或收敛。
-- `(stale)`、消息沉默超过 60 分钟、`distinctRecentCommands < 5` 都是补查信号。读最新 run 与 activity；长命令查其日志、进程、调度锁及预期时长。每轮判长任务仍有进展，须取得本轮日志增长、产物变化、进程 IO 或锁持有者活动等新证据；旧截图和上一轮判断只作基线。取不到增量则记证据不足及待核项。重复查询可能是在等有效工作，命令多样也不代表有进展。标题及同步的 updatedAt 不作进展证据。
+- `(stale)`、消息沉默超过 `thresholds.silenceMinutes`（60 分钟）、`distinctRecentCommands` 低于 `thresholds.minDistinctCommands`（5）都是补查信号。读最新 run 与 activity；长命令查其日志、进程、调度锁及预期时长。每轮判长任务仍有进展，须取得本轮日志增长、产物变化、进程 IO 或锁持有者活动等新证据；旧截图和上一轮判断只作基线。取不到增量则记证据不足及待核项。重复查询可能是在等有效工作，命令多样也不代表有进展。标题及同步的 updatedAt 不作进展证据。
 - 所有等审查、拟收尾及漏唤醒判断，核最新 HEAD 的审查触发、有效结论、未解决意见与 checks。GitHub 用 gh，Forgejo 用对应 REST；聚合时间、零 checks、mergeable 或「ready for merge」只能作线索。判「审查在途」须有晚于最新 HEAD 的触发（推送或评论时间）且该 HEAD 尚无结论；监听在位、线程自述「复审中」都不算。审查者缺席按目标线程 pr-review-loop 的重试/放弃规则处理，放弃等待单独记账，不能写成审查通过。
 
 **完成标准**：拟动作的依据来自本轮线程/PR 实况；运行进展、审查在途与缺失证据已区分。证据不足的线程保留状态并报告下一项所需证据。
@@ -64,7 +70,7 @@ node <技能目录>/scripts/patrol-snapshot.mjs --self <thread.threadId> > /tmp/
 
 ### A. 故障恢复
 
-先处理全部 failedThreads。failed/interrupted、非用户取消的 cancelled，以及 queued 超过 30 分钟，按 [故障恢复](references/recovery.md) 取证并恢复。已恢复运行的条目回到 B 判定，不重复重启。
+先处理全部 failedThreads。failed/interrupted、非用户取消的 cancelled，以及 queued 超过 `thresholds.queuedMinutes`（30 分钟），按 [故障恢复](references/recovery.md) 取证并恢复。已恢复运行的条目回到 B 判定，不重复重启。
 
 ### B. 收敛审计与运行进展
 
@@ -72,12 +78,12 @@ node <技能目录>/scripts/patrol-snapshot.mjs --self <thread.threadId> > /tmp/
 | --- | --- |
 | 已审计但范围未落地或仍修范围外意见 | 首次 M1；再次命中按 [技术收敛](references/convergence.md) 区分执行缺口与方案反例，再选 M1/M7/M14 |
 | 路径已落地，仍出现 `$pr-review-loop`「卡住时」所述的 blocker 复发、修法反转或同机制新 blocker | 按 [技术收敛](references/convergence.md) 请求有新证据的复审与根因处理；已有对应处理在执行则记录进展 |
-| 命中 convergenceAuditThreads，24 小时内未发过 M2 | 核轮次与当前 HEAD 未关闭意见的级别后 M2（预算收口） |
+| 命中 convergenceAuditThreads，`thresholds.convergenceResendHours`（24 小时）内未发过 M2 | 核轮次与当前 HEAD 未关闭意见的级别后 M2（预算收口） |
 | 同一测试失败签名反复触发门禁重跑，未见新假设、修复或环境变化 | 按 `$pr-review-loop`「测试失败处置」核对证据与下一步；确认无有效任务在执行后 interrupt，再用 M3 要求转入诊断或具体处置 |
 | 有活跃 run，activity 证实重复无效调查、无有效长任务或在途依赖，且日志/结果没有进展 | 核查它在查什么，取得可行下一步后 interrupt，再发 M3。证据不足先补读，不以消息沉默直接打断 |
 | 有活跃 run，尚未证实空转 | 有近期处理活动、长任务进展或合理等待证据则不打扰；取证仍不足则记证据不足，不诊断漏唤醒 |
 
-每轮先核前两行；24 小时窗口只约束 M2 的重发，不豁免审计后的复发。审计判定先于健康运行，避免久审循环被「在跑」掩盖。其余无活跃 run 的线程继续 C。
+每轮先核前两行；这个窗口只约束 M2 的重发，不豁免审计后的复发。审计判定先于健康运行，避免久审循环被「在跑」掩盖。其余无活跃 run 的线程继续 C。
 
 ### C. 等待、决策与收尾
 
@@ -92,12 +98,12 @@ node <技能目录>/scripts/patrol-snapshot.mjs --self <thread.threadId> > /tmp/
 | 在问方案、范围、修在哪个 PR，或以审查上限耗尽为由等用户定技术方向 | 按 [技术收敛](references/convergence.md) 发 M7；涉及真实产品取舍才走产品决策行 |
 | 等审查但未关联该 PR | M8，URL 从该线程原文核对 |
 | 当前 HEAD 有未处理的有效审查意见或新结论，线程仍停在等待 | M9 |
-| 审查者触发超过 30 分钟仍未回报，目标线程规则允许重试或结束等待 | M11，按其 pr-review-loop 的次数与等待上限执行 |
+| 审查者触发超过 `thresholds.reviewWaitMinutes`（30 分钟）仍未回报，目标线程规则允许重试或结束等待 | M11，按其 pr-review-loop 的次数与等待上限执行 |
 | 当前 HEAD 有未超等待上限的在途审查者，或检查仍运行 | 不打扰，记触发/检查时间及 HEAD |
 | PR 已收敛：其 pr-review-loop「结束」成立（无未关闭 blocker、意见都已回复、检查通过、审查请求已结清或放弃），且无其他验收缺项 | M10；main 前进造成的计数/文档冲突交 pr-finish 整合后重新验证 |
 | 仍 open、无在途项且自称等待，但不满足以上分支 | 核原任务与账本，指出明确未完成步骤推继续；无法确定下一步则报告卡点，不能因「没人会唤醒」推定收敛 |
 | 无 PR，或已合并且无工作树/收尾汇报，代理自称完成 | 原任务硬条件逐条对账，全满足列已交付；缺项点明后推继续。无 PR 的用户线程保持未 settle |
-| 停止超过 30 分钟且在问/等回复，其他分支均不适用 | 报告选项、默认值和已核依据 |
+| 停止超过 `thresholds.idleQuestionMinutes`（30 分钟）且在问/等回复，其他分支均不适用 | 报告选项、默认值和已核依据 |
 | 其余未命中项 | 对照原任务与最新活动：无待办的讨论保留原状；有明确未完成步骤则指出步骤推继续；无法判定记证据不足及缺口 |
 
 ### D. 独立体检
@@ -111,7 +117,7 @@ node <技能目录>/scripts/patrol-snapshot.mjs --self <thread.threadId> > /tmp/
 ## 4. 发送与动作验证
 
 1. **发送前刷新**目标 run、尾部活动及相关 PR 状态。刚启动的 run 已接手事件就跳过过时提醒；若本轮确有未处理的审计/决策需求，才向运行中的线程 steer。
-2. **幂等**：比较本次拟动作与上次巡检消息、处理进展。相同请求且无新事实不重发；未启动查恢复，已接收却未执行查具体执行缺口，方案已被反例证伪走技术收敛。仍无法推进记阻塞及恢复条件；已有新状态（如收敛、合并）可选新动作。刚发请求不满 30 分钟且无失败证据，记等待执行。
+2. **幂等**：比较本次拟动作与上次巡检消息、处理进展。相同请求且无新事实不重发；未启动查恢复，已接收却未执行查具体执行缺口，方案已被反例证伪走技术收敛。仍无法推进记阻塞及恢复条件；已有新状态（如收敛、合并）可选新动作。刚发请求不满 `thresholds.resendCooldownMinutes`（30 分钟）且无失败证据，记等待执行。
 3. 发前核档，按 recovery 处理不可用模型；发 `【巡检】` 前缀消息，带目标 environmentId、mode:auto。保存 messageId、runId、delivery 和预期可观察结果。
 4. 发后回读**对应 runId**及消息后 activity。可先完成其他线程取证再回读；starting/queued 尚未启动时按需短等待、每次不超过 60 秒，累计最多约 2 分钟。仍排队就记录未启动及卡点。不要用不相关的最新 run 替代对应 run；未查到时扩大 recentRuns 窗口或读该消息后的活动。
 5. run failed 按 recovery 归因后当轮补救一次，再验证；再次失败记录阻塞与恢复条件。已 running/completed 仅证实启动/结束，接受指令只能记已接收，读到预期动作证据才能写执行。completed 却又在提问时重新判分支，不写任务完成。
