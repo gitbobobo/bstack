@@ -13,8 +13,10 @@ description: 从问题来源挑问题，在各 T3 环境建工作树线程派活
 2. 定档位：
    - 用户当面要求派活（如「给 pc 再分两个任务」）就是授权，按用户给的设备与数量执行，档位不看 `mode`。
    - 巡检调用时按 `mode`：`off` 不派；`dry-run` 走到第 5 步出计划为止；`auto` 全程执行。`~/.config/bstack/PAUSE` 存在时同样不派。
-3. 对账台账：`node <技能目录>/scripts/issue-source.mjs ledger`。`pending` 是认领后没记下线程的问题：按问题编号在各环境 `t3_thread_search`，找到线程就补 `record`，找不到就 `release` 归还。
-
+3. 对账台账：`node <技能目录>/scripts/issue-source.mjs ledger`。
+   - `pending` 是认领后没记下线程的问题：按问题编号在各环境 `t3_thread_search`，找到线程就补 `record`，找不到就 `release` 归还。
+   - `active` 是已派出、还没了结的问题：对每条在其 `environmentId` 上 `t3_thread_read`（`limit` 1）。线程不存在、已 settle 或已归档时 `release`：问题还在进行中且没有 PR 就归还，已推进或有 PR 的只了结台账。线程还开着就不动，它归巡检管。
+   - 归还的问题会重新进候选；派过 `limits.maxAttempts` 次的，`list` 会把它放进 `skipped`，报告里列出来交给用户看。
 ## 1. 空位
 
 1. `node <t3-patrol 技能目录>/scripts/patrol-snapshot.mjs --capacity-only > /tmp/t3-dispatch-capacity.json`。每个环境带 `capacity`、`projects`（项目 id 与 `canonicalKey`）和 `openThreads`（未 settle 的顶层线程标题）。退出码 2 表示当前 harness 拿不到 T3 MCP 会话（如 Codex）：用 `t3_environment_links`、`t3_project_list`、`t3_thread_list` 手工取同样的数，按下面第 3 条的口径直接算可建数，不必拼成快照文件。

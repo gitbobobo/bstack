@@ -11,7 +11,8 @@
   "runtimeMode": "full-access",
   "limits": {
     "perRun": 5,
-    "perDay": 20
+    "perDay": 20,
+    "maxAttempts": 2
   },
   "trustedUsers": [],
   "repos": []

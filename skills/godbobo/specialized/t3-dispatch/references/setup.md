@@ -31,7 +31,7 @@ version: 1
 
 - **模型** `model`：派活线程用的 `instanceId`、`model`、`options`，整组替换。
 - **运行模式** `runtimeMode`：默认 `full-access`。
-- **节流** `limits`：每次最多派几个、最近 24 小时最多派几个。
+- **节流** `limits`：每次最多派几个（`perRun`）、最近 24 小时最多派几个（`perDay`）、同一问题最多派几次（`maxAttempts`，线程没交付就结束时归还重派，到上限后交给用户）。
 - **可信作者** `trustedUsers`：GitHub 导入的问题只有这些作者开的才派；默认为空，即不派 GitHub 导入的问题。
 - **档位** `mode`：巡检调用时 `off` / `dry-run` / `auto`，先用 `dry-run`。用户当面要求派活不受它限制。
 

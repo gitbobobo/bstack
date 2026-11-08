@@ -98,7 +98,7 @@ export function loadConfig({ env = process.env, defaultsPath = DEFAULTS_PATH } =
     warnings.push(`runtimeMode：应为 ${RUNTIME.join(" / ")}，沿用默认值`);
     config.runtimeMode = defaults.runtimeMode;
   }
-  for (const k of ["perRun", "perDay"]) {
+  for (const k of ["perRun", "perDay", "maxAttempts"]) {
     if (!(Number.isInteger(config.limits[k]) && config.limits[k] >= 0)) {
       warnings.push(`limits.${k}：应为非负整数，沿用默认值`);
       config.limits[k] = defaults.limits[k];

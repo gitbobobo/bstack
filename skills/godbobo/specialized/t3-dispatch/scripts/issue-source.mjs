@@ -2,10 +2,10 @@
 // 问题来源统一入口：派活只经这里读写问题，换来源不改派活流程。
 //
 // 用法（--repo 取 t3-dispatch.json 里 repos[].repo）：
-//   node issue-source.mjs list    --repo <key> [--excerpt 400]       可派的候选与跳过原因（--excerpt 0 不带正文摘要）
+//   node issue-source.mjs list    --repo <key> [--excerpt 400]       可派的候选与跳过原因（--excerpt 0 不带正文摘要；派过 limits.maxAttempts 次的跳过）
 //   node issue-source.mjs show    --repo <key> --id <问题 ID>         单条详情（正文、共识、PR）
 //   node issue-source.mjs claim   --repo <key> --id <问题 ID>         认领（Fast Ship 置 in_progress），记入派活台账；输出带认领时间 at
-//   node issue-source.mjs release --repo <key> --id <问题 ID>         归还到认领前的状态，记入台账
+//   node issue-source.mjs release --repo <key> --id <问题 ID>         归还到认领前的状态（已推进或有 PR 的不改），记入台账
 //   node issue-source.mjs render  --repo <key> --id <问题 ID> [--reason-file <文件>]
 //                                                                    按 repos[].template 渲染派活提示词
 //   node issue-source.mjs record  --repo <key> --id <问题 ID> --env <environmentId> --thread <threadId>
@@ -100,8 +100,18 @@ export function run(cmd, opts, { env = process.env, api } = {}) {
   };
   const base = { repo: repoCfg.repo, source: repoCfg.source };
   switch (cmd) {
-    case "list":
-      return { ...src.list(call, { ...repoCfg, trustedUsers: config.trustedUsers, excerpt: Number(opts.excerpt ?? 400) }), warnings };
+    case "list": {
+      const r = src.list(call, { ...repoCfg, trustedUsers: config.trustedUsers, excerpt: Number(opts.excerpt ?? 400) });
+      const attempts = new Map();
+      for (const e of readLedger(env)) if (e.repo === repoCfg.repo && e.event === "launched") attempts.set(e.id, (attempts.get(e.id) ?? 0) + 1);
+      const candidates = [];
+      for (const c of r.candidates) {
+        const n = attempts.get(c.id) ?? 0;
+        if (n >= config.limits.maxAttempts) r.skipped.push({ ref: c.ref, title: c.title, reason: `已派过 ${n} 次（limits.maxAttempts）` });
+        else candidates.push(n ? { ...c, attempts: n } : c);
+      }
+      return { ...r, candidates, warnings };
+    }
     case "show":
       return src.show(call, { id: need("id") });
     case "claim": {
@@ -113,7 +123,8 @@ export function run(cmd, opts, { env = process.env, api } = {}) {
       const id = need("id");
       const prev = [...readLedger(env)].reverse().find((e) => e.repo === repoCfg.repo && e.id === id && e.event === "claimed")?.prevStatus;
       const r = src.release(call, { id, to: prev ?? repoCfg.statuses.at(-1) });
-      if (r.released) appendLedger({ event: "released", ...base, id, ref: r.ref, to: r.status }, env);
+      // 没归还也记一笔 retired：这条派活已了结，不再出现在 active 里等对账。
+      appendLedger(r.released ? { event: "released", ...base, id, ref: r.ref, to: r.status } : { event: "retired", ...base, id, ref: r.ref, status: r.status, reason: r.reason }, env);
       return r;
     }
     case "render": {

@@ -139,10 +139,11 @@ export function claim(api, { id, statuses }) {
   return { id, ref: issue.reference, projectId: issue.project_id, prevStatus: status, status: "in_progress" };
 }
 
-// 只归还仍是 in_progress 的问题：线程可能已经推进到 done，或用户手动改过。
+// 只归还仍是 in_progress 且没有 PR 的问题：线程可能已经推进到 done、交了 PR，或用户手动改过。
 export function release(api, { id, to }) {
   const { issue, status } = metaOf(api, id);
   if (status !== "in_progress") return { id, ref: issue.reference, status, released: false, reason: `当前是 ${status}，不改` };
+  if ((issue.pull_requests ?? []).length) return { id, ref: issue.reference, status, released: false, reason: "已关联 PR，不改" };
   setStatus(api, id, to);
   return { id, ref: issue.reference, status: to, released: true };
 }

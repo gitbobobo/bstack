@@ -55,11 +55,12 @@ node <t3-patrol 技能目录>/scripts/patrol-snapshot.mjs --self <当前线程 t
 - **阈值** `thresholds`：排队、沉默、审查等待、重发冷却等分钟数。多数用户沿用默认。
 - **久审审计** `convergenceAudit`：PR 打开小时数、审查轮数。
 - **频率** `schedule.everyMinutes`：巡检间隔，最少 1 分钟。
+- **派活**：巡检第 5 步按 t3-dispatch 派新任务。`t3-dispatch.json` 还没写时，按 [t3-dispatch 初始化](../../t3-dispatch/references/setup.md) 配置可派活仓库、模板与档位，`mode` 先用 `dry-run`；用户不要巡检派活就写 `mode: "off"`。
 
 ## 4. 写配置并试跑
 
 1. 按 bstack-setup「写配置」规则写 `t3-patrol.json`，然后跑 `node <t3-patrol 技能目录>/scripts/patrol-config.mjs`：退出码 0，`warnings` 与 `environments.warnings` 为空。
-2. 试跑：按 SKILL.md 第 1–3 步走一轮，只列每个候选拟采取的动作，不发送消息、不改线程，交给用户过目。用户对某类判定有异议时，回到第 3 步调整对应阈值。
+2. 试跑：按 SKILL.md 第 1–3 步走一轮，只列每个候选拟采取的动作，不发送消息、不改线程；再按第 5 步出一份派活计划（不论 `mode`，只到 t3-dispatch 第 5 步），一并交给用户过目。用户对某类判定有异议时，回到第 3 步调整对应阈值。
 
 ## 5. 定时任务
 

@@ -103,6 +103,9 @@ test("归还：只改仍是 in_progress 的问题，unset 写成空串", () => {
   assert.deepEqual(writes[0].body, { workflow_status: "" });
   assert.equal(release(api, { id: "id-2", to: "todo" }).released, false);
   assert.equal(writes.length, 1);
+  const withPr = fakeApi({ issues: [issue(3, { internal_meta: { workflow_status: "in_progress" }, pull_requests: [{ url: "u" }] })] });
+  assert.match(release(withPr.api, { id: "id-3", to: "todo" }).reason, /PR/);
+  assert.equal(withPr.writes.length, 0);
 });
 
 test("附加块与模板：保留 Fast Ship 的项目/问题 ID 行，多行理由逐行引用", () => {
@@ -172,6 +175,17 @@ test("CLI 流程：认领记台账、归还回到认领前状态、渲染用用�
     const r = run("render", { repo: REPO, id: "id-7", "reason-file": reason }, { env, api });
     assert.match(r.message, /^做这个\n\n> 以下信息由 Fast Ship 附加[\s\S]*> 推荐理由：因为重要/);
     assert.equal(run("ledger", {}, { env }).launched, 1);
+    // 已归还的问题再派一次就到 maxAttempts（默认 2）；之后 list 跳过它，再次 release 不改状态也记 retired。
+    run("claim", { repo: REPO, id: "id-7" }, { env, api });
+    run("record", { repo: REPO, id: "id-7", env: "e1", thread: "t2" }, { env, api });
+    byId.get("id-7").internal_meta.workflow_status = "todo";
+    const listed = run("list", { repo: REPO, excerpt: "0" }, { env, api });
+    assert.deepEqual(listed.candidates, []);
+    assert.match(listed.skipped[0].reason, /2 次/);
+    run("release", { repo: REPO, id: "id-7" }, { env, api });
+    const s = run("ledger", {}, { env });
+    assert.equal(readLedger(env).at(-1).event, "retired");
+    assert.deepEqual(s.active, []);
     assert.throws(() => run("list", { repo: "github.com/x/y" }, { env, api }), /repos 里没有/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
