@@ -53,7 +53,13 @@ description: 从问题来源挑问题，在各 T3 环境建工作树线程派活
 node <技能目录>/scripts/dispatch-launch.mjs --plan <计划文件> > /tmp/t3-dispatch-launched.json
 ```
 
-逐条认领、按 `repos[].template` 渲染提示词、`t3_thread_launch` 建工作树线程（模型与 `runtimeMode` 取配置，`clientRequestId` 防重建）、记账、回读 run 与 `worktreePath`；建线程失败或工作树没就绪时归还认领。退出码 1 表示有条目失败，逐条看 `error`：主问题认领失败的是已被别人认领或状态变了；工作树没就绪的线程 link 写进报告交给巡检恢复。
+逐条按主问题编号跨环境查重（表外挑的问题也覆盖，不必另写查重）、认领、按 `repos[].template` 渲染提示词、`t3_thread_launch` 建工作树线程（模型与 `runtimeMode` 取配置，`clientRequestId` 防重建）、记账、回读 run 与 `worktreePath`（最多等 90 秒）。结果按字段读：
+
+- `pending`：工作树还在准备，认领与台账已保留，这算派出成功，下一轮巡检按候选核对；不要手工归还或重新认领。
+- `duplicate`：已有未结线程在做，整条跳过，写进报告。
+- `error`：建线程失败或 run 已失败，脚本已归还认领（`released`）；主问题认领失败的是已被别人认领或状态变了。线程已建但失败的 link 写进报告交给巡检恢复。
+
+退出码 1 表示有 `error`。
 
 完成标准：每条计划都有结果（`link` 与回读状态，或 `error` 与归还情况）。
 

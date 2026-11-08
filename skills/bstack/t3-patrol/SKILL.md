@@ -113,7 +113,7 @@ node <技能目录>/scripts/patrol-evidence.mjs --thread <threadId>@<environment
 
 ### D. 独立体检（全部候选，含静默）
 
-- needsWatchThreads：用条目 urls 代挂 watch_pull_request，带 threadId/environmentId。发送前若 PR 已合并/关闭则记已失效并跳过。
+- needsWatchThreads：`node <技能目录>/scripts/patrol-batch.mjs --watch /tmp/t3-patrol-snapshot.json` 一次代挂全部并回读 `watching`；PR 已合并/关闭的脚本记 `skipped`。
 - needsRenameThreads：按 [命名格式](references/naming.md) 改名，静止、已交付线程也处理；自身误入清单先纠正 self 取值并重跑快照。
 - 本轮观察到新建或转出的 issue：回读标题与正文检查编码；乱码按原文修复并再次回读。
 
@@ -123,7 +123,7 @@ node <技能目录>/scripts/patrol-evidence.mjs --thread <threadId>@<environment
 
 1. **发送前刷新**：目标线程在快照之后又有新 run 或新消息时（`patrol-evidence` 可见），按新状态重判，跳过过时提醒。
 2. **幂等**：比较本次拟动作与该线程里上一条 `【巡检】` 消息及之后的进展。相同请求且无新事实不重发；未启动查恢复，已接收却未执行查具体执行缺口，方案已被反例证伪走技术收敛。刚发请求不满 `thresholds.resendCooldownMinutes` 且无失败证据，记等待执行。
-3. 发前核档，按 recovery 处理不可用模型；发 `【巡检】` 前缀消息，带目标 environmentId、mode:auto。保存 messageId、runId、delivery 和预期可观察结果。
+3. 发前核档，按 recovery 处理不可用模型；发 `【巡检】` 前缀消息，带目标 environmentId、mode:auto。本轮的消息、改名、settle、interrupt 写成一个 calls 文件，用 `node <技能目录>/scripts/patrol-batch.mjs --calls <文件>` 一次执行（格式见脚本头注释）。保存 messageId、runId、delivery 和预期可观察结果。
 4. 全部发完后，用一条 `patrol-evidence` 批量回读（`--after` 取消息所在 position，或看 `recentRuns` 里对应 `runId`）。starting/queued 尚未启动时可再等一次，每次不超过 60 秒，累计约 2 分钟；仍排队记未启动及卡点。不要用不相关的最新 run 替代对应 run。
 5. run failed 按 recovery 归因后当轮补救一次，再验证；再次失败记录阻塞与恢复条件。已 running/completed 仅证实启动/结束，读到预期动作证据才能写执行。completed 却又在提问时重新判分支，不写任务完成。
 
@@ -165,7 +165,7 @@ node <技能目录>/scripts/patrol-evidence.mjs --thread <threadId>@<environment
 
 ## 7. 记账
 
-汇报前记下本轮，下一轮的分诊与档位判定从这里接续：
+全部动作与派活完成后、汇报前记下本轮（只记一次），下一轮的分诊与档位判定从这里接续：
 
 ```bash
 node <技能目录>/scripts/patrol-state.mjs commit --snapshot /tmp/t3-patrol-snapshot.json --tier <本轮档位 name> [--quota-failure]
