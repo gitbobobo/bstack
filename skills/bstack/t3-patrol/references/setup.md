@@ -60,7 +60,7 @@ node <t3-patrol 技能目录>/scripts/patrol-snapshot.mjs --self <当前线程 t
 ## 4. 写配置并试跑
 
 1. 按 bstack-setup「写配置」规则写 `t3-patrol.json`，然后跑 `node <t3-patrol 技能目录>/scripts/patrol-config.mjs`：退出码 0，`warnings` 与 `environments.warnings` 为空。
-2. 试跑：按 SKILL.md 第 1–3 步走一轮（首轮没有状态记录，是全量），只列每个候选拟采取的动作，不发送消息、不改线程；再按第 5 步出一份派活计划（不论 `mode`，只到 t3-dispatch 第 5 步），一并交给用户过目。用户对某类判定有异议时，回到第 3 步调整对应阈值。
+2. 试跑：按 SKILL.md 第 1–3 步走一轮（首轮没有状态记录，是全量），只列每个候选拟采取的动作，不发送消息、不改线程；再按第 5 步出一份派活计划（不论 `mode`，只到 t3-dispatch 第 2 步），一并交给用户过目。用户对某类判定有异议时，回到第 3 步调整对应阈值。
 
 ## 5. 定时任务
 

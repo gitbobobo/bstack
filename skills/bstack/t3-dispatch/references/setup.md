@@ -38,4 +38,4 @@ version: 1
 ## 4. 写配置并试跑
 
 1. 按 bstack-setup「写配置」规则写 `t3-dispatch.json`，跑 `node <技能目录>/scripts/dispatch-config.mjs`：退出码 0，`warnings` 为空。
-2. 试跑：按 SKILL.md 走到第 5 步，只出计划不认领，交给用户过目。用户对挑选有异议时，把规则缺口记成「建议改技能」，或调整 `statuses`、`devices`。
+2. 试跑：按 SKILL.md 走到第 2 步，只出计划不认领，交给用户过目。用户对挑选有异议时，把规则缺口记成「建议改技能」，或调整 `statuses`、`devices`。

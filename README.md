@@ -30,7 +30,7 @@
 
 ### t3-code
 
-本机 T3 Code 运行状态的内部参考：状态库表布局与会话查询方法、子线程取证（`view:"activity"` 与 `file_change` 快照恢复）、编排机制事实、监听与唤醒（含 MCP 工具延迟加载与本账号评论不唤醒的坑）与平台坑；含孤儿工作树回收脚本 `t3-worktree-gc.mjs`（实时输出进度，`--purge-build` 可只清保留树的构建产物，空间统计需显式加 `--measure-size`）；跨环境复盘用 `t3-activity-scan.mjs` 经 T3 MCP 端点收集各环境活跃线程及其技能读取记录。专用技能。
+本机 T3 Code 运行状态的内部参考：状态库表布局与会话查询方法、子线程取证（`view:"activity"` 与 `file_change` 快照恢复）、编排机制事实、监听与唤醒（含 MCP 工具延迟加载与本账号评论不唤醒的坑）与平台坑；含孤儿工作树回收脚本 `t3-worktree-gc.mjs`（默认还检查扫描根之外被遗忘的 detached 临时工作树，如基线截图树；实时输出进度，`--purge-build` 可只清保留树的构建产物，空间统计需显式加 `--measure-size`）；跨环境复盘用 `t3-activity-scan.mjs` 经 T3 MCP 端点收集各环境活跃线程及其技能读取记录。专用技能。
 
 详见 [skills/bstack/t3-code/SKILL.md](skills/bstack/t3-code/SKILL.md)。
 
@@ -48,7 +48,7 @@ T3 Code 多 harness 编排：pi / codex / devin / factory droid 四个 harness�
 
 ### t3-dispatch
 
-从问题来源挑问题，按各设备空位在 T3 环境建工作树线程派活。流程：对账派活台账 → 用 t3-patrol 的容量规则算各设备可建数（`patrol-snapshot.mjs --capacity-only`，只看名额） → 列候选 → 按信息完整度、决策依赖、重叠与优先级挑选，按仓库文档的设备分工匹配设备 → 跨环境查重 → 认领、渲染提示词、建线程、回读确认开工，失败归还；已派线程没交付就结束时归还重派，同一问题有重派上限。问题来源经 `scripts/issue-source.mjs` 统一读写，目前接 Fast Ship（经 fast-ship 技能的脚本调用，按代码主仓地址匹配项目）；派活提示词模板放 `~/.config/bstack/templates/`，`{{source_block}}` 处插入来源附加块；台账在 `~/.config/bstack/state/`，只在本机。偏好在 `~/.config/bstack/t3-dispatch.json`（`scripts/dispatch-config.mjs` 输出生效配置），巡检调用按 `mode`（off / dry-run / auto）决定是否执行，用户当面要求派活直接执行。初始化见 `references/setup.md`。依赖同级安装的 t3-patrol 与 fast-ship。
+从问题来源挑问题，按各设备空位在 T3 环境建工作树线程派活。流程：对账派活台账 → 用 t3-patrol 的容量规则算各设备可建数（`patrol-snapshot.mjs --capacity-only`，只看名额） → `scripts/dispatch-plan.mjs` 只为有空位的仓库列候选，先跨环境查重、按关键词粗排，给出「空位 × 3」条备选 → 模型按信息完整度、决策依赖与优先级挑选，按仓库文档的设备分工匹配设备，写成计划文件 → `scripts/dispatch-launch.mjs` 逐条认领、渲染提示词、建线程、记账、回读确认开工，失败归还；已派线程没交付就结束时归还重派，同一问题有重派上限。问题来源经 `scripts/issue-source.mjs` 统一读写，目前接 Fast Ship（经 fast-ship 技能的脚本调用，按代码主仓地址匹配项目）；派活提示词模板放 `~/.config/bstack/templates/`，`{{source_block}}` 处插入来源附加块；台账在 `~/.config/bstack/state/`，只在本机。偏好在 `~/.config/bstack/t3-dispatch.json`（`scripts/dispatch-config.mjs` 输出生效配置），巡检调用按 `mode`（off / dry-run / auto）决定是否执行，用户当面要求派活直接执行。初始化见 `references/setup.md`。依赖同级安装的 t3-patrol 与 fast-ship。
 
 详见 [skills/bstack/t3-dispatch/SKILL.md](skills/bstack/t3-dispatch/SKILL.md)。
 
