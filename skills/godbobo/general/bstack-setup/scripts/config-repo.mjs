@@ -12,15 +12,25 @@
 // 输出一行 JSON；退出码：0 成功或无需操作；1 git 操作失败；2 参数或前置条件不满足。
 
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, realpathSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const configDir = (env = process.env) => env.BSTACK_CONFIG_DIR || join(homedir(), ".config", "bstack");
 
-// 只在本机：凭据与暂停开关不跟随同步。
-export const GITIGNORE = "secrets/\nPAUSE\n";
+// 只在本机：凭据、暂停开关与运行状态（如派活台账）不跟随同步。
+export const GITIGNORE = "secrets/\nPAUSE\nstate/\n";
+
+// 已有 .gitignore 只补缺的行：老仓库在加入新的本机条目后，commit 的 add -A 不能把它们推上去。
+export function ensureGitignore(dir) {
+  const file = join(dir, ".gitignore");
+  const cur = existsSync(file) ? readFileSync(file, "utf8") : "";
+  const have = new Set(cur.split(/\r?\n/).map((l) => l.trim()));
+  const missing = GITIGNORE.split("\n").filter((l) => l && !have.has(l));
+  if (missing.length) writeFileSync(file, `${cur}${cur && !cur.endsWith("\n") ? "\n" : ""}${missing.join("\n")}\n`);
+  return missing;
+}
 
 // 远端 URL 可能带 token，输出前去掉 userinfo。
 export const redact = (url) => url?.replace(/^([a-z][\w+.-]*:\/\/)[^/@]*@/i, "$1") ?? null;
@@ -84,7 +94,7 @@ export function init(dir, remoteUrl) {
   } else {
     git(dir, ["init", "-b", "main"]);
   }
-  if (!existsSync(join(dir, ".gitignore"))) writeFileSync(join(dir, ".gitignore"), GITIGNORE);
+  ensureGitignore(dir);
   git(dir, ["add", "-A"]);
   if (git(dir, ["diff", "--cached", "--quiet"], { allowFail: true }).status !== 0) git(dir, ["commit", "-m", "chore: initialize bstack config"]);
   git(dir, ["remote", "add", "origin", remoteUrl]);
@@ -132,6 +142,7 @@ export function commit(dir, message, paths = []) {
       throw new Fail(1, `pull --rebase 失败，本地改动未提交：${redact(r.stderr)}`);
     }
   }
+  ensureGitignore(dir);
   git(dir, ["add", "-A", "--", ...(paths.length ? paths : ["."])]);
   const changed = git(dir, ["diff", "--cached", "--quiet"], { allowFail: true }).status !== 0;
   if (changed) git(dir, ["commit", "-m", message]);

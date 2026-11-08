@@ -5,6 +5,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { ensureGitignore } from "./config-repo.mjs";
 
 const SCRIPT = fileURLToPath(new URL("./config-repo.mjs", import.meta.url));
 // 提交用本机已配置的 git 身份；没配置的设备跳过需要提交的用例。
@@ -115,5 +116,17 @@ test("外层目录是仓库时，配置目录本身仍算不是仓库", () => {
     assert.equal(f.run(dir, "pull").out.reason, "not-a-repo");
   } finally {
     f.cleanup();
+  }
+});
+
+test("老仓库的 .gitignore 只补缺的本机条目，原有行保留", () => {
+  const dir = mkdtempSync(join(tmpdir(), "bstack-ign-"));
+  try {
+    writeFileSync(join(dir, ".gitignore"), "secrets/\nPAUSE");
+    assert.deepEqual(ensureGitignore(dir), ["state/"]);
+    assert.equal(readFileSync(join(dir, ".gitignore"), "utf8"), "secrets/\nPAUSE\nstate/\n");
+    assert.deepEqual(ensureGitignore(dir), []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });

@@ -30,7 +30,7 @@ disable-model-invocation: true
 - 改之前先读现有文件，只改这次问到的键，其他键原样保留。
 - 只写与技能默认值不同的键，外加 `version`（取 setup.md 的 `version`）。用户说「恢复默认」就删掉那个键。
 - 2 空格缩进，UTF-8 无 BOM，末尾换行。
-- 不写密钥。凭据留在各服务自己的位置（如 `~/.config/fast-ship/`、gh/fj 登录、T3 `request_secret`）；确需落盘的放 `secrets/`，它不进配置仓库。
+- 不写密钥。凭据留在各服务自己的位置（如 `~/.config/fast-ship/`、gh/fj 登录、T3 `request_secret`）；确需落盘的放 `secrets/`。`secrets/`、`PAUSE` 与运行状态目录 `state/` 只在本机，不进配置仓库。
 - `environments.json` 多个技能共用，写入前看清已有条目，不要整份覆盖。
 
 ## 技能如何接入
