@@ -11,7 +11,7 @@ version: 1
 
 - 在打算长驻巡检的线程里运行：`schedule_task` 默认绑定当前线程，以后每轮巡检都发到这里。不是这样的线程就停下，请用户在巡检宿主上新开一个线程再运行本技能。
 - 宿主设备要常开，并且能连到所有环境。向用户确认这台设备适合当宿主。
-- 线程须跑在 ACP 类 harness（droid、devin 等）上，快照脚本才拿得到 T3 MCP 会话；Codex 等 harness 只能按 [snapshot.md](snapshot.md) 手工取证。
+- 线程须跑在 ACP 类 harness（droid、devin 等）或 pi 上，快照脚本才拿得到 T3 MCP 会话；Codex 只能按 [snapshot.md](snapshot.md) 手工取证。
 
 ## 1. 认设备，写 `environments.json`
 
@@ -36,7 +36,7 @@ version: 1
 node <t3-patrol 技能目录>/scripts/patrol-snapshot.mjs --self <当前线程 threadId> > /tmp/t3-patrol-snapshot.json
 ```
 
-退出码为 0，且 `environmentsFile` 的 `unlisted`、`missing`、`errors` 都为空才算通过。写完容量池后重跑一次，核对各环境 `capacity.device` 已对上别名、`config.warnings` 为空、`freeByRepo` 里目标仓库的可建数符合用户预期。退出码 2 说明当前 harness 没有注入 T3 MCP 会话，告诉用户需要切换到 ACP 类 harness，或接受手工取证。
+退出码为 0，且 `environmentsFile` 的 `unlisted`、`missing`、`errors` 都为空才算通过。写完容量池后重跑一次，核对各环境 `capacity.device` 已对上别名、`config.warnings` 为空、`freeByRepo` 里目标仓库的可建数符合用户预期。退出码 2 说明当前 harness 没有注入 T3 MCP 会话，告诉用户需要切换到 ACP 类 harness 或 pi，或接受手工取证。
 
 ## 3. 询问偏好
 

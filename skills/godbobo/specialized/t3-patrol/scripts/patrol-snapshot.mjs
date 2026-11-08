@@ -4,7 +4,7 @@
 //
 // 用法：node patrol-snapshot.mjs [--self <本线程 id>] [--tail 4] [--chars 600] [--capacity-only]
 // --capacity-only 只输出各环境的容量、项目与未 settle 顶层线程标题（派活用），跳过候选详情与 PR 实况。
-// 依赖 T3 向 ACP 类 harness 注入的 T3_ACP_MCP_ENDPOINT、T3_ACP_MCP_AUTHORIZATION（缺席时退出码 2，改用 MCP 工具手工取证）。
+// 依赖 T3 向 harness 进程注入的 MCP 会话（ACP 类与 pi 有，Codex 没有；缺席时退出码 2，改用 MCP 工具手工取证）。
 
 import { execFileSync } from "node:child_process";
 import { readFileSync, realpathSync } from "node:fs";
@@ -35,10 +35,11 @@ const LIVE = new Set(["preparing", "queued", "starting", "running", "waiting"]);
 
 const DEBUG = !!process.env.T3_PATROL_DEBUG;
 
-// 只有 ACP 类 harness 把 MCP 会话注入进程环境（authorization 已带 Bearer 前缀）；
-// Codex 等 harness 的会话只写进自身 MCP 配置，shell 里拿不到，缺席时退出码 2。
-const URL_ = process.env.T3_ACP_MCP_ENDPOINT;
-const AUTH = process.env.T3_ACP_MCP_AUTHORIZATION;
+// T3 把 MCP 会话注入 harness 进程环境：ACP 类（droid、devin）给 T3_ACP_MCP_*（authorization 已带 Bearer 前缀），
+// pi 给 T3_MCP_URL / T3_MCP_BEARER_TOKEN（裸 token）。Codex 的会话只写进自身 MCP 配置，shell 里拿不到，缺席时退出码 2。
+const ACP = !!(process.env.T3_ACP_MCP_ENDPOINT && process.env.T3_ACP_MCP_AUTHORIZATION);
+const URL_ = ACP ? process.env.T3_ACP_MCP_ENDPOINT : process.env.T3_MCP_URL;
+const AUTH = ACP ? process.env.T3_ACP_MCP_AUTHORIZATION : process.env.T3_MCP_BEARER_TOKEN && `Bearer ${process.env.T3_MCP_BEARER_TOKEN}`;
 
 let sid = null;
 let seq = 0;
@@ -500,15 +501,43 @@ function convergenceOf(health) {
   };
 }
 
-// 占用名额的线程：有活跃 run 的（含 Fast Ship 审查线程），或 PR 仍 open、最近 2 小时内跑过的（两轮审查之间
+// 占用名额的线程：有活跃 run 或有子代理在跑的（含 Fast Ship 审查线程），或 PR 仍 open、最近 2 小时内跑过的（两轮审查之间
 // 线程会暂时 completed，但工作树和编译资源还占着）。PR 已合并/关闭、没有 PR 又没在跑的线程不占名额。
 // 不用 updatedAt：同步会批量刷新它。
 const holdsOpenPr = (t) => !LIVE.has(t.status) && !isProbe(t) && (t.pullRequests ?? []).some((p) => p.state === "open");
 
+// 父线程把活交给子代理后，自己的 run 会 completed，等子代理完成时唤醒；工作树仍在被子代理改写、编译，按占用算。
+async function liveSubagentRoots(environmentId, top) {
+  const scope = environmentId ? { environmentId } : {};
+  const parentOf = new Map();
+  for (let cursor = 0; ; ) {
+    const page = await call("t3_thread_list", { allProjects: true, includeSubagents: true, statuses: [...LIVE], limit: 100, cursor, ...scope });
+    for (const t of page.threads) if (t.parentThreadId) parentOf.set(t.threadId, t.parentThreadId);
+    if (page.nextCursor == null) break;
+    cursor = page.nextCursor;
+  }
+  const topIds = new Set(top.map((t) => t.threadId));
+  const roots = new Set();
+  for (const id of [...parentOf.keys()]) {
+    let cur = parentOf.get(id);
+    // 中间层子代理可能已 completed、不在活跃列表里，逐层回读找顶层。
+    for (let depth = 0; depth < 6 && cur && !topIds.has(cur); depth++) {
+      if (!parentOf.has(cur)) {
+        const r = await call("t3_thread_read", { threadId: cur, limit: 1, maxCharsPerItem: 1, ...scope }).catch(() => null);
+        parentOf.set(cur, r?.thread?.parentThreadId ?? null);
+      }
+      cur = parentOf.get(cur);
+    }
+    if (cur && topIds.has(cur)) roots.add(cur);
+  }
+  return roots;
+}
+
 async function occupancyOf(env, top, lastRunEndedOf, now) {
+  const roots = await liveSubagentRoots(env.isLocal ? null : env.environmentId, top);
   const occupying = top.filter((t) => {
     if (isProbe(t)) return false;
-    if (LIVE.has(t.status)) return true;
+    if (LIVE.has(t.status) || roots.has(t.threadId)) return true;
     if (!holdsOpenPr(t)) return false;
     const ended = Date.parse(lastRunEndedOf(t) ?? "");
     return Number.isFinite(ended) && now - ended < CFG.capacity.occupyWindowHours * 3600 * 1000;
@@ -696,7 +725,7 @@ async function snapshotEnv(env) {
 
 async function main() {
   if (!URL_ || !AUTH) {
-    console.error("缺少 T3_ACP_MCP_ENDPOINT / T3_ACP_MCP_AUTHORIZATION（当前 harness 未向 shell 注入 T3 MCP 会话）：改用 MCP 工具按技能步骤手工取证。");
+    console.error("缺少 T3 MCP 会话（T3_ACP_MCP_* 或 T3_MCP_URL / T3_MCP_BEARER_TOKEN，当前 harness 未向 shell 注入）：改用 MCP 工具按技能步骤手工取证。");
     process.exit(2);
   }
   await rpc("initialize", { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "t3-patrol", version: "1" } });

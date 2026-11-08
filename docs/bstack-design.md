@@ -124,7 +124,7 @@ GitHub 与 Forgejo 合为一个托管平台适配器，底层分别走 `gh` 与 
 
 ## 快照通道
 
-T3 只向 ACP 类 harness（droid、devin 等）的进程环境注入 `T3_ACP_MCP_ENDPOINT` 与 `T3_ACP_MCP_AUTHORIZATION`。Codex 自 T3 `7394d73abb`（2026-10-27）起改为在每线程配置里接收 T3 MCP，shell 拿不到会话，旧的 `T3_MCP_URL` / `T3_MCP_BEARER_TOKEN` 已不存在。巡检线程要用快照脚本，需运行在 ACP 类 harness 上；否则按 `snapshot.md` 手工取证。
+T3 向 ACP 类 harness（droid、devin 等）的进程环境注入 `T3_ACP_MCP_ENDPOINT` 与 `T3_ACP_MCP_AUTHORIZATION`，向 pi 注入 `T3_MCP_URL` 与 `T3_MCP_BEARER_TOKEN`（裸 token，2026-11-08 实测 pi 的 shell 里可见），脚本两组都认。Codex 自 T3 `7394d73abb`（2026-10-27）起改为在每线程配置里接收 T3 MCP，shell 拿不到会话。巡检线程要用快照脚本，需运行在 ACP 类 harness 或 pi 上；否则按 `snapshot.md` 手工取证。
 
 ## 推进顺序
 

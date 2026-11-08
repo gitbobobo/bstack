@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // 巡检失败恢复：按快照里的 modelLadder 批量换档、发送 M4、等待后回读 run。
 // 用法：node patrol-tier.mjs --snapshot /tmp/t3-patrol-snapshot.json --to fallback [--dry-run] [--skip <id|link|title>]
-// 依赖 T3_ACP_MCP_ENDPOINT、T3_ACP_MCP_AUTHORIZATION（与 patrol-snapshot.mjs 相同）。
+// 依赖 T3 注入的 MCP 会话（与 patrol-snapshot.mjs 相同）。
 
 import { readFileSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -19,10 +19,11 @@ const INCLUDE_CANCELLED = has("include-cancelled");
 const SKIP = new Set(args.flatMap((x, i) => (x === "--skip" && args[i + 1] ? args[i + 1].split(",") : [])).map((x) => x.trim()).filter(Boolean));
 const DELAY_MS = Number(opt("delay-ms", 120000));
 
-// 只有 ACP 类 harness 把 MCP 会话注入进程环境（authorization 已带 Bearer 前缀）；
-// Codex 等 harness 的会话只写进自身 MCP 配置，shell 里拿不到，缺席时退出码 2。
-const URL_ = process.env.T3_ACP_MCP_ENDPOINT;
-const AUTH = process.env.T3_ACP_MCP_AUTHORIZATION;
+// T3 把 MCP 会话注入 harness 进程环境：ACP 类（droid、devin）给 T3_ACP_MCP_*（authorization 已带 Bearer 前缀），
+// pi 给 T3_MCP_URL / T3_MCP_BEARER_TOKEN（裸 token）。Codex 的会话只写进自身 MCP 配置，shell 里拿不到，缺席时退出码 2。
+const ACP = !!(process.env.T3_ACP_MCP_ENDPOINT && process.env.T3_ACP_MCP_AUTHORIZATION);
+const URL_ = ACP ? process.env.T3_ACP_MCP_ENDPOINT : process.env.T3_MCP_URL;
+const AUTH = ACP ? process.env.T3_ACP_MCP_AUTHORIZATION : process.env.T3_MCP_BEARER_TOKEN && `Bearer ${process.env.T3_MCP_BEARER_TOKEN}`;
 let sid = null;
 let seq = 0;
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -104,7 +105,7 @@ async function main() {
     return;
   }
   if (!URL_ || !AUTH) {
-    console.error("缺少 T3_ACP_MCP_ENDPOINT / T3_ACP_MCP_AUTHORIZATION（当前 harness 未向 shell 注入 T3 MCP 会话）：改用 MCP 工具按技能步骤手工取证。");
+    console.error("缺少 T3 MCP 会话（T3_ACP_MCP_* 或 T3_MCP_URL / T3_MCP_BEARER_TOKEN，当前 harness 未向 shell 注入）：改用 MCP 工具按技能步骤手工取证。");
     process.exit(2);
   }
 
