@@ -2,7 +2,8 @@
 // 巡检偏好：references/config.defaults.json 是默认值，用户在 ~/.config/bstack/t3-patrol.json 只写要改的键。
 //
 // 用法：node patrol-config.mjs
-// 输出生效配置 { source, warnings, errors, config }；配置文件损坏时 errors 非空、退出码 3，config 回落为默认值。
+// 输出生效配置 { source, warnings, errors, config, environments }；配置文件损坏时 errors 非空、退出码 3，config 回落为默认值。
+// environments 来自多技能共用的 environments.json（设备别名 → environmentId），缺失时为空。
 // BSTACK_CONFIG_DIR 可改配置目录（测试与多套配置用）。
 
 import { existsSync, readFileSync, realpathSync } from "node:fs";
@@ -13,6 +14,8 @@ import { fileURLToPath } from "node:url";
 const SKILL_DIR = dirname(dirname(fileURLToPath(import.meta.url)));
 export const DEFAULTS_PATH = join(SKILL_DIR, "references", "config.defaults.json");
 export const CONFIG_FILE = "t3-patrol.json";
+export const ENVIRONMENTS_FILE = "environments.json";
+const OS = ["windows", "macos", "linux"];
 
 export const configDir = (env = process.env) => env.BSTACK_CONFIG_DIR || join(homedir(), ".config", "bstack");
 
@@ -44,15 +47,8 @@ export function loadConfig({ env = process.env, defaultsPath = DEFAULTS_PATH } =
   const file = join(configDir(env), CONFIG_FILE);
   if (!existsSync(file)) return { source: "defaults", warnings: [], errors: [], config: defaults };
 
-  let user;
-  try {
-    user = JSON.parse(readFileSync(file, "utf8").replace(/^\uFEFF/, ""));
-  } catch (e) {
-    return { source: file, warnings: [], errors: [`无法解析：${e.message}；本轮使用默认值`], config: defaults };
-  }
-  if (kind(user) !== "object") {
-    return { source: file, warnings: [], errors: [`顶层应为对象，实际是 ${kind(user)}；本轮使用默认值`], config: defaults };
-  }
+  const { value: user, error } = readJson(file);
+  if (error) return { source: file, warnings: [], errors: [`${error}；本轮使用默认值`], config: defaults };
 
   const warnings = [];
   const { version, ...rest } = user;
@@ -67,9 +63,48 @@ export function loadConfig({ env = process.env, defaultsPath = DEFAULTS_PATH } =
   return { source: file, warnings, errors: [], config };
 }
 
+function readJson(file) {
+  try {
+    const v = JSON.parse(readFileSync(file, "utf8").replace(/^\uFEFF/, ""));
+    return kind(v) === "object" ? { value: v } : { error: `顶层应为对象，实际是 ${kind(v)}` };
+  } catch (e) {
+    return { error: `无法解析：${e.message}` };
+  }
+}
+
+// { alias: { environmentId, device, os } }；坏条目丢弃并报警告，同一 environmentId 只认第一个别名。
+export function loadEnvironments({ env = process.env } = {}) {
+  const file = join(configDir(env), ENVIRONMENTS_FILE);
+  if (!existsSync(file)) return { source: null, warnings: [], errors: [], environments: {} };
+  const { value, error } = readJson(file);
+  if (error) return { source: file, warnings: [], errors: [`${error}；本轮按无对照表处理`], environments: {} };
+  const warnings = [];
+  const environments = {};
+  const seen = new Map();
+  for (const [alias, e] of Object.entries(kind(value.environments) === "object" ? value.environments : {})) {
+    if (kind(e) !== "object" || typeof e.environmentId !== "string" || !e.environmentId) {
+      warnings.push(`environments.${alias}：缺 environmentId，已忽略`);
+      continue;
+    }
+    if (seen.has(e.environmentId)) {
+      warnings.push(`environments.${alias}：与 ${seen.get(e.environmentId)} 的 environmentId 相同，已忽略`);
+      continue;
+    }
+    if (e.os !== undefined && !OS.includes(e.os)) warnings.push(`environments.${alias}.os：应为 ${OS.join(" / ")}`);
+    seen.set(e.environmentId, alias);
+    environments[alias] = {
+      environmentId: e.environmentId,
+      device: typeof e.device === "string" ? e.device : null,
+      os: OS.includes(e.os) ? e.os : null,
+    };
+  }
+  if (kind(value.environments) !== "object") warnings.push("environments：应为对象（别名 → 环境），当前没有可用条目");
+  return { source: file, warnings, errors: [], environments };
+}
+
 // 技能常经符号链接安装：比较 realpath，否则直接运行时静默不执行。
 if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) {
-  const r = loadConfig();
+  const r = { ...loadConfig(), environments: loadEnvironments() };
   console.log(JSON.stringify(r, null, 2));
   if (r.errors.length) process.exit(3);
 }

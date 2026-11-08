@@ -11,7 +11,7 @@ description: 代表用户巡检、定案各 T3 环境未结线程。仅定时任
 
 然后调 `t3_environment_links`：返回里的 `environmentId` 是本机，`links` 是其他已连接环境。不可达的环境在报告里记一笔，本轮跳过。
 
-交接时要知道每个环境是哪台设备。本线程之前的回复里已经有「环境对照表」、且环境集合没变，就直接沿用；没有表，或者环境有增减，就重新认一遍：
+交接时要知道每个环境是哪台设备。快照的 `environmentsFile`（来自 `~/.config/bstack/environments.json`）`unlisted`、`missing`、`errors` 都为空时，各环境条目的 `alias`、`device` 就是对照表，直接用。否则沿用本线程之前回复里的「环境对照表」，前提是环境集合没变；没有表，或者环境有增减，就重新认一遍：
 
 1. **本机**：跑 `hostname`；macOS 再跑 `sysctl -n hw.model`，得到主机名和机型。
 2. **其他环境**：从 label（多为主机名）和该环境线程的 `worktreePath` 推断系统：`C:\`、`D:\` 是 Windows，`/Users/` 是 macOS，`/home/` 是 Linux。再读一个该环境近期的顶层线程，找代理自报的设备信息（如「设备是 Mac mini」）。
@@ -24,13 +24,13 @@ description: 代表用户巡检、定案各 T3 环境未结线程。仅定时任
 
    有任何一行拿不准（推断不出机型，或两个环境像同一类设备），就向用户提问确认。答复到达前，交接目标落在拿不准的环境上的线程先不交接，其余巡检照常。
 
-对照表留在这条线程的对话里，之后几轮从上下文读取。
+对照表留在这条线程的对话里，之后几轮从上下文读取。与 `environments.json` 不一致时，在「例行复核」建议用户运行 bstack-setup 更新。
 
 ### 偏好配置
 
 模型阶梯、名额和各类阈值取本轮快照的 `modelLadder` 与 `config`；快照跑不了时用 `node <技能目录>/scripts/patrol-config.mjs` 读取。默认值在 [config.defaults.json](references/config.defaults.json)，用户在 `~/.config/bstack/t3-patrol.json` 只写要改的键。下文括号里的数字是默认值，判定以本轮读到的配置为准。
 
-`config.warnings`（拼错的键、类型不符，均已按默认值处理）写进「例行复核」；`config.errors`（文件损坏，整份回落默认值）写进「阻塞」，附文件路径与报错。配置只读，修改交给用户或 setup 技能。
+`config.warnings`（拼错的键、类型不符，均已按默认值处理）写进「例行复核」；`config.errors`（文件损坏，整份回落默认值）写进「阻塞」，附文件路径与报错。`schedule` 由 [初始化](references/setup.md) 维护，巡检不读。配置只读，修改交给用户或 bstack-setup。
 
 ### 权限与证据
 

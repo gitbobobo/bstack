@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { loadConfig, DEFAULTS_PATH, CONFIG_FILE } from "./patrol-config.mjs";
+import { loadConfig, loadEnvironments, DEFAULTS_PATH, CONFIG_FILE, ENVIRONMENTS_FILE } from "./patrol-config.mjs";
 
 const DEFAULTS = JSON.parse(readFileSync(DEFAULTS_PATH, "utf8"));
 const SCRIPT = fileURLToPath(new URL("./patrol-config.mjs", import.meta.url));
@@ -88,4 +88,27 @@ test("损坏的文件记 errors 并回落默认值；CLI 退出码 3", () => {
       assert.equal(JSON.parse(cli.stdout).errors.length, 1);
     });
   }
+});
+
+test("environments.json：坏条目与重复 environmentId 丢弃并报警告；缺失时为空", () => {
+  withConfig(undefined, (env, dir) => {
+    assert.deepEqual(loadEnvironments({ env }).environments, {});
+    writeFileSync(join(dir, ENVIRONMENTS_FILE), JSON.stringify({
+      version: 1,
+      environments: {
+        pc: { environmentId: "env-pc", device: "Windows PC", os: "windows" },
+        mini: { environmentId: "env-mini", os: "mac" },
+        dup: { environmentId: "env-pc" },
+        broken: { device: "x" },
+      },
+    }));
+    const r = loadEnvironments({ env });
+    assert.deepEqual(r.environments, {
+      pc: { environmentId: "env-pc", device: "Windows PC", os: "windows" },
+      mini: { environmentId: "env-mini", device: null, os: null },
+    });
+    assert.equal(r.warnings.length, 3);
+    writeFileSync(join(dir, ENVIRONMENTS_FILE), "{");
+    assert.equal(loadEnvironments({ env }).errors.length, 1);
+  });
 });

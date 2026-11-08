@@ -44,5 +44,11 @@
   "convergenceAudit": {
     "openHours": 12,
     "reviewRounds": 5
+  },
+  "schedule": {
+    "everyMinutes": 60,
+    "scheduledTaskId": "",
+    "boundThreadId": "",
+    "hostEnvironmentId": ""
   }
 }

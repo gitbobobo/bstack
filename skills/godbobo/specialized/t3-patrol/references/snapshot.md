@@ -11,6 +11,7 @@ node <技能目录>/scripts/patrol-snapshot.mjs --self <thread.threadId> > /tmp/
 - 输出结构的读法：
   - **模型阶梯**：顶层 `modelLadder`，取自生效配置；所有换模/探测只准从这里取实例与参数。
   - **偏好**：顶层 `config` 带名额、阈值、久审审计线及 `source`/`warnings`/`errors`，用法见 SKILL.md「偏好配置」。
+  - **设备对照**：顶层 `environmentsFile` 对比 `environments.json` 与本轮环境集合（`unlisted` 是文件里没有的环境，`missing` 是文件里有但本轮没连上的别名）；各环境条目带 `alias`、`device`。用法见 SKILL.md 第 0 步。
   - **候选**：`environments[].candidates`（已剔除子代理线程、首条消息是派活模板且没有工作树的执行线程、Fast Ship 审查线程（「代码审查 · PR #N」「视觉审查 · PR #N」）、「额度探测」线程和本线程；剔除数量在 `delegatedExcluded`）。每条带 `link`、`status`、`prs`、`lastMsgAt`、最近 3 次 run、`pendingRequestCount`、`task`（首条用户消息）、`tail`（最后 4 条消息，保留首尾共 600 字——代理常在长汇报末尾才提问）。
   - **失败清单**：`environments[].failedThreads` 合并候选内失败线程与 `failedTopLevel`，每条带 `id`/`link`/`title`/`status`/`model`/`source`；候选内的还带 `task`/`tail`/`runs`/`prs`。这是每轮第一份行动清单，逐条处理，不许只扫自己刚推过的线程。
   - **体检清单（环境级）**：三项体检各一份，每条带线程 `id`，逐条处理即可。

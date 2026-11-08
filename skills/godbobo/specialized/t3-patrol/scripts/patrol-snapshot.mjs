@@ -10,7 +10,7 @@ import { readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { loadConfig } from "./patrol-config.mjs";
+import { loadConfig, loadEnvironments } from "./patrol-config.mjs";
 
 const args = process.argv.slice(2);
 const opt = (name, dflt) => {
@@ -634,7 +634,20 @@ async function main() {
   );
   const { modelLadder, version, ...prefs } = CFG;
   const config = { source: PREFS.source, warnings: PREFS.warnings, errors: PREFS.errors, ...prefs };
-  console.log(JSON.stringify({ generatedAt: new Date().toISOString(), config, modelLadder, unreachable, environments: results }, null, 1));
+  const known = loadEnvironments();
+  const aliasOf = new Map(Object.entries(known.environments).map(([alias, e]) => [e.environmentId, { alias, device: e.device }]));
+  const linked = new Set([...envs, ...unreachable].map((e) => e.environmentId));
+  // unlisted/missing 非空说明环境集合与 environments.json 不一致，对照表需要重新认。
+  const environmentsFile = {
+    source: known.source,
+    warnings: known.warnings,
+    errors: known.errors,
+    unlisted: [...linked].filter((id) => !aliasOf.has(id)),
+    missing: Object.keys(known.environments).filter((alias) => !linked.has(known.environments[alias].environmentId)),
+  };
+  const environments = results.map((r) => ({ ...(aliasOf.get(r.environmentId) ?? {}), ...r }));
+  for (const u of unreachable) Object.assign(u, aliasOf.get(u.environmentId) ?? {});
+  console.log(JSON.stringify({ generatedAt: new Date().toISOString(), config, modelLadder, environmentsFile, unreachable, environments }, null, 1));
 }
 
 // 技能常经符号链接安装：比较 realpath，否则直接运行时静默不执行。
