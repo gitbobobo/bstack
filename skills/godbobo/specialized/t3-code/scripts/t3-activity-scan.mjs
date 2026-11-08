@@ -3,7 +3,7 @@
 // 并从工具调用里提取读取过的 SKILL.md、`$技能名` 提及与用户消息，供复盘使用。
 //
 // 用法：node t3-activity-scan.mjs [--hours 24] [--self <本线程 id>] [--concurrency 6] > scan.json
-// 依赖环境变量 T3_MCP_URL、T3_MCP_BEARER_TOKEN（T3 注入；缺席时退出码 2）。
+// 依赖 T3 向 ACP 类 harness 注入的 T3_ACP_MCP_ENDPOINT、T3_ACP_MCP_AUTHORIZATION（缺席时退出码 2）。
 //
 // 「活跃」按最近一次 run 的时间或创建时间判断，不看 t3_thread_list 的 updatedAt：
 // 同步会批量刷新 updatedAt，用它筛会把几百个老线程误算进窗口。
@@ -19,13 +19,15 @@ const opt = (name, dflt) => {
 const HOURS = Number(opt("hours", 24));
 const SELF = opt("self", null);
 const CONC = Number(opt("concurrency", 6));
-const URL_ = process.env.T3_MCP_URL;
-const TOKEN = process.env.T3_MCP_BEARER_TOKEN;
+// 只有 ACP 类 harness 把 MCP 会话注入进程环境（authorization 已带 Bearer 前缀）；
+// Codex 等 harness 的会话只写进自身 MCP 配置，shell 里拿不到，缺席时退出码 2。
+const URL_ = process.env.T3_ACP_MCP_ENDPOINT;
+const AUTH = process.env.T3_ACP_MCP_AUTHORIZATION;
 
 let sid = null;
 let seq = 0;
 async function rpc(method, params) {
-  const headers = { "content-type": "application/json", accept: "application/json, text/event-stream", authorization: `Bearer ${TOKEN}` };
+  const headers = { "content-type": "application/json", accept: "application/json, text/event-stream", authorization: AUTH };
   if (sid) headers["mcp-session-id"] = sid;
   const res = await fetch(URL_, { method: "POST", headers, body: JSON.stringify({ jsonrpc: "2.0", id: ++seq, method, params }) });
   sid = res.headers.get("mcp-session-id") || sid;
@@ -94,8 +96,8 @@ async function scanThread(env, t, since) {
 }
 
 async function main() {
-  if (!URL_ || !TOKEN) {
-    console.error("缺少 T3_MCP_URL / T3_MCP_BEARER_TOKEN：改用 t3_thread_list / t3_thread_read 手工取证。");
+  if (!URL_ || !AUTH) {
+    console.error("缺少 T3_ACP_MCP_ENDPOINT / T3_ACP_MCP_AUTHORIZATION（当前 harness 未向 shell 注入 T3 MCP 会话）：改用 t3_thread_list / t3_thread_read 手工取证。");
     process.exit(2);
   }
   await rpc("initialize", { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "t3-activity-scan", version: "1" } });

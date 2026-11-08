@@ -3,7 +3,7 @@
 // 只输出判定需要的字段，避免把 t3_thread_list / t3_thread_read 的原始大 JSON 灌进上下文。
 //
 // 用法：node patrol-snapshot.mjs [--self <本线程 id>] [--tail 4] [--chars 600]
-// 依赖环境变量 T3_MCP_URL、T3_MCP_BEARER_TOKEN（T3 注入；缺席时退出码 2，改用 MCP 工具手工取证）。
+// 依赖 T3 向 ACP 类 harness 注入的 T3_ACP_MCP_ENDPOINT、T3_ACP_MCP_AUTHORIZATION（缺席时退出码 2，改用 MCP 工具手工取证）。
 
 import { execFileSync } from "node:child_process";
 import { readFileSync, realpathSync } from "node:fs";
@@ -27,8 +27,10 @@ const LIVE = new Set(["preparing", "queued", "starting", "running", "waiting"]);
 
 const DEBUG = !!process.env.T3_PATROL_DEBUG;
 
-const URL_ = process.env.T3_MCP_URL;
-const TOKEN = process.env.T3_MCP_BEARER_TOKEN;
+// 只有 ACP 类 harness 把 MCP 会话注入进程环境（authorization 已带 Bearer 前缀）；
+// Codex 等 harness 的会话只写进自身 MCP 配置，shell 里拿不到，缺席时退出码 2。
+const URL_ = process.env.T3_ACP_MCP_ENDPOINT;
+const AUTH = process.env.T3_ACP_MCP_AUTHORIZATION;
 
 let sid = null;
 let seq = 0;
@@ -36,7 +38,7 @@ async function rpc(method, params, attempt = 0) {
   const headers = {
     "content-type": "application/json",
     accept: "application/json, text/event-stream",
-    authorization: `Bearer ${TOKEN}`,
+    authorization: AUTH,
   };
   if (sid) headers["mcp-session-id"] = sid;
   let res;
@@ -612,8 +614,8 @@ async function snapshotEnv(env) {
 }
 
 async function main() {
-  if (!URL_ || !TOKEN) {
-    console.error("缺少 T3_MCP_URL / T3_MCP_BEARER_TOKEN：改用 MCP 工具按技能步骤手工取证。");
+  if (!URL_ || !AUTH) {
+    console.error("缺少 T3_ACP_MCP_ENDPOINT / T3_ACP_MCP_AUTHORIZATION（当前 harness 未向 shell 注入 T3 MCP 会话）：改用 MCP 工具按技能步骤手工取证。");
     process.exit(2);
   }
   await rpc("initialize", { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "t3-patrol", version: "1" } });
