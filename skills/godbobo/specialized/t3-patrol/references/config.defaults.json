@@ -31,6 +31,8 @@
     "maxActiveThreads": 5,
     "occupyWindowHours": 2,
     "minFreeDiskGB": 20,
+    "defaultFootprintGB": 5,
+    "growthWindowHours": 2,
     "devices": []
   },
   "thresholds": {

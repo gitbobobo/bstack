@@ -43,14 +43,15 @@ node <t3-patrol 技能目录>/scripts/patrol-snapshot.mjs --self <当前线程 t
 先展示默认值，再按组问，用户说「默认」就跳过该组：
 
 - **模型阶梯** `modelLadder`：巡检代回话时依次尝试的 harness 与模型，最后一档标 `fallback`。用户的 harness 或模型不同才需要改，整组替换。
-- **名额** `capacity`：每台设备默认的最大活跃线程数、占用窗口小时数、最低剩余磁盘。
+- **名额** `capacity`：每台设备默认的最大活跃线程数、占用窗口小时数、最低剩余磁盘、单线程默认磁盘占用 `defaultFootprintGB`、新线程按在建预留磁盘的小时数 `growthWindowHours`。
 - **容量池** `capacity.devices`：按设备别名分仓库限额，整组替换。先列出各环境的项目 `canonicalKey`（`t3_project_list`），再逐台问：
 
   ```json
-  { "device": "pc", "maxActiveThreads": 9, "pools": [{ "repos": ["fj.frp.musiver.cn/fjbobo/musiver"], "max": 5 }, { "repos": "*", "max": 4 }] }
+  { "device": "pc", "pools": [{ "repos": ["fj.frp.musiver.cn/fjbobo/musiver"], "max": 5, "footprintGB": 30 }, { "repos": "*", "max": 4 }] }
   ```
 
-  `repos` 写完整 `canonicalKey` 最稳；只写仓库名会命中不同宿主上的同名仓库。线程只进第一个匹配的池，`"*"` 收其余仓库，审查线程不占池。设备总上限 `maxActiveThreads` 缺省取上一项；池加起来超过它时，总上限先到，要向用户说明这一点。
+  `repos` 写完整 `canonicalKey` 最稳；只写仓库名会命中不同宿主上的同名仓库。线程只进第一个匹配的池，`"*"` 收其余仓库，审查线程不占池。设备总上限 `maxActiveThreads` 缺省为各池 `max` 之和，即各池可以同时用满；只有用户想再压低总数时才写。
+  `footprintGB` 是该池一个线程的峰值磁盘占用（工作树加构建产物），巡检用它把剩余磁盘折算成可建数。构建产物大的仓库要问；用户不清楚时，在该设备已有的工作树上量一次（`du -sh ~/.t3/worktrees/*`，远程设备经资源探测线程去量）给个建议值。没写的池用 `defaultFootprintGB`。
 - **阈值** `thresholds`：排队、沉默、审查等待、重发冷却等分钟数。多数用户沿用默认。
 - **久审审计** `convergenceAudit`：PR 打开小时数、审查轮数。
 - **频率** `schedule.everyMinutes`：巡检间隔，最少 1 分钟。

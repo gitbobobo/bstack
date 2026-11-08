@@ -71,7 +71,7 @@ GitHub 与 Forgejo 合为一个托管平台适配器，底层分别走 `gh` 与 
 {
   "capacity": {
     "devices": [
-      { "device": "pc",       "pools": [{ "repos": ["musiver"], "max": 5 }, { "repos": "*", "max": 4 }] },
+      { "device": "pc",       "pools": [{ "repos": ["musiver"], "max": 5, "footprintGB": 30 }, { "repos": "*", "max": 4 }] },
       { "device": "mac-mini", "pools": [{ "repos": ["musiver"], "max": 4 }, { "repos": ["tma"], "max": 2 }, { "repos": "*", "max": 4 }] },
       { "device": "linux",    "pools": [{ "repos": ["musiver"], "max": 1 }, { "repos": "*", "max": 4 }] },
       { "device": "mbp",      "pools": [{ "repos": ["musiver", "tma", "stream-music"], "max": 3 }, { "repos": "*", "max": 4 }] }
@@ -82,10 +82,20 @@ GitHub 与 Forgejo 合为一个托管平台适配器，底层分别走 `gh` 与 
 
 - 仓库以 T3 项目的 `repositoryIdentity.canonicalKey` 标识（各环境 `projectId` 不同）。`repos` 写完整 key 精确比对；只写仓库名时比对 key 的最后一段，会同时命中不同宿主上的同名仓库（如 `liuyincs/musiver`）。
 - 每个线程只落入第一个匹配的池；`"*"` 是上面未列出的仓库。「其他仓库 4 个」按每台设备各 4 个理解。
-- 设备总上限取设备条目的 `maxActiveThreads`，缺省为 `capacity.maxActiveThreads`（5）。池加起来超过总上限时总上限先到，需要并行更多时在设备条目里调高。
+- 设备总上限缺省为各池 `max` 之和，重型池和轻型池可以同时用满（PC 最多 9 个）；设备条目写 `maxActiveThreads` 可再压低。没配池的设备用 `capacity.maxActiveThreads`（5）。
 - 占用沿用 `t3-patrol/references/handoff.md` 的定义：活跃 run 的顶层线程，加上 PR 仍 open、最近 2 小时内跑过的线程。审查线程（「代码审查 · PR #N」）只计入设备总数，不占仓库池。
-- 快照每个环境输出 `capacity`：设备总数、各池占用、按仓库的可建数 `freeByRepo`、本机剩余磁盘。计算在 `t3-patrol/scripts/patrol-capacity.mjs`。
+- 快照每个环境输出 `capacity`：设备总数、各池占用、磁盘 `disk`、按仓库的可建数 `freeByRepo`。计算在 `t3-patrol/scripts/patrol-capacity.mjs`。
 - 容量只约束巡检；用户手动开的线程照样占名额，但不受阻拦。空位先给等待中的交接，再给新问题。
+
+### 磁盘
+
+并发的真正瓶颈是构建产物占满磁盘，所以名额之外再按磁盘算一个上限，两者取小，再由巡检代理结合实况决定建几个：
+
+- 池可选 `footprintGB`（一个线程的峰值占用，工作树加构建产物），缺省 `capacity.defaultFootprintGB`（5）。
+- 可用空间 = 剩余 − `minFreeDiskGB`（20）− 在建预留；`growthWindowHours`（2）内新建的线程多半还没构建完，按所在池的 `footprintGB` 预留。磁盘可容纳数 = floor(可用空间 / `footprintGB`)。
+- 本机由快照直接量；远程环境用 `delegate_task`（wait 模式，标题「资源探测」，首档模型）派线程跑 `t3-patrol/scripts/env-probe.mjs`，取到后用 `patrol-capacity.mjs --disk-free` 重算。脚本缺失时回退到 `df`。实测 Linux 环境 18 秒返回。
+- 磁盘卡住而名额还有空时，探测带 `--reclaim`：调 t3-code 的 `t3-worktree-gc.mjs --purge-build --apply`，只删已终结线程的孤儿工作树和保留工作树里可重建的构建产物。每环境每轮最多一次。
+- 算出的可建数是上限：代理看到线程比预估大、或有用户手动开的大构建时可以少建，并在报告里写原因。
 
 ## 巡检全流程
 
@@ -120,7 +130,7 @@ T3 只向 ACP 类 harness（droid、devin 等）的进程环境注入 `T3_ACP_MC
 | 1 | 快照脚本改用 `T3_ACP_MCP_*` 通道 | 已完成 |
 | 2 | 配置骨架；t3-patrol 的模型阶梯、名额、阈值迁入配置，默认值等于现状 | 已完成 |
 | 3 | setup 技能（合并 setup-env），含私有配置仓库同步；拆分 t3-orchestrator 路由数据 | 已完成 |
-| 4 | 快照按池统计容量，handoff 第 3 步改用池 | 已完成 |
+| 4 | 快照按池统计容量，handoff 第 3 步改用池；按磁盘折算可建数、远程资源探测与回收 | 已完成 |
 | 5 | `t3-dispatch` 与 fast-ship 适配器，先手动使用 | 待办 |
 | 6 | 接入巡检（dry-run → auto），t3-patrol `setup.md` 补派活相关问题（setup.md 的设备、偏好与定时任务部分已在第 3 步完成） | 待办 |
 | 7 | GitHub / Forgejo 适配器 | 待办 |

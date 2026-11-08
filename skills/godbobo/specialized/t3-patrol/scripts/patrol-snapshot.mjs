@@ -6,12 +6,13 @@
 // 依赖 T3 向 ACP 类 harness 注入的 T3_ACP_MCP_ENDPOINT、T3_ACP_MCP_AUTHORIZATION（缺席时退出码 2，改用 MCP 工具手工取证）。
 
 import { execFileSync } from "node:child_process";
-import { readFileSync, realpathSync, statfsSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfig, loadEnvironments } from "./patrol-config.mjs";
 import { capacityOf } from "./patrol-capacity.mjs";
+import { diskOf, probePath } from "./env-probe.mjs";
 
 const args = process.argv.slice(2);
 const opt = (name, dflt) => {
@@ -99,8 +100,9 @@ const clipEnds = (s, n = CHARS) => {
 };
 // Fast Ship 发起的审查线程：结论走 Fast Ship 接口提交，失败由 Fast Ship 重派，巡检不接手。
 export const isReviewBot = (t) => /^(?:代码|视觉)审查 · PR #\d+/.test(t.title ?? "");
-// 额度探测线程：巡检自己在「0. 前提」里建、当轮 settle，不是待判任务；失败本身就是探测结果，也不进 failedTopLevel。
-export const isProbe = (t) => /^额度探测$/.test(String(t.title ?? "").trim());
+// 探测线程：额度探测（「0. 前提」）与资源探测（handoff 第 3 步）都由巡检自己建、当轮 settle，不是待判任务，
+// 也不占名额；失败本身就是探测结果，不进 failedTopLevel。
+export const isProbe = (t) => /^(?:额度|资源)探测$/.test(String(t.title ?? "").trim());
 const isSubagent = (t) => t.parentThreadId || t.threadId.startsWith("thread:delegated-task:");
 // 代理派活的执行线程：首条消息就是派活模板。它们做完即完成，验收由派活方负责，不该占巡检候选。
 // 判据只能用内容，不能用 `mcp:launch:` 前缀——那只是 launch 方式，代理也会用它建长期验收/总单线程。
@@ -130,11 +132,10 @@ async function listProjects(environmentId) {
   }
 }
 
-// 只有本机能直接量磁盘；远程环境的磁盘信息拿不到，按名额判断。
+// 只有本机能直接量磁盘；远程环境要派资源探测（env-probe.mjs），取到前容量只按名额。
 function localDiskFreeGB() {
   try {
-    const s = statfsSync(homedir());
-    return Math.floor((s.bavail * s.bsize) / 1e9);
+    return diskOf(probePath()).diskFreeGB;
   } catch {
     return null;
   }
@@ -562,6 +563,7 @@ async function snapshotEnv(env) {
   // 不用 updatedAt：同步会批量刷新它。
   const byId = new Map(enriched.map((x) => [x.id, x]));
   const occupying = top.filter((t) => {
+    if (isProbe(t)) return false;
     if (LIVE.has(t.status)) return true;
     const prs = t.pullRequests ?? [];
     if (!prs.some((p) => p.state === "open")) return false;
@@ -580,13 +582,14 @@ async function snapshotEnv(env) {
   }
   const capacity = {
     ...capacityOf({
-      threads: occupying.map((t) => ({ title: clip(t.title, 40), projectId: t.projectId, reviewBot: isReviewBot(t) })),
+      threads: occupying.map((t) => ({ title: clip(t.title, 40), projectId: t.projectId, reviewBot: isReviewBot(t), createdAt: t.createdAt })),
       projects,
       device: DEVICE_OF.get(env.environmentId),
-      maxActiveThreads: CFG.capacity.maxActiveThreads,
+      cfg: CFG.capacity,
+      diskFreeGB: env.isLocal ? localDiskFreeGB() : null,
+      now,
     }),
     ...(projectsError ? { projectsError } : {}),
-    ...(env.isLocal ? { diskFreeGB: localDiskFreeGB() } : {}),
   };
   const real = enriched.filter((x) => !isDelegatedTask(x.task, x.hasWorktree));
   // 兜底对账：被任何过滤规则排除、但停在失败态的真实顶层线程。过滤规则一改就可能误杀，
