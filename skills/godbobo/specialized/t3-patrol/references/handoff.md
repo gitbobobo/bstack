@@ -53,18 +53,18 @@
 
 - `mode:"wait"`，`timeoutMs` 300000，`title:"资源探测"`，`role:"research"`；
 - `target` 带该环境的 `environmentId`、该环境任一项目的 `projectId`（`t3_project_list`），模型取本轮 modelLadder 首档，思考档位放到最低；
-- `task` 原样用下面的文字，要回收时把第 1 步的命令换成带 `--reclaim` 的：
+- `task` 用下面的文字，`<工作树目录>` 换成该环境任一线程 `worktreePath`（`t3_thread_read` 可得）的上两级目录，取不到就删掉这个占位、让它按顺序试；要回收时把第 1 步的命令换成带 `--reclaim` 的：
 
 ```
 资源探测：不提交，不改动任何文件（命令带 --reclaim 时由脚本自己回收，你不另删东西）。
 1. 执行 `node "$HOME/.agents/skills/t3-patrol/scripts/env-probe.mjs"`，把输出的 JSON 原样作为回复。
-2. 这个脚本不存在时不要回收，改量 ~/.t3/worktrees（不存在就量主目录）所在的磁盘：POSIX 跑 `df -Pk <目录>`，Windows 用 PowerShell 跑 `Get-PSDrive -PSProvider FileSystem`；回复一行 JSON：{"source":"fallback","path":"<目录>","raw":"<命令输出的表头和数据行>"}。
+2. 这个脚本不存在时不要回收，改量 <工作树目录> 所在的磁盘（目录不存在就依次试 `$T3CODE_HOME/worktrees`、~/.t3/worktrees、主目录）：POSIX 跑 `df -Pk <目录>`；Windows 用 PowerShell 跑 `Get-PSDrive -PSProvider FileSystem | Select-Object Name,Root,Free | ConvertTo-Json -Compress`（Free 是字节）。回复一行 JSON：{"source":"fallback","path":"<实际量的目录>","raw":"<命令输出；df 取表头和数据行>"}。
 回复只含 JSON，不加解释。
 ```
 
 拿到回复后：
 
-1. 取剩余空间：env-probe 的 `diskFreeGB`；回退结果自己从 `raw` 换算（`df -Pk` 的 Available 列是 KB，乘 1024 再除以 10⁹；`Get-PSDrive` 的 Free 是字节）。
+1. 取剩余空间：env-probe 的 `diskFreeGB`；回退结果自己从 `raw` 换算（`df -Pk` 的 Available 列是 KB，乘 1024 再除以 10⁹；`Get-PSDrive` 取 `path` 所在盘符那一项的 Free，单位字节，除以 10⁹）。`raw` 是格式化表格、单位不明，或 Windows 认不出 `path` 在哪个盘时，按探测失败处理。
 2. 重算：`node <技能目录>/scripts/patrol-capacity.mjs --snapshot <快照文件> --env <environmentId> --disk-free <GB>`，输出的 `freeByRepo` 取代快照里的值。
 3. 回收结果在 `reclaim`：`freedGB` 是腾出的空间，`summary` 是 t3-worktree-gc 的汇总行，`failed` 列出删除失败的目录。`ok` 为 false 时把 `error` 或 `failed` 写进「阻塞」。
 4. 用 `t3_thread_organize`（`action:"settle"`，带 `remoteChild.environmentId` 与 `remoteChild.threadId`）settle 探测线程。
