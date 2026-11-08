@@ -77,6 +77,8 @@ test("perDay 余量封顶本轮可派数", () => {
   const ledger = Array.from({ length: 19 }, () => ({ at: new Date().toISOString(), event: "launched", repo: MUS, id: "z" }));
   const plan = buildPlan({ capacity: { environments: [env("e-pc", [4, 0])] }, config, environments, ledger, listOf: () => ({ candidates: [], skipped: [] }) });
   assert.equal(plan.slots, 1);
+  const unlimited = buildPlan({ capacity: { environments: [env("e-pc", [4, 0])] }, config: { ...config, limits: { ...config.limits, perDay: 0 } }, environments, ledger, listOf: () => ({ candidates: [], skipped: [] }) });
+  assert.equal(unlimited.slots, 4, "perDay 为 0 不限，只受名额与 perRun 约束");
 });
 
 test("计划校验", () => {

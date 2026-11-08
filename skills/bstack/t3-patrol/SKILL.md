@@ -140,7 +140,7 @@ node <技能目录>/scripts/patrol-evidence.mjs --thread <threadId>@<environment
 
 ## 5. 派活
 
-第 4 步的动作回读完再派。下文 `<t3-dispatch 技能目录>` 与本技能目录同级。
+第 4 步的动作回读完再派：本轮要 settle 的线程（含交接接手后才 settle 的来源线程）先全部 settle，空位以此为准。派活之后又 settle 了线程，就再跑一次 t3-dispatch 第 1 步，有新空位接着派，直到没有空位或没有可派的问题。下文 `<t3-dispatch 技能目录>` 与本技能目录同级。
 
 1. 先判能不能派。以下任一成立就本轮不派，在「本轮派活」写明原因：
    - `node <t3-dispatch 技能目录>/scripts/dispatch-config.mjs` 跑不了（技能没装），或 `errors` 非空；

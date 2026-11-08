@@ -10,7 +10,7 @@
 //                                                                    按 repos[].template 渲染派活提示词
 //   node issue-source.mjs record  --repo <key> --id <问题 ID> --env <environmentId> --thread <threadId>
 //                                                                    记下派出的线程
-//   node issue-source.mjs ledger  [--hours 24]                        最近的台账与派出数（perDay 节流用）
+//   node issue-source.mjs ledger  [--hours 24]                        最近的台账与派出数（perDay 节流用，perDay 为 0 不限）
 // 输出 JSON；失败时 stderr 给原因、退出码 1，用法错误退出码 2。
 // 推荐理由含中文时写进 UTF-8 文件再用 --reason-file 传，不进命令行。
 //

@@ -4,7 +4,7 @@
 //
 // 用法：node dispatch-plan.mjs --capacity <patrol-snapshot.mjs --capacity-only 的输出> [--per-slot 3] [--excerpt 200]
 // 输出 { slots, repos: [{ repo, slots, devices, shortlist, excluded, more }], skipped }：
-//   slots       本轮最多还能派几个（perRun、perDay 余量与各仓库空位之和取小）；为 0 时不列候选
+//   slots       本轮最多还能派几个（perRun、perDay 余量与各仓库空位之和取小；perDay 为 0 不限）；为 0 时不列候选
 //   devices     该仓库有空位的设备（alias、environmentId、projectId、free）
 //   shortlist   粗排后的前 max(5, 空位×per-slot) 条：ref、id、title、labels、excerpt、category（粗分类）、
 //               rank（越小越优先）、needsInfo（正文像在等补信息）、attempts
@@ -47,7 +47,8 @@ const refRe = (ref) => new RegExp(`(^|[^\\w-])${String(ref).replace(/[.*+?^${}()
 
 export function buildPlan({ capacity, config, environments, ledger, listOf, perSlot = 3 }) {
   const summary = ledgerSummary(ledger);
-  const dayLeft = Math.max(0, config.limits.perDay - summary.launched);
+  // perDay 为 0 表示不设每日上限，并发只由各设备名额约束。
+  const dayLeft = config.limits.perDay > 0 ? Math.max(0, config.limits.perDay - summary.launched) : Infinity;
   const budget = Math.min(config.limits.perRun, dayLeft);
   const activeIds = new Set(summary.active.map((e) => e.id));
   const envs = capacity.environments ?? [];
