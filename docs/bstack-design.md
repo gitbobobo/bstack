@@ -23,7 +23,8 @@
 
 - JSON 格式，脚本零依赖读取；每个文件带 `version`，技能读到旧版本时自行迁移。
 - 不放密钥。各服务凭据留在自己的位置（`~/.config/fast-ship/`、gh/fj 登录、T3 `request_secret`）。
-- 每个有偏好的技能自带 `config.example.json` 与 schema，`scripts/check.mjs` 校验示例符合 schema。
+- 每个有偏好的技能自带 `references/config.defaults.json`，它同时充当结构说明：用户文件只能覆盖其中已有的键且类型相同，对象逐键合并、数组整体替换；拼错的键与错类型记 `warnings` 并沿用默认值，文件损坏记 `errors` 并整份回落默认值。加载器与测试随技能自带（首个实现：`t3-patrol/scripts/patrol-config.mjs`），`BSTACK_CONFIG_DIR` 可改配置目录。
+- t3-orchestrator 的 `route-data.mjs` 混合了模型目录事实（入口、视觉分数）与用户偏好（路由顺序、模型状态），需要先拆开再配置化，放在第 3 步与 setup 一起做。
 
 ## setup 技能
 
@@ -110,8 +111,8 @@ T3 只向 ACP 类 harness（droid、devin 等）的进程环境注入 `T3_ACP_MC
 | # | 步骤 | 状态 |
 |---|---|---|
 | 1 | 快照脚本改用 `T3_ACP_MCP_*` 通道 | 已完成 |
-| 2 | 配置骨架；模型阶梯、名额、阈值迁入配置，默认值等于现状 | 待办 |
-| 3 | setup 技能（合并 setup-env），含私有配置仓库同步 | 待办 |
+| 2 | 配置骨架；t3-patrol 的模型阶梯、名额、阈值迁入配置，默认值等于现状 | 已完成 |
+| 3 | setup 技能（合并 setup-env），含私有配置仓库同步；拆分 t3-orchestrator 路由数据 | 待办 |
 | 4 | 快照按池统计容量，handoff 第 3 步改用池 | 待办 |
 | 5 | `t3-dispatch` 与 fast-ship 适配器，先手动使用 | 待办 |
 | 6 | 接入巡检（dry-run → auto），补 t3-patrol `setup.md` 与定时任务创建 | 待办 |
