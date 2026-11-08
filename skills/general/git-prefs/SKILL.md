@@ -11,7 +11,7 @@ description: git 操作偏好：可审计提交、rebase 同步远程、删除�
 
 - 按可审计粒度提交，提交信息清晰、满足 Conventional Commits，且只提交应入库文件
 - 核验修改内容相关的最小检查。已有证据与当前源码（含脏改动）、工具链及检查范围一致时，可读原始日志/报告、确认命令和退出码后采用；源码变化、证据不完整或覆盖有缺口时补跑对应检查。失败先修复，再完成提交
-- 改动涉及 `skills/` 或 `README.md` 时（gitbobobo/skills 仓库），提交前确认 `node scripts/check.mjs` 在当前内容上通过；同源码的已有证据按上条核验采用
+- 改动涉及 `skills/` 或 `README.md` 时（gitbobobo/bstack 仓库），提交前确认 `node scripts/check.mjs` 在当前内容上通过；同源码的已有证据按上条核验采用
 
 流程：
 

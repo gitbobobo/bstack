@@ -1,11 +1,12 @@
-# skills
+# bstack
 
-个人开发工作流，保存常用技能与工具脚本。
+个人开发工作流：一组相互配合的技能与工具脚本，从任务安排到线程收尾由巡检全程自动处理，偏好统一存放在 `~/.config/bstack/`。
 
 ## 目录结构
 
-- `skills/godbobo/general/`：通用原创技能
-- `skills/godbobo/specialized/`：专用原创技能
+- `skills/bstack/`：bstack 体系技能，相互配合，共用 `~/.config/bstack/` 配置
+- `skills/general/`：通用原创技能，可单独安装
+- `skills/services/`：配套自建服务的专用技能（源头在各服务仓库）
 - `skills/forks/`：分叉技能（导入时注明来源，保持可独立安装）
 - `docs/`：文档（bstack 改造方案与进度见 [docs/bstack-design.md](docs/bstack-design.md)）
 
@@ -16,65 +17,62 @@
 在新设备上，把下面代码块的内容直接发给任意 agent，即可按文档安装/更新本仓库全部技能：
 
 ```text
-请阅读 https://raw.githubusercontent.com/gitbobobo/skills/main/docs/setup.md，按文档安装/更新该仓库的全部技能，不确定时先问我。
+请阅读 https://raw.githubusercontent.com/gitbobobo/bstack/main/docs/setup.md，按文档安装/更新该仓库的全部技能，不确定时先问我。
 ```
 
-## 技能列表
-
-### git-prefs
-
-git 操作偏好：可审计粒度的规范提交、远程同步（未推送分支优先 rebase，已开 PR 的分支审查期间不追目标分支）、删除当前工作树。「删除工作树」默认指当前所在的工作树，跑 `scripts/empty-worktree.mjs`：清空全部内容、保留目录壳维持终端 cwd，并在主仓库注销注册；仅限用户明确要求时执行。
-
-详见 [skills/godbobo/general/git-prefs/SKILL.md](skills/godbobo/general/git-prefs/SKILL.md)。
-
-### pr-review-loop
-
-开 PR 前确定模板，在描述里写清意图与范围；审查按预算推进：默认 3 轮，安全、数据、并发类 blocker 才延长到 5 轮，后续轮只核对改动代码与未关闭意见。意见按意图自行分级（blocker / should / nit / wrong），审查者的 P0–P2 只是线索，只为 blocker 和 should 推送，nit 一行回复不改代码；某轮只剩 nit 就收尾。同一 blocker 反复复发时按需读取方向审计。测试失败统一分诊、限制无效重跑，复用 diagnosing-bugs 定位根因；临时隔离须报告覆盖缺口与恢复安排。宿主回复接口按需读取引用文件，审查期间不追目标分支。
-
-详见 [skills/godbobo/general/pr-review-loop/SKILL.md](skills/godbobo/general/pr-review-loop/SKILL.md)。
-
-### pr-finish
-
-PR 收尾：对最新目标分支一次性整合（默认 merge）并解决冲突、处理阻塞合并的基线问题；收尾推送触发的审查沿用 pr-review-loop 的账本与预算，只为整合带来的 blocker 再修，无冲突的整合只等检查；合并后交接后续工作、关闭关联问题、回收工作树与分支。检查与合并入口、合并方式、交接约定读仓库自己的文档，未声明时用默认做法。PR 审查收敛、用户要求收尾时使用。
-
-详见 [skills/godbobo/general/pr-finish/SKILL.md](skills/godbobo/general/pr-finish/SKILL.md)。
+## bstack 技能
 
 ### bstack-setup
 
 新设备与偏好变更的统一入口（由 setup-env 改名合并而来）。设备初始化：统一设置本机各 agent harness 的全局代理规则（唯一真源 `rules/AGENTS.md`，指向旧 setup-env 的链接自动改指）并做环境体检；区分 Cargo 工具未安装与 PATH 不可见，装了 sccache 时配置全局 rustc-wrapper 共享编译缓存，检查 Windows 上 pi 是否会落到 WSL bash。偏好配置：`discover.mjs` 列出带 `references/setup.md` 的技能及其配置状态，按各技能的 setup.md 询问并写入 `~/.config/bstack/`；可选用私有仓库（`fj`/`gh` 创建）在各设备同步配置，`config-repo.mjs` 负责 init/clone/pull/commit。仅限用户主动调用。
 
-详见 [skills/godbobo/general/bstack-setup/SKILL.md](skills/godbobo/general/bstack-setup/SKILL.md)。
+详见 [skills/bstack/bstack-setup/SKILL.md](skills/bstack/bstack-setup/SKILL.md)。
 
 ### t3-code
 
 本机 T3 Code 运行状态的内部参考：状态库表布局与会话查询方法、子线程取证（`view:"activity"` 与 `file_change` 快照恢复）、编排机制事实、监听与唤醒（含 MCP 工具延迟加载与本账号评论不唤醒的坑）与平台坑；含孤儿工作树回收脚本 `t3-worktree-gc.mjs`（实时输出进度，`--purge-build` 可只清保留树的构建产物，空间统计需显式加 `--measure-size`）；跨环境复盘用 `t3-activity-scan.mjs` 经 T3 MCP 端点收集各环境活跃线程及其技能读取记录。专用技能。
 
-详见 [skills/godbobo/specialized/t3-code/SKILL.md](skills/godbobo/specialized/t3-code/SKILL.md)。
+详见 [skills/bstack/t3-code/SKILL.md](skills/bstack/t3-code/SKILL.md)。
 
 ### t3-orchestrator
 
 T3 Code 多 harness 编排：pi / codex / devin / factory droid 四个 harness，pi 经 cliproxyapi 调 glm/deepseek/grok/gpt 系（额度由 cliproxyapi 自动路由）；swe-2 只走 devin、opus 走 devin/droid（用户定；cliproxyapi 的 devin 订阅已移除）。选 harness/模型由 `route.mjs` 按固定规则裁决（默认值在 `route-data.mjs`，用户在 `~/.config/bstack/t3-orchestrator.json` 覆盖模型状态、入口与候选顺序，`route.mjs audit` 核对生效路由数据与实时目录），delegate_task 派活验收（子代理一律 `runtimeMode:"full-access"`，不为它向用户索要授权；卡在 `approval_request` 就取消重派），失败自动换路续跑；实现顾问由 `--task design` 单独选出，Opus 只做实现顾问；非产品决策由主代理按「根治」取向自主拍板，命中方向顾问触发（审计、技术取舍、跨模块方案、高风险决策）就派一位顾问独立裁决，不停下等用户；附 `route-playground.mjs` 可视化路由沙盒。专用技能，仅限用户或技能点名时调用。
 
-详见 [skills/godbobo/specialized/t3-orchestrator/SKILL.md](skills/godbobo/specialized/t3-orchestrator/SKILL.md)。
+详见 [skills/bstack/t3-orchestrator/SKILL.md](skills/bstack/t3-orchestrator/SKILL.md)。
 
 ### t3-patrol
 
 跨 T3 环境巡检未结线程，适合每小时定时运行。逐线程核对快照与实际进展，再做故障恢复、预算收口（轮次越过审查预算且只剩非 blocker 时推线程停止修复并收尾）、代授权及交接；消息沉默和审查时间差先补查，「审查在途」须有晚于最新 HEAD 的触发证据，队列只清理已核实可被 PR 实况覆盖的系统通知。发送前刷新并去重，发送后区分已排队、已启动、已执行和已完成，报告保留未测与审查者缺席事实。仍有 blocker 的审计预测失败或反例由实现线程结合顾问意见处理根因，技术分歧不自动交回用户；用户决策与外部阻塞分开汇报。模型恢复、快照取证和交接细节按分支读取。模型阶梯、名额与阈值的默认值在 `references/config.defaults.json`，用户在 `~/.config/bstack/t3-patrol.json` 只写要改的键（`scripts/patrol-config.mjs` 输出生效配置，拼错的键与错类型报警告）；设备对照取自共用的 `environments.json`；可按设备、按仓库配置容量池，快照按名额与磁盘余量给出各仓库可建线程数；远程设备的磁盘由资源探测线程（`scripts/env-probe.mjs`）去量，磁盘不够时可经 t3-code 的 `t3-worktree-gc.mjs` 回收孤儿工作树与构建产物。收尾已有线程后，按 t3-dispatch 的档位用剩余空位派新任务（依赖同级安装的 t3-dispatch）。初始化（认设备、验证快照通道、询问偏好、试跑、创建定时任务）见 `references/setup.md`，经 bstack-setup 运行。专用技能，仅定时任务点名时使用。
 
-详见 [skills/godbobo/specialized/t3-patrol/SKILL.md](skills/godbobo/specialized/t3-patrol/SKILL.md)。
+详见 [skills/bstack/t3-patrol/SKILL.md](skills/bstack/t3-patrol/SKILL.md)。
 
 ### t3-dispatch
 
 从问题来源挑问题，按各设备空位在 T3 环境建工作树线程派活。流程：对账派活台账 → 用 t3-patrol 的容量规则算各设备可建数（`patrol-snapshot.mjs --capacity-only`，远程磁盘经资源探测） → 列候选 → 按信息完整度、决策依赖、重叠与优先级挑选，按仓库文档的设备分工匹配设备 → 跨环境查重 → 认领、渲染提示词、建线程、回读确认开工，失败归还；已派线程没交付就结束时归还重派，同一问题有重派上限。问题来源经 `scripts/issue-source.mjs` 统一读写，目前接 Fast Ship（经 fast-ship 技能的脚本调用，按代码主仓地址匹配项目）；派活提示词模板放 `~/.config/bstack/templates/`，`{{source_block}}` 处插入来源附加块；台账在 `~/.config/bstack/state/`，只在本机。偏好在 `~/.config/bstack/t3-dispatch.json`（`scripts/dispatch-config.mjs` 输出生效配置），巡检调用按 `mode`（off / dry-run / auto）决定是否执行，用户当面要求派活直接执行。初始化见 `references/setup.md`。依赖同级安装的 t3-patrol 与 fast-ship。
 
-详见 [skills/godbobo/specialized/t3-dispatch/SKILL.md](skills/godbobo/specialized/t3-dispatch/SKILL.md)。
-### html-preview
+详见 [skills/bstack/t3-dispatch/SKILL.md](skills/bstack/t3-dispatch/SKILL.md)。
 
-通过 HTML Preview REST API 上传、管理 HTML/ZIP 预览页并生成分享链接（需 API Key）。专用技能，配合同名服务使用。
+## 通用技能
 
-来源：[gitbobobo/html-preview — skills/html-preview](https://github.com/gitbobobo/html-preview/tree/main/skills/html-preview)
+### git-prefs
 
-详见 [skills/godbobo/specialized/html-preview/SKILL.md](skills/godbobo/specialized/html-preview/SKILL.md)。
+git 操作偏好：可审计粒度的规范提交、远程同步（未推送分支优先 rebase，已开 PR 的分支审查期间不追目标分支）、删除当前工作树。「删除工作树」默认指当前所在的工作树，跑 `scripts/empty-worktree.mjs`：清空全部内容、保留目录壳维持终端 cwd，并在主仓库注销注册；仅限用户明确要求时执行。
+
+详见 [skills/general/git-prefs/SKILL.md](skills/general/git-prefs/SKILL.md)。
+
+### pr-review-loop
+
+开 PR 前确定模板，在描述里写清意图与范围；审查按预算推进：默认 3 轮，安全、数据、并发类 blocker 才延长到 5 轮，后续轮只核对改动代码与未关闭意见。意见按意图自行分级（blocker / should / nit / wrong），审查者的 P0–P2 只是线索，只为 blocker 和 should 推送，nit 一行回复不改代码；某轮只剩 nit 就收尾。同一 blocker 反复复发时按需读取方向审计。测试失败统一分诊、限制无效重跑，复用 diagnosing-bugs 定位根因；临时隔离须报告覆盖缺口与恢复安排。宿主回复接口按需读取引用文件，审查期间不追目标分支。
+
+详见 [skills/general/pr-review-loop/SKILL.md](skills/general/pr-review-loop/SKILL.md)。
+
+### pr-finish
+
+PR 收尾：对最新目标分支一次性整合（默认 merge）并解决冲突、处理阻塞合并的基线问题；收尾推送触发的审查沿用 pr-review-loop 的账本与预算，只为整合带来的 blocker 再修，无冲突的整合只等检查；合并后交接后续工作、关闭关联问题、回收工作树与分支。检查与合并入口、合并方式、交接约定读仓库自己的文档，未声明时用默认做法。PR 审查收敛、用户要求收尾时使用。
+
+详见 [skills/general/pr-finish/SKILL.md](skills/general/pr-finish/SKILL.md)。
+
+## 服务技能
 
 ### fast-ship
 
@@ -82,7 +80,15 @@ T3 Code 多 harness 编排：pi / codex / devin / factory droid 四个 harness�
 
 来源：[gitbobobo/fast_ship — skills/fast-ship](https://github.com/gitbobobo/fast_ship/tree/main/skills/fast-ship)
 
-详见 [skills/godbobo/specialized/fast-ship/SKILL.md](skills/godbobo/specialized/fast-ship/SKILL.md)。
+详见 [skills/services/fast-ship/SKILL.md](skills/services/fast-ship/SKILL.md)。
+
+### html-preview
+
+通过 HTML Preview REST API 上传、管理 HTML/ZIP 预览页并生成分享链接（需 API Key）。专用技能，配合同名服务使用。
+
+来源：[gitbobobo/html-preview — skills/html-preview](https://github.com/gitbobobo/html-preview/tree/main/skills/html-preview)
+
+详见 [skills/services/html-preview/SKILL.md](skills/services/html-preview/SKILL.md)。
 
 ### uiv
 
@@ -90,7 +96,7 @@ T3 Code 多 harness 编排：pi / codex / devin / factory droid 四个 harness�
 
 来源：[gitbobobo/uiv — skills/uiv](https://github.com/gitbobobo/uiv/tree/main/skills/uiv)
 
-详见 [skills/godbobo/specialized/uiv/SKILL.md](skills/godbobo/specialized/uiv/SKILL.md)。
+详见 [skills/services/uiv/SKILL.md](skills/services/uiv/SKILL.md)。
 
 ## 分叉技能
 

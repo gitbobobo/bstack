@@ -17,7 +17,7 @@
 ### 1. 查看仓库技能清单（只列不装）
 
 ```bash
-npx skills add gitbobobo/skills -l
+npx skills add gitbobobo/bstack -l
 ```
 
 ### 2. 确认安装范围
@@ -35,10 +35,10 @@ npx skills add gitbobobo/skills -l
 
 ```bash
 # 全部技能，装到通用目录 + Claude Code（推荐）
-npx skills add gitbobobo/skills -g -s "*" -a universal -a claude-code -y
+npx skills add gitbobobo/bstack -g -s "*" -a universal -a claude-code -y
 
 # 单个技能
-npx skills add gitbobobo/skills -g -s git-prefs -a universal -a claude-code -y
+npx skills add gitbobobo/bstack -g -s git-prefs -a universal -a claude-code -y
 ```
 
 ### 4. 验证
@@ -55,7 +55,10 @@ npx skills ls -g
 
 安装后在 agent 里调用 `$bstack-setup`：同步全局代理规则、体检本机，并按需配置各技能偏好（存于 `~/.config/bstack/`，可选私有仓库同步）。
 
-从旧版升级的设备：`bstack-setup` 取代了 `setup-env`。装好新技能并跑过一次设备初始化后，执行 `npx skills remove setup-env -g -y` 卸掉旧技能。
+从旧版升级的设备：
+
+- 仓库已从 `gitbobobo/skills` 改名为 `gitbobobo/bstack`，技能目录也重新分组，旧安装记录里的仓库地址和技能路径都已失效，不要靠 `npx skills update` 升级，重跑上面的全部安装命令覆盖安装一次，安装记录随之改到新地址。
+- `bstack-setup` 取代了 `setup-env`。装好新技能并跑过一次设备初始化后，执行 `npx skills remove setup-env -g -y` 卸掉旧技能。
 
 ## 更新
 
