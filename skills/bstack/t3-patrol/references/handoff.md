@@ -19,18 +19,16 @@
 
 2. **查重**：在目标环境用 `t3_thread_search` 搜 PR 号和来源线程 id，已有线程接过这段工作就跳过新建。
 
-3. **看容量**：读快照里目标环境的 `environments[].capacity`（下称「容量」；配置项写作 `config.capacity.*`）。名额按占用线程算；磁盘本机由快照实测，远程环境取状态文件里未过期的资源探测（`disk.source` 为 `probe@<时间>`），没有时先做[资源探测](#资源探测)。占用名额的是：有活跃 run 或有子代理在跑的顶层线程（含「代码审查 / 视觉审查 · PR #N」线程，不含子代理线程本身和探测线程；父线程派出子代理后自己会 completed，等子代理唤醒，工作树仍在用），以及 PR 仍 open、最近一次 run 在 `config.capacity.occupyWindowHours`内结束的线程——等审查的线程在两轮之间会暂时 completed，但工作树和编译资源还占着。PR 已合并或关闭（工作树已回收）、没有 PR 又没在跑的线程不占名额，所以来源线程本身通常不算。
+3. **看容量**：读快照里目标环境的 `environments[].capacity`（下称「容量」；配置项写作 `config.capacity.*`）。巡检只管名额，磁盘与负载由新线程在重验证前自己查（t3-orchestrator「资源不足时」）。占用名额的是：有活跃 run 或有子代理在跑的顶层线程（含「代码审查 / 视觉审查 · PR #N」线程，不含子代理线程本身和探测线程；父线程派出子代理后自己会 completed，等子代理唤醒，工作树仍在用），以及 PR 仍 open、最近一次 run 在 `config.capacity.occupyWindowHours` 内结束的线程——等审查的线程在两轮之间会暂时 completed，但工作树和编译资源还占着。PR 已合并或关闭（工作树已回收）、没有 PR 又没在跑的线程不占名额，所以来源线程本身通常不算。
 
    - **设备总数**：容量的 `used` / `max`，占用者在 `occupying`。上限取该设备在 `config.capacity.devices` 里的 `maxActiveThreads`；没写时是各池 `max` 之和（各池可以同时用满）；设备没配池时用 `config.capacity.maxActiveThreads`。
    - **仓库池**：在 `config.capacity.devices` 里配置过的设备还按仓库分池（容量的 `pools`，每个占用线程只进第一个匹配的池，审查线程不占池）。
-   - **磁盘**：容量的 `disk`。`freeGB` 是工作树所在盘的剩余空间；`growing` 是 `config.capacity.growthWindowHours` 内新建、多半还在构建的有工作树线程，`reserveGB` 按它们所在池的 `footprintGB`（缺省 `config.capacity.defaultFootprintGB`）给它们预留；`spareGB` = 剩余 − `config.capacity.minFreeDiskGB` − 预留。远程环境的 `freeGB` 为 null 时，本轮要往那里建线程先做资源探测，再重算容量。
-   - **可建数**：目标仓库的 `canonicalKey` 在容量的 `freeByRepo` 里查，它已是设备空位、所属池空位与磁盘可容纳数（`spareGB` 除以池的 `footprintGB`）三者的最小值；项目没有仓库身份时用 `freeOther`。`disk.freeGB` 为 null 时它只反映名额，不能直接用来建线程。容量带 `projectsError` 时池归类不可信，只按设备总数判断，并在「例行复核」记一笔。
-   - **磁盘不够时回收**：可建数被磁盘卡成 0、而名额还有空时，在该环境做一次带回收的资源探测（本机直接跑 `node <技能目录>/scripts/env-probe.mjs --reclaim`），按回收后的剩余空间重算。回收只删已终结线程留下的孤儿工作树，以及保留工作树里可重建的构建产物，判定交给 t3-code 技能的 `t3-worktree-gc.mjs`。每个环境每轮最多回收一次。
-   - **自主判断**：这些数字是上限，不是指标。快照或探测显示某台设备上的线程比 `footprintGB` 预估的大（例如剩余空间一轮内掉得很快），或机器上有用户手动开的大构建，可以少建并在报告里写原因；不能多于可建数。
+   - **两道闸**：容量带 `blocked` 时这台设备一律不建——本机磁盘（快照实测 `disk.freeGB`）低于 `config.capacity.minFreeDiskGB`，或设备上有线程停在 `【等待资源】`。
+   - **可建数**：目标仓库的 `canonicalKey` 在容量的 `freeByRepo` 里查，它已是设备空位与所属池空位的较小值，被闸住时为 0；项目没有仓库身份时用 `freeOther`。容量带 `projectsError` 时池归类不可信，只按设备总数判断，并在「例行复核」记一笔。
 
-   可建数为 0 就本轮不建，把这次交接记成「等待空位」并写明卡在设备总数、哪个池还是磁盘：来源线程先不 settle，下一轮重新检查。空位先给等待中的交接；同一环境有多个交接在等时，按来源线程收尾的先后顺序建，每建一个从对应设备与池的空位里减一、从 `spareGB` 里减去该池的 `footprintGB`，建到为 0 为止。
+   可建数为 0 就本轮不建，把这次交接记成「等待空位」并写明卡在设备总数、哪个池还是哪道闸：来源线程先不 settle，下一轮重新检查。空位先给等待中的交接；同一环境有多个交接在等时，按来源线程收尾的先后顺序建，每建一个从对应设备与池的空位里减一，建到为 0 为止。
 
-4. **新建线程**（前提：第 3 步写出了目标环境的容量占用、磁盘剩余与目标仓库的可建数，且可建数大于 0）：
+4. **新建线程**（前提：第 3 步写出了目标环境的容量占用与目标仓库的可建数，且可建数大于 0）：
 
    - `t3_thread_launch` 带上目标环境的 `environmentId`；
    - `projectId` 取目标环境里同一仓库的项目（`t3_thread_list` 找同仓库的近期线程，用它的 `projectId`）；
@@ -46,27 +44,3 @@
    任务书里有没做完的后续段、而汇报没给提示词：按 `M13` 先问，来源线程本轮不 settle。两处都确认没有后续段、或交接线程已实际接手，才用 `t3_thread_organize`（`action:"settle"`，带来源环境的 `environmentId`）。实际接手按 [工作树准备失败](recovery.md#工作树准备失败) 的完成标准验收；launch 返回成功仅记已建线，准备失败或排队未启动时保留来源。
 
    收尾汇报里提到的遗留事项照抄进报告，并写明各自去向（登记文档、新建 issue 链接、交接线程）；汇报列了条目但去向里没有新线程、也没先问过提示词的，不算已有去向——按上面「缺提示词」先发给来源线程，来源线程本轮不 settle。
-
-## 资源探测
-
-远程环境的磁盘只能派线程去量。快照的 `disk.source` 已是 `probe@<时间>` 时不再探测（要回收的除外）；一轮里每个环境最多探测一次（含回收的那次）。用 `delegate_task`：
-
-- `mode:"wait"`，`timeoutMs` 300000，`title:"资源探测"`，`role:"research"`；
-- `target` 带该环境的 `environmentId`、该环境任一项目的 `projectId`（`t3_project_list`），模型取本轮 modelLadder 首档，思考档位放到最低；
-- `task` 用下面的文字，`<工作树目录>` 换成该环境任一线程 `worktreePath`（`t3_thread_read` 可得）的上两级目录，取不到就删掉这个占位、让它按顺序试；要回收时把第 1 步的命令换成带 `--reclaim` 的：
-
-```
-资源探测：不提交，不改动任何文件（命令带 --reclaim 时由脚本自己回收，你不另删东西）。
-1. 执行 `node "$HOME/.agents/skills/t3-patrol/scripts/env-probe.mjs"`，把输出的 JSON 原样作为回复。
-2. 这个脚本不存在时不要回收，改量 <工作树目录> 所在的磁盘（目录不存在就依次试 `$T3CODE_HOME/worktrees`、~/.t3/worktrees、主目录）：POSIX 跑 `df -Pk <目录>`；Windows 用 PowerShell 跑 `Get-PSDrive -PSProvider FileSystem | Select-Object Name,Root,Free | ConvertTo-Json -Compress`（Free 是字节）。回复一行 JSON：{"source":"fallback","path":"<实际量的目录>","raw":"<命令输出；df 取表头和数据行>"}。
-回复只含 JSON，不加解释。
-```
-
-拿到回复后：
-
-1. 取剩余空间：env-probe 的 `diskFreeGB`；回退结果自己从 `raw` 换算（`df -Pk` 的 Available 列是 KB，乘 1024 再除以 10⁹；`Get-PSDrive` 取 `path` 所在盘符那一项的 Free，单位字节，除以 10⁹）。`raw` 是格式化表格、单位不明，或 Windows 认不出 `path` 在哪个盘时，按探测失败处理。
-2. 记下并重算：`node <技能目录>/scripts/patrol-state.mjs probe --env <environmentId> --disk-free <GB>` 存进状态文件（`config.capacity.probeCacheHours` 内的后续快照与派活直接带入，不再探测）；再跑 `node <技能目录>/scripts/patrol-capacity.mjs --snapshot <快照文件> --env <environmentId> --disk-free <GB>`，输出的 `freeByRepo` 取代快照里的值。
-3. 回收结果在 `reclaim`：`freedGB` 是腾出的空间，`summary` 是 t3-worktree-gc 的汇总行，`failed` 列出删除失败的目录。`ok` 为 false 时把 `error` 或 `failed` 写进「阻塞」。
-4. 用 `t3_thread_organize`（`action:"settle"`，带 `remoteChild.environmentId` 与 `remoteChild.threadId`）settle 探测线程。
-
-探测超时、失败或回复不是 JSON：该环境本轮不新建，交接记「等待空位」，原因写「磁盘未知」，并把探测线程的 link 写进「阻塞」。

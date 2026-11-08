@@ -1,7 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { fullRoundOf, triageOf } from "./patrol-triage.mjs";
-import { probeFor } from "./patrol-state.mjs";
 
 const NOW = Date.parse("2026-11-08T12:00:00Z");
 const ago = (min) => new Date(NOW - min * 60000).toISOString();
@@ -58,9 +57,12 @@ test("排队超时", () => {
   assert.equal(tri({ status: "queued", lastRunEndedAt: ago(5) }).triage, "quiet");
 });
 
-test("探测缓存按 TTL 生效", () => {
-  const state = { probes: { e1: { diskFreeGB: 100, at: ago(60) }, e2: { diskFreeGB: 50, at: ago(300) } } };
-  assert.equal(probeFor(state, "e1", 3, NOW).diskFreeGB, 100);
-  assert.equal(probeFor(state, "e2", 3, NOW), null);
-  assert.equal(probeFor(state, "e3", 3, NOW), null);
+test("等待资源：无变化时静默；设备空出名额或等待在两轮之间满时限才叫醒", () => {
+  const base = { status: "completed", lastMsgAt: ago(200), lastRunEndedAt: ago(200), waitingResources: { at: ago(100) } };
+  assert.deepEqual(tri(base).triageReasons, ["等待资源"]);
+  assert.equal(tri(base).triage, "quiet");
+  assert.deepEqual(triageOf(base, { since, thresholds, now: NOW, deviceFreed: true }).triageReasons, ["设备空出名额，资源可能已释放"]);
+  const long = { ...base, waitingResources: { at: ago(200) } };
+  assert.deepEqual(triageOf(long, { since, thresholds, now: NOW, resourceWakeHours: 3 }).triageReasons, ["等待资源已满 3 小时"]);
+  assert.equal(triageOf({ ...base, waitingResources: { at: ago(400) } }, { since, thresholds, now: NOW, resourceWakeHours: 3 }).triage, "quiet");
 });

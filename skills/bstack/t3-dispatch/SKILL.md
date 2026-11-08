@@ -5,14 +5,14 @@ description: 从问题来源挑问题，在各 T3 环境建工作树线程派活
 
 # T3 派活
 
-把问题来源里待做的问题挑出来，按各设备的空位建工作树线程。下文 `<技能目录>` 指本技能目录；t3-patrol 与 fast-ship 技能须同级安装，容量与资源探测沿用 t3-patrol 的规则。
+把问题来源里待做的问题挑出来，按各设备的空位建工作树线程。下文 `<技能目录>` 指本技能目录；t3-patrol 与 fast-ship 技能须同级安装，容量沿用 t3-patrol 的规则。派活只看名额：磁盘与负载由新线程在重验证前自己查（t3-orchestrator「资源不足时」）。
 
 ## 0. 前提
 
 1. 读配置：`node <技能目录>/scripts/dispatch-config.mjs`。`errors` 非空就停下，把文件路径与报错交给用户；`warnings` 写进报告。`repos` 为空时请用户先经 bstack-setup 配置派活（[setup.md](references/setup.md)）。
 2. 定档位：
    - 用户当面要求派活（如「给 pc 再分两个任务」）就是授权，按用户给的设备与数量执行，档位不看 `mode`。
-   - 巡检调用时按 `mode`：`off` 不派；`dry-run` 走到第 5 步出计划为止，全程只读（第 0 步该 `record`、`release` 的只列出来，资源探测不带 `--reclaim`）；`auto` 全程执行。`~/.config/bstack/PAUSE` 存在时同样不派。
+   - 巡检调用时按 `mode`：`off` 不派；`dry-run` 走到第 5 步出计划为止，全程只读（第 0 步该 `record`、`release` 的只列出来）；`auto` 全程执行。`~/.config/bstack/PAUSE` 存在时同样不派。
 3. 对账台账：`node <技能目录>/scripts/issue-source.mjs ledger`。
    - `pending` 是认领后没记下线程的问题：按问题编号在各环境 `t3_thread_search`，找到线程就补 `record`，找不到就 `release` 归还。
    - `active` 是已派出、还没了结的问题：对每条在其 `environmentId` 上 `t3_thread_read`（`limit` 1）。线程不存在、已 settle 或已归档时 `release`：问题还在进行中且没有 PR 就归还，已推进或有 PR 的只了结台账。线程还开着就不动，它归巡检管。
@@ -22,11 +22,11 @@ description: 从问题来源挑问题，在各 T3 环境建工作树线程派活
 
 1. `node <t3-patrol 技能目录>/scripts/patrol-snapshot.mjs --capacity-only > /tmp/t3-dispatch-capacity.json`。每个环境带 `capacity`、`projects`（项目 id 与 `canonicalKey`）和 `openThreads`（未 settle 的顶层线程标题）。退出码 2 表示当前 harness 拿不到 T3 MCP 会话（如 Codex）：用 `t3_environment_links`、`t3_project_list`、`t3_thread_list` 手工取同样的数，按下面第 3 条的口径直接算可建数，不必拼成快照文件。
 2. 目标设备：`repos[].devices` 列出的设备；没写时取 `projects` 里有该仓库的所有环境。
-3. 每台目标设备的可建数是 `capacity.freeByRepo[<repo>]`，口径、磁盘与资源探测按 [t3-patrol handoff.md 第 3 步](../t3-patrol/references/handoff.md)。远程环境 `disk.freeGB` 为 null（`disk.source` 为 null，没有未过期的探测记录）时 `freeByRepo` 只反映名额：名额已经是 0 的设备不探测，大于 0 的先做资源探测、记进状态文件再重算；探测失败的设备本轮不派。
+3. 每台目标设备的可建数是 `capacity.freeByRepo[<repo>]`，口径按 [t3-patrol handoff.md 第 3 步](../t3-patrol/references/handoff.md)。容量带 `blocked`（本机磁盘低于保底，或设备上有线程停在 `【等待资源】`）时这台设备本轮不派，原因照抄进报告。
 4. 节流：本轮最多派 `limits.perRun` 个；`ledger` 的 `launched`（最近 24 小时）加本轮不超过 `limits.perDay`。
 5. 所有目标设备的可建数都是 0，或节流余量为 0：到此为止，跳过第 2–6 步，直接按第 7 步报告空位。
 
-完成标准：每台目标设备写出可建数及其依据（名额、池、磁盘），卡在 0 的写明卡在哪。用户要的数量超过可建数时，按可建数派并说明原因。
+完成标准：每台目标设备写出可建数及其依据（名额、池、闸），卡在 0 的写明卡在哪。用户要的数量超过可建数时，按可建数派并说明原因。
 
 ## 2. 候选
 
@@ -66,11 +66,11 @@ description: 从问题来源挑问题，在各 T3 环境建工作树线程派活
    - `clientRequestId` 取 `t3-dispatch-<问题 ID>-<认领输出的 at>`，重试同一次派活不会建出第二个线程。
 4. **记账**：`issue-source.mjs record --repo <repo> --id <问题 ID> --env <environmentId> --thread <threadId>`。
 5. **回读**：`t3_thread_read`（`limit` 1）确认 run 进入 starting 或 running，且 `worktreePath` 有值。`t3_thread_launch` 报错时 `release` 归还问题；线程建了但工作树准备失败，同样归还，并把线程 link 写进报告交给巡检恢复。
-6. **扣空位**：该设备与所属池的空位各减一，`disk.spareGB` 减去该池的 `footprintGB`。
+6. **扣空位**：该设备与所属池的空位各减一。
 
 ## 7. 报告
 
 - **本轮派活**：每条写问题编号、标题、设备、线程 link 和一句推荐理由。
 - **跳过**：被跳过的高优先级问题逐条写原因；其余只给计数：`skipped` 多少，挑选阶段硬性跳过（缺信息、要决策、重叠等）多少、因优先级或空位暂缓多少。
-- **空位**：每台设备的可建数与本轮用掉的数（`dry-run` 写计划占用），卡住的写原因（名额、池、磁盘、节流）。
+- **空位**：每台设备的可建数与本轮用掉的数（`dry-run` 写计划占用），卡住的写原因（名额、池、闸、节流）。
 - **待办**：归还失败、准备失败的线程、配置警告。

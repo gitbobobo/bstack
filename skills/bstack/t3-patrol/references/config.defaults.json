@@ -31,13 +31,11 @@
     "maxActiveThreads": 5,
     "occupyWindowHours": 2,
     "minFreeDiskGB": 20,
-    "defaultFootprintGB": 5,
-    "growthWindowHours": 2,
-    "probeCacheHours": 3,
     "devices": []
   },
   "triage": {
-    "fullEveryHours": 6
+    "fullEveryHours": 6,
+    "resourceWakeHours": 3
   },
   "thresholds": {
     "queuedMinutes": 30,

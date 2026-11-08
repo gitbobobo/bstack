@@ -21,8 +21,12 @@ export function fullRoundOf(lastRound, { fullEveryHours }, now = Date.now()) {
   return { full: false, since: lastRound.snapshotAt };
 }
 
-// c 是快照候选（含 prHealth 判定字段）；since 是上一轮快照时间（全量时为 null）。
-export function triageOf(c, { since, thresholds, now = Date.now() }) {
+// 线程停在资源不足时按约定留下的标记（t3-orchestrator「资源不足时」）：最后一条消息首行以它开头。
+export const WAIT_MARK = "【等待资源】";
+
+// c 是快照候选（含 prHealth 判定字段、waitingResources）；since 是上一轮快照时间（全量时为 null）；
+// deviceFreed 表示这台设备的占用比上一轮少了（有线程结束，资源可能已释放）。
+export function triageOf(c, { since, thresholds, now = Date.now(), deviceFreed = false, resourceWakeHours = 3 }) {
   const reasons = [];
   const s = since ? ms(since) : null;
   const after = (iso) => s !== null && ms(iso) > s;
@@ -54,11 +58,16 @@ export function triageOf(c, { since, thresholds, now = Date.now() }) {
     if ((c.prs ?? []).some((p) => p.includes("(stale)"))) reasons.push("结论未消费");
     if ((c.prs ?? []).some((p) => p.includes("(health-unavailable)"))) reasons.push("PR 实况缺失");
     if (crossed(c.lastMsgAt, thresholds.idleQuestionMinutes) && /[？?]\s*$/.test(String(c.tail?.at(-1) ?? ""))) reasons.push("提问久未答");
+    // 等资源的线程靠巡检叫醒：设备空出名额，或等待在两轮之间满 resourceWakeHours。
+    if (c.waitingResources) {
+      if (deviceFreed) reasons.push("设备空出名额，资源可能已释放");
+      if (crossed(c.waitingResources.at, resourceWakeHours * 60)) reasons.push(`等待资源已满 ${resourceWakeHours} 小时`);
+    }
   }
 
   // 久审本身不叫醒线程：M2 有重发窗口，上一轮已审计且没有新变化时再看一遍只是重复。有别的变化或全量时才一并审。
   if (c.needsConvergenceAudit && reasons.length) reasons.push("久审");
   const uniq = [...new Set(reasons)];
   if (uniq.length) return { triage: "hot", triageReasons: uniq };
-  return { triage: "quiet", triageReasons: [RUNNING.has(c.status) || QUEUED.has(c.status) ? "在跑，信号正常" : "上轮后无变化"] };
+  return { triage: "quiet", triageReasons: [RUNNING.has(c.status) || QUEUED.has(c.status) ? "在跑，信号正常" : c.waitingResources ? "等待资源" : "上轮后无变化"] };
 }

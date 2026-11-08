@@ -7,15 +7,16 @@
 // --full 强制全量分诊（所有候选按「有事」输出）。
 // 依赖 T3 向 harness 进程注入的 MCP 会话（ACP 类与 pi 有，Codex 没有；缺席时退出码 2，改用 MCP 工具手工取证）。
 
-import { realpathSync } from "node:fs";
+import { existsSync, realpathSync, statfsSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfig, loadEnvironments } from "./patrol-config.mjs";
 import { capacityOf } from "./patrol-capacity.mjs";
-import { diskOf, probePath } from "./env-probe.mjs";
 import { call, connect, hasSession, NO_SESSION, pool } from "./t3-mcp.mjs";
 import { configure as configurePr, prLiveOf } from "./pr-live.mjs";
-import { loadState, probeFor } from "./patrol-state.mjs";
-import { fullRoundOf, triageOf } from "./patrol-triage.mjs";
+import { loadState } from "./patrol-state.mjs";
+import { fullRoundOf, triageOf, WAIT_MARK } from "./patrol-triage.mjs";
 
 const args = process.argv.slice(2);
 const opt = (name, dflt) => {
@@ -51,7 +52,7 @@ const clipEnds = (s, n = CHARS) => {
 };
 // Fast Ship 发起的审查线程：结论走 Fast Ship 接口提交，失败由 Fast Ship 重派，巡检不接手。
 export const isReviewBot = (t) => /^(?:代码|视觉)审查 · PR #\d+/.test(t.title ?? "");
-// 探测线程：额度探测（「0. 前提」）与资源探测（handoff 第 3 步）都由巡检自己建、当轮 settle，不是待判任务，
+// 探测线程：额度探测（「0. 前提」）由巡检自己建、当轮 settle，不是待判任务（「资源探测」是旧版留下的同类线程），
 // 也不占名额；失败本身就是探测结果，不进 failedTopLevel。
 export const isProbe = (t) => /^(?:额度|资源)探测$/.test(String(t.title ?? "").trim());
 const isSubagent = (t) => t.parentThreadId || t.threadId.startsWith("thread:delegated-task:");
@@ -89,13 +90,30 @@ async function listProjects(environmentId) {
   }
 }
 
-// 只有本机能直接量磁盘；远程环境要派资源探测（env-probe.mjs），取到前容量只按名额。
+// 只量本机 T3 工作树所在盘（零成本的保底闸）；远程磁盘由在那里干活的线程自己查，不足时留 WAIT_MARK。
 function localDiskFreeGB() {
   try {
-    return diskOf(probePath()).diskFreeGB;
+    const root = join(process.env.T3CODE_HOME || join(homedir(), ".t3"), "worktrees");
+    const st = statfsSync(existsSync(root) ? root : homedir());
+    return Math.round(((st.bavail * st.bsize) / 1e9) * 10) / 10;
   } catch {
     return null;
   }
+}
+
+// 最后一条消息是代理留下的「等待资源」标记且线程已停：返回 { at, line }。
+function waitOf(status, lastMsg) {
+  if (LIVE.has(status) || !lastMsg || lastMsg.type !== "assistant_message") return null;
+  const text = String(lastMsg.text ?? "").trimStart();
+  return text.startsWith(WAIT_MARK) ? { at: lastMsg.updatedAt, line: clip(text.split("\n")[0], 200) } : null;
+}
+
+// --capacity-only 不读尾部，只为停着的线程补读最后一条消息，认出等资源的线程。
+async function waitingOf(scope, t) {
+  if (LIVE.has(t.status) || isProbe(t) || isReviewBot(t)) return null;
+  const r = await call("t3_thread_read", { threadId: t.threadId, afterPosition: Math.max(0, (t.itemCount ?? 0) - 20), limit: 50, maxCharsPerItem: 400, ...scope }).catch(() => null);
+  const last = (r?.items ?? []).filter((i) => i.type === "user_message" || i.type === "assistant_message").at(-1);
+  return waitOf(t.status, last);
 }
 
 async function tailOf(environmentId, t) {
@@ -128,6 +146,7 @@ async function tailOf(environmentId, t) {
     pendingRequestCount: meta.thread?.pendingRequestCount ?? 0,
     lastRunEndedAt: (meta.recentRuns ?? []).map((r) => r.completedAt ?? r.startedAt ?? r.requestedAt).filter(Boolean).sort().at(-1) ?? null,
     runs: (meta.recentRuns ?? []).slice(0, 3).map((r) => `${r.ordinal}:${r.status}${r.startedAt ? "" : "(未启动)"}@${r.completedAt ?? r.startedAt ?? r.requestedAt}`),
+    waitingResources: waitOf(t.status, msgs.at(-1)),
     tail: msgs.slice(-TAIL).map((i) => `[${i.updatedAt?.slice(5, 16)} ${i.type === "user_message" ? (i.createdBy === "user" ? "用户" : "注入") : "代理"}] ${clipEnds(i.text)}`),
     lastMsgAt: msgs.at(-1)?.updatedAt ?? null,
   };
@@ -212,16 +231,9 @@ async function liveSubagentRoots(environmentId, top) {
   return roots;
 }
 
-// 磁盘：本机实测；远程取 probeCacheHours 内的资源探测记录（patrol-state.mjs probe 记下的），都没有为 null。
-function diskFor(env, now) {
-  if (env.isLocal) return { freeGB: localDiskFreeGB(), source: "local" };
-  const p = probeFor(STATE, env.environmentId, CFG.capacity.probeCacheHours, now);
-  return p ? { freeGB: p.diskFreeGB, source: `probe@${p.at}` } : { freeGB: null, source: null };
-}
-
-// worktreeOf(t) 返回 true/false/undefined（未知按有工作树算磁盘预留）。
 // rootsP 是提前发起的 liveSubagentRoots：它要列全部活跃子代理，较慢，与候选取证并行。
-async function occupancyOf(env, top, lastRunEndedOf, worktreeOf, now, rootsP) {
+// waiting：本设备上在等资源的线程标题，非空时这台设备不建新线程。
+async function occupancyOf(env, top, lastRunEndedOf, now, rootsP, waiting) {
   const roots = await rootsP;
   const occupying = top.filter((t) => {
     if (isProbe(t)) return false;
@@ -238,23 +250,21 @@ async function occupancyOf(env, top, lastRunEndedOf, worktreeOf, now, rootsP) {
   } catch (e) {
     projectsError = String(e.message ?? e);
   }
-  const disk = diskFor(env, now);
   const capacity = {
     ...capacityOf({
-      threads: occupying.map((t) => ({ title: clip(t.title, 40), projectId: t.projectId, reviewBot: isReviewBot(t), createdAt: t.createdAt, worktree: worktreeOf(t) })),
+      threads: occupying.map((t) => ({ title: clip(t.title, 40), projectId: t.projectId, reviewBot: isReviewBot(t) })),
       projects,
       device: DEVICE_OF.get(env.environmentId),
       cfg: CFG.capacity,
-      diskFreeGB: disk.freeGB,
-      now,
+      diskFreeGB: env.isLocal ? localDiskFreeGB() : null,
+      waiting,
     }),
     ...(projectsError ? { projectsError } : {}),
   };
-  capacity.disk.source = disk.source;
   return { occupying, capacity, projects };
 }
 
-// --capacity-only：只算容量，供派活使用。只给 PR 仍 open 的已停线程与在建窗口内的线程各读一次线程元数据，不读尾部消息与 PR 实况。
+// --capacity-only：只算容量，供派活使用。只给 PR 仍 open 的已停线程读一次 run 记录、给停着的线程读最后一条消息，不读尾部与 PR 实况。
 // 另给项目清单（按仓库找 projectId）与未 settle 顶层线程的标题（按问题编号查重）。
 async function capacityEnv(env) {
   const now = Date.now();
@@ -262,15 +272,13 @@ async function capacityEnv(env) {
   const top = (await listAll(env.isLocal ? null : env.environmentId)).filter((t) => !isSubagent(t));
   const rootsP = liveSubagentRoots(env.isLocal ? null : env.environmentId, top);
   const ended = new Map();
-  const worktree = new Map();
-  const growing = (t) => now - Date.parse(t.createdAt ?? "") < CFG.capacity.growthWindowHours * 3600 * 1000;
-  await pool(top.filter((t) => holdsOpenPr(t) || growing(t)), CONC, async (t) => {
+  await pool(top.filter(holdsOpenPr), CONC, async (t) => {
     const r = await call("t3_thread_read", { threadId: t.threadId, limit: 1, maxCharsPerItem: 1, ...scope }).catch(() => null);
-    if (!r) return;
-    ended.set(t.threadId, (r.recentRuns ?? []).map((x) => x.completedAt ?? x.startedAt ?? x.requestedAt).filter(Boolean).sort().at(-1) ?? null);
-    worktree.set(t.threadId, Boolean(r.thread?.worktreePath));
+    ended.set(t.threadId, (r?.recentRuns ?? []).map((x) => x.completedAt ?? x.startedAt ?? x.requestedAt).filter(Boolean).sort().at(-1) ?? null);
   });
-  const { occupying, capacity, projects } = await occupancyOf(env, top, (t) => ended.get(t.threadId), (t) => (t.threadId === SELF ? false : worktree.get(t.threadId)), now, rootsP);
+  const waits = await pool(top, CONC, (t) => waitingOf(scope, t));
+  const waiting = top.filter((_, i) => waits[i]).map((t) => clip(t.title, 40));
+  const { occupying, capacity, projects } = await occupancyOf(env, top, (t) => ended.get(t.threadId), now, rootsP, waiting);
   return {
     environmentId: env.environmentId,
     label: env.label,
@@ -284,7 +292,7 @@ async function capacityEnv(env) {
   };
 }
 
-const QUIET_FIELDS = ["id", "link", "title", "status", "prs", "lastMsgAt", "lastRunEndedAt", "minutesSinceLastMessage", "distinctRecentCommands", "triage", "triageReasons"];
+const QUIET_FIELDS = ["id", "link", "title", "status", "prs", "lastMsgAt", "lastRunEndedAt", "minutesSinceLastMessage", "distinctRecentCommands", "waitingResources", "triage", "triageReasons"];
 const pick = (o, keys) => Object.fromEntries(keys.filter((k) => o[k] !== undefined).map((k) => [k, o[k]]));
 
 async function snapshotEnv(env) {
@@ -354,19 +362,15 @@ async function snapshotEnv(env) {
       }
   });
   const byId = new Map(enriched.map((x) => [x.id, x]));
-  const { occupying, capacity } = await occupancyOf(
-    env,
-    top,
-    (t) => byId.get(t.threadId)?.lastRunEndedAt,
-    (t) => (t.threadId === SELF ? false : byId.get(t.threadId)?.hasWorktree),
-    now,
-    rootsP,
-  );
+  const waiting = enriched.filter((x) => x.waitingResources).map((x) => clip(x.title, 40));
+  const { occupying, capacity } = await occupancyOf(env, top, (t) => byId.get(t.threadId)?.lastRunEndedAt, now, rootsP, waiting);
+  const prevUsed = STATE.lastRound?.occupancy?.[env.environmentId];
+  const deviceFreed = Number.isInteger(prevUsed) && capacity.used < prevUsed;
   const active = occupying.length;
   const occupyingTitles = occupying.map((t) => clip(t.title, 40));
   const real = enriched
     .filter((x) => !isDelegatedTask(x.task, x.hasWorktree))
-    .map((x) => ({ ...x, ...triageOf(x, { since: ROUND.full ? null : ROUND.since, thresholds: CFG.thresholds, now }) }));
+    .map((x) => ({ ...x, ...triageOf(x, { since: ROUND.full ? null : ROUND.since, thresholds: CFG.thresholds, now, deviceFreed, resourceWakeHours: CFG.triage.resourceWakeHours }) }));
   // 兜底对账：被任何过滤规则排除、但停在失败态的真实顶层线程。过滤规则一改就可能误杀，
   // 把误杀的线程留在这份名单里，巡检每轮必须逐个过——静默消失比多算几条候选危险得多。
   const realIds = new Set(real.map((x) => x.id));
