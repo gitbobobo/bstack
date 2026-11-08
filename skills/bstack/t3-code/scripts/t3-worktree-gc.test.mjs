@@ -658,3 +658,33 @@ test("--purge-build：只清已终结线程脏树里的可重建产物，保留�
   assert.ok(existsSync(join(D.purge, "wip.txt")), "未提交文件保留");
   assert.ok(existsSync(join(D.purgelive, ".build")), "未终结线程的树不清");
 });
+
+test("外部临时工作树：扫描根之外的 detached 树按同一规则判定可删，带分支的只报告", () => {
+  const home2 = join(tmp, "t3home-ext");
+  const root2 = join(home2, "worktrees", "g");
+  mkdirSync(root2, { recursive: true });
+  mkdirSync(join(home2, "userdata"), { recursive: true });
+  writeFileSync(join(home2, "userdata", "statev2.sqlite"), readFileSync(dbPath));
+  git(["-C", mainRepo, "worktree", "add", "-b", "br-ext-anchor", join(root2, "anchor")]);
+  const baseline = join(tmp, "artifacts", "tmp-baseline");
+  const manual = join(tmp, "artifacts", "manual");
+  git(["-C", mainRepo, "worktree", "add", "--detach", baseline, "main"]);
+  git(["-C", mainRepo, "worktree", "add", "-b", "br-ext-manual", manual]);
+  try {
+    const out = runGc([], { env: { T3CODE_HOME: home2 } });
+    const line = (p) => out.split("\n").find((l) => l.includes(`外部 ${gpath(realpathSync(p))}`) || l.includes(`外部 ${gpath(p)}`)) ?? "";
+    assert.match(line(baseline), /^delete\s/);
+    assert.match(line(manual), /^skip\s.*分支工作树.*只报告/);
+    assert.ok(existsSync(baseline), "dry-run 不删");
+    const off = runGc(["--no-external"], { env: { T3CODE_HOME: home2 } });
+    assert.doesNotMatch(off, /外部 /);
+    const real = gpath(realpathSync(baseline));
+    const applied = runGc(["--apply"], { env: { T3CODE_HOME: home2 } });
+    assert.match(applied.split("\n").find((l) => l.includes(`外部 ${real}`) || l.includes(`外部 ${gpath(baseline)}`)) ?? "", /^deleted\s/);
+    assert.ok(!existsSync(baseline));
+    assert.ok(existsSync(manual), "带分支的外部树保留");
+  } finally {
+    for (const d of [baseline, manual, join(root2, "anchor")]) if (existsSync(d)) git(["-C", mainRepo, "worktree", "remove", "--force", d]);
+    git(["-C", mainRepo, "worktree", "prune"]);
+  }
+});

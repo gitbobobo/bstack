@@ -82,7 +82,10 @@ node <技能目录>/scripts/t3-worktree-gc.mjs --root <dir>  # 单独指定扫�
 node <技能目录>/scripts/t3-worktree-gc.mjs --purge-build [--apply]  # 附带清理保留树的构建产物
 node <技能目录>/scripts/t3-worktree-gc.mjs --purge-build --measure-size  # 显式统计候选产物大小
 node <技能目录>/scripts/t3-worktree-gc.mjs --diagnose    # 对已阻断的树也收集 git 原因
+node <技能目录>/scripts/t3-worktree-gc.mjs --no-external # 不检查扫描根之外的临时工作树
 ```
+
+**外部临时工作树**：线程为基线截图、对照、复现在扫描根之外 `git worktree add` 的树，用完忘删就没人收（曾有基线树带着 46 GiB 的 `core/target` 留在 `~/work/artifacts`）。默认从扫描根里各工作树、以及 T3 项目主检出所属的仓库出发，列它们注册的链接工作树，取根外、非主检出的那些，报告行标「外部 <绝对路径>」。只有 detached HEAD 的进入下面的回收判定（基线/对照树的典型形态，没有分支可丢）；带分支的外部树可能是手开的长期工作树，只报告。显式 `--root` 是定向扫描，不找外部树。
 
 扫描根与逐树结论实时写 stdout，阶段开始/结束、命令耗时及超时失败写 stderr；需要完整日志时用 `> gc.log 2>&1`，不要管道截断退出码。默认遇到 self、线程/占用或数据库阻断就跳过 git 重检查；排查全部原因时用 `--diagnose`（会增加遍历和联网成本）。
 

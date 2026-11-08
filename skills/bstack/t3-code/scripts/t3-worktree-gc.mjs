@@ -15,6 +15,7 @@
 //                                        # 只删可重建的构建产物目录（见 purgeTargets）
 //   --measure-size                       # 显式运行 du 统计候选产物大小（可能慢）
 //   --diagnose                           # 对已阻断的树也收集 git 原因
+//   --no-external                        # 不检查扫描根之外的临时工作树（见 externalCandidates；--root 时自动关闭）
 //
 // 环境变量 T3CODE_HOME 覆盖 ~/.t3（worktrees=<home>/worktrees、
 // 数据库=<home>/userdata/statev2.sqlite），主要给测试夹具用。
@@ -95,17 +96,19 @@ const req = createRequire(import.meta.url);
 
 // ---------- 参数 ----------
 const args = process.argv.slice(2);
-const usage = "用法：node t3-worktree-gc.mjs [--apply] [--purge-build [--measure-size]] [--diagnose] [--root <dir>]";
+const usage = "用法：node t3-worktree-gc.mjs [--apply] [--purge-build [--measure-size]] [--diagnose] [--root <dir>] [--no-external]";
 let apply = false;
 let rootOverride = null;
 let purgeBuild = false;
 let measureSize = false;
 let diagnose = false;
+let external = true;
 for (let i = 0; i < args.length; i++) {
   if (args[i] === "--apply") apply = true;
   else if (args[i] === "--purge-build") purgeBuild = true;
   else if (args[i] === "--measure-size") measureSize = true;
   else if (args[i] === "--diagnose") diagnose = true;
+  else if (args[i] === "--no-external") external = false;
   else if (args[i] === "--root") {
     const v = args[++i];
     // 缺值/空白/以 -- 开头：拒绝静默回退——resolve("") 会落到调用者 cwd，
@@ -504,6 +507,44 @@ function candidates(root) {
     else out.push(...subs); // 分组目录：其下才是工作树
   }
   return out;
+}
+
+// 外部临时工作树：线程为基线截图、对照、复现在扫描根之外 `git worktree add` 的链接工作树，
+// 用完忘了删就永远没人收（曾有基线树带着 46 GiB 的 core/target 留在 ~/work/artifacts）。
+// 从扫描根里各工作树、以及 T3 项目主检出所属的仓库出发，列它们注册的全部链接工作树，
+// 取扫描根之外、非主检出的那些。只有 detached HEAD 的才进入回收判定（基线/对照树的典型形态，
+// 没有分支可丢）；带分支的外部树可能是用户手开的长期工作树，只报告。
+function projectRoots() {
+  if (!existsSync(dbPath)) return [];
+  try {
+    const db = openDb();
+    return db ? db.all("SELECT workspace_root FROM projection_projects WHERE deleted_at IS NULL").map((r) => r.workspace_root).filter(Boolean) : [];
+  } catch {
+    return [];
+  }
+}
+function externalCandidates(rootDirs, root) {
+  const commons = new Set();
+  for (const d of [...rootDirs, ...projectRoots()]) {
+    const out = sh("git", ["-C", d, "rev-parse", "--git-common-dir"]);
+    if (out) commons.add(tryReal(resolve(d, out)) ?? resolve(d, out));
+  }
+  const rootReal = tryReal(root) ?? norm(root);
+  const out = new Map();
+  for (const c of commons) {
+    const list = sh("git", ["--git-dir", c, "worktree", "list", "--porcelain"]);
+    if (!list) continue;
+    const blocks = list.split(/\n\s*\n/).map((b) => b.trim()).filter(Boolean);
+    for (const [i, b] of blocks.entries()) {
+      if (i === 0) continue; // 主检出
+      const path = b.match(/^worktree (.+)$/m)?.[1];
+      if (!path || /^(bare|prunable)/m.test(b) || !existsSync(path)) continue;
+      const real = tryReal(path) ?? norm(path);
+      if (inside(real, rootReal)) continue;
+      out.set(real, { dir: path, detached: /^detached$/m.test(b) });
+    }
+  }
+  return [...out.values()];
 }
 
 // ---------- 进程占用（POSIX） ----------
@@ -929,8 +970,13 @@ let inUseDirs = 0; // 扫描期判定为「在用」（未终结线程绑定/进
 const relOf = (p) => (relative(scanRoot, p) || p).replaceAll(sep, "/");
 
 progress("收集候选工作树");
-for (const dir of candidates(scanRoot)) {
-  const rel = relOf(dir);
+const rootDirs = candidates(scanRoot);
+// 显式 --root 是定向扫描：不顺着仓库去找根外的工作树。
+const externals = external && !rootOverride ? externalCandidates(rootDirs, scanRoot) : [];
+const extOf = new Map(externals.map((e) => [e.dir, e]));
+for (const dir of [...rootDirs, ...externals.map((e) => e.dir)]) {
+  const ext = extOf.get(dir);
+  const rel = ext ? `外部 ${dir.replaceAll(sep, "/")}` : relOf(dir);
   progress(`扫描 ${rel}`);
   const reasons = [];
   const notes = [];
@@ -976,6 +1022,12 @@ for (const dir of candidates(scanRoot)) {
   const commonOut = sh("git", ["-C", dir, "rev-parse", "--git-common-dir"]) ?? gitDirOut;
   const gitDir = tryReal(resolve(dir, gitDirOut)) ?? resolve(dir, gitDirOut);
   const gitCommon = tryReal(resolve(dir, commonOut)) ?? resolve(dir, commonOut);
+
+  // 外部工作树只回收 detached 的临时树
+  if (ext && !ext.detached) {
+    report("skip", rel, "扫描根之外的分支工作树（可能是手开的长期工作树），只报告", branch);
+    continue;
+  }
 
   // a. 自己所在的工作树永不删
   if (inside(cwdReal, wtReal)) reasons.push("调用者 cwd 位于此工作树内（self）");

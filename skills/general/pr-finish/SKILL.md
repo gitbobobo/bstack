@@ -21,6 +21,7 @@ PR 已审查收敛，且已有合并、收尾或交付到主分支的授权时�
 8. **回收分支与工作树**：本技能被调用即视为用户明确要求删除当前工作树。
    - 删除远端分支（合并时已自动删除则跳过）；
    - 记下主仓库 git 目录（`git rev-parse --path-format=absolute --git-common-dir`）和当前分支名；
+   - 本任务另建过的辅助工作树（基线截图、对照、复现用的 `git worktree add`，`git worktree list` 里除当前树之外由本任务创建的）逐个 `git worktree remove --force <路径>`，再 `git worktree prune`；
    - 当前在链接工作树里时：cwd 先切到工作树根，运行 `node <git-prefs 技能目录>/scripts/empty-worktree.mjs`（清空内容、保留目录壳，绑定此目录的 shell 继续可用），再 `git --git-dir <主仓库 git 目录> branch -D <分支>`。删工作树只用这个脚本：目录一旦消失，本线程的 shell 就永久失效。在主检出上则切回目标分支、拉取后删除本地分支。
-   - 本机装了 T3 Code（有 `~/.t3/worktrees`）时，再跑 `$t3-code` 的 `t3-worktree-gc.mjs --purge-build` 预演，回收其他已终结线程留下的工作树和构建产物；结论确认无误后加 `--apply`。
+   - 本机装了 T3 Code（有 `~/.t3/worktrees`）时，再跑 `$t3-code` 的 `t3-worktree-gc.mjs --purge-build` 预演，回收其他已终结线程留下的工作树和构建产物，以及扫描根之外被遗忘的 detached 临时工作树；结论确认无误后加 `--apply`。
 9. **汇报**：合并提交、整合时解决的冲突与基线修复、收尾复核结果（哪个审查者、几轮、有没有 blocker）、交接提示词、关联问题状态、回收结果。
