@@ -50,6 +50,7 @@ export function briefOf(snap) {
     generatedAt: snap.generatedAt,
     triage: snap.triage,
     lastRound: snap.lastRound,
+    pendingHandoffs: snap.pendingHandoffs ?? [],
     modelLadder: (snap.modelLadder ?? []).map((t) => t.name),
     config: { warnings: snap.config?.warnings ?? [], errors: snap.config?.errors ?? [] },
     environmentsFile: snap.environmentsFile,

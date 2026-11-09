@@ -38,7 +38,9 @@ const ALIAS_OF = new Map(Object.entries(KNOWN.environments).map(([alias, e]) => 
 const DEVICE_OF = new Map(CFG.capacity.devices.map((d) => [KNOWN.environments[d.device]?.environmentId, d]).filter(([id]) => id));
 const LIVE = new Set(["preparing", "queued", "starting", "running", "waiting"]);
 const STATE = loadState();
-const ROUND = args.includes("--full") ? { full: true, reason: "--full" } : fullRoundOf(STATE.lastRound, CFG.triage);
+const ROUND = args.includes("--full") ? { full: true, reason: "--full" }
+  : !STATE.lastRound?.handoffQueueVersion ? { full: true, reason: "待交接队列首次对账" }
+    : fullRoundOf(STATE.lastRound, CFG.triage);
 configurePr({ convergenceAudit: CFG.convergenceAudit });
 
 const clip = (s, n = CHARS) => {
@@ -372,7 +374,11 @@ async function snapshotEnv(env) {
   const occupyingTitles = occupying.map((t) => clip(t.title, 40));
   const real = enriched
     .filter((x) => !isDelegatedTask(x.task, x.hasWorktree))
-    .map((x) => ({ ...x, ...triageOf(x, { since: ROUND.full ? null : ROUND.since, thresholds: CFG.thresholds, now, deviceFreed, resourceWakeHours: CFG.triage.resourceWakeHours }) }));
+    .map((x) => {
+      const pendingHandoff = STATE.pendingHandoffs.find((h) => h.sourceEnvironmentId === env.environmentId && h.sourceThreadId === x.id);
+      const candidate = { ...x, ...(pendingHandoff ? { pendingHandoff } : {}) };
+      return { ...candidate, ...triageOf(candidate, { since: ROUND.full ? null : ROUND.since, thresholds: CFG.thresholds, now, deviceFreed, resourceWakeHours: CFG.triage.resourceWakeHours }) };
+    });
   // 兜底对账：被任何过滤规则排除、但停在失败态的真实顶层线程。过滤规则一改就可能误杀，
   // 把误杀的线程留在这份名单里，巡检每轮必须逐个过——静默消失比多算几条候选危险得多。
   const realIds = new Set(real.map((x) => x.id));
@@ -484,7 +490,7 @@ async function main() {
   for (const u of unreachable) Object.assign(u, aliasOf.get(u.environmentId) ?? {});
   const triage = CAPACITY_ONLY ? undefined : { full: ROUND.full, ...(ROUND.full ? { reason: ROUND.reason } : { since: ROUND.since }) };
   const lastRound = STATE.lastRound ? { at: STATE.lastRound.at, tier: STATE.lastRound.tier, quotaFailure: STATE.lastRound.quotaFailure } : null;
-  const snapshot = { generatedAt, config, modelLadder, lastRound, triage, environmentsFile, unreachable, environments };
+  const snapshot = { generatedAt, config, modelLadder, lastRound, pendingHandoffs: STATE.pendingHandoffs, triage, environmentsFile, unreachable, environments };
   const briefFile = opt("brief", null);
   if (briefFile && !CAPACITY_ONLY) writeFileSync(briefFile, `${JSON.stringify(briefOf(snapshot), null, 1)}\n`);
   console.log(JSON.stringify(snapshot, null, 1));

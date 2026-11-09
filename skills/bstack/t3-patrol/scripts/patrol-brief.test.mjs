@@ -36,4 +36,12 @@ test("摘要：有事候选留判定字段并截断尾部，静默一行，体�
   assert.deepEqual(e.failedThreads, [{ id: "f", title: "z" }]);
   assert.equal(e.needsWatch, 1);
   assert.deepEqual(b.modelLadder, ["pi/x"]);
+  assert.deepEqual(b.pendingHandoffs, []);
+});
+
+test("待交接队列独立展示：来源不在候选或环境不可达仍完整保留", () => {
+  const pendingHandoffs = [{ sourceThreadId: "ios", targetEnvironmentId: "mini", canonicalKey: "o/r", blocker: "池满" }];
+  const b = briefOf({ pendingHandoffs, environments: [{ environmentId: "mini", error: "offline" }] });
+  assert.deepEqual(b.pendingHandoffs, pendingHandoffs);
+  assert.equal(b.environments[0].error, "offline");
 });

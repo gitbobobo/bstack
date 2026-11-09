@@ -7,7 +7,7 @@ description: 代表用户巡检、定案各 T3 环境未结线程。仅定时任
 
 ## 0. 前提
 
-每轮都是新会话，看不到前几轮的对话：跨轮事实（上一轮时间、档位、额度失败、各设备占用数）存在状态文件里，由快照带出来；上一轮对某线程说过什么，读该线程里的 `【巡检】` 消息。
+每轮都是新会话，看不到前几轮的对话：跨轮事实（上一轮时间、档位、额度失败、各设备占用数、待交接队列）存在状态文件里，由快照带出来；上一轮对某线程说过什么，读该线程里的 `【巡检】` 消息。
 
 调 `t3_environment_links`：返回里的 `environmentId` 是本机，`links` 是其他已连接环境。不可达的环境在报告里记一笔，本轮跳过。
 
@@ -35,9 +35,9 @@ node <技能目录>/scripts/patrol-snapshot.mjs --self <thread.threadId> --brief
 
 `--self` 从当前线程 `t3_thread_read` 返回的 `thread.threadId` 原样取。一轮只跑这一次全量快照；字段含义、失败与手工取证见 [快照与补读](references/snapshot.md)。
 
-1. 一次读完 `/tmp/t3-patrol-brief.json`（不用 jq 另裁）：顶层 `lastRound`、`triage`、`modelLadder`、`config` 告警、`environmentsFile`；每个环境的 `checks`、`capacity`、`hot`（有事候选的判定字段）、`quiet`（每条一行）、`failedThreads`、`needsWatch` 计数、`needsRename`、`convergenceAudit`。摘要省掉的字段（完整 `tail`、`task`、清单原始条目）去 `/tmp/t3-patrol-snapshot.json` 按需查。
+1. 一次读完 `/tmp/t3-patrol-brief.json`（不用 jq 另裁）：顶层 `lastRound`、`pendingHandoffs`、`triage`、`modelLadder`、`config` 告警、`environmentsFile`；每个环境的 `checks`、`capacity`、`hot`（有事候选的判定字段）、`quiet`（每条一行）、`failedThreads`、`needsWatch` 计数、`needsRename`、`convergenceAudit`。摘要省掉的字段（完整 `tail`、`task`、清单原始条目）去 `/tmp/t3-patrol-snapshot.json` 按需查。
 2. 定档位：`lastRound.quotaFailure` 为假且本轮 `failedThreads` 没有额度失败，用首选档；其余按 [故障恢复](references/recovery.md#模型优先级) 判，全局判一次，任务书指定模型优先。
-3. 分诊看每个候选的 `triage` 与 `triageReasons`：
+3. **先对账待交接队列**：逐条按 [交接与 settle](references/handoff.md#待交接队列) 复核；即使来源不在候选中、环境不可达，也保留并报告。然后分诊看每个候选的 `triage` 与 `triageReasons`：
    - **有事**（`hot`）：进入第 2–4 步，逐条取证、判定、执行。`triageReasons` 是它被叫醒的原因，取证从这里入手。
    - **静默**（`quiet`）：在跑且信号正常、上一轮以来没有任何变化，或停在 `【等待资源】` 且资源还没有释放的迹象。主动作记「不打扰（静默）」，不补读、不发消息；体检清单（监听、命名）照常处理。
    - `triage.full` 为真时全部候选都是有事（首轮、隔了太久或到了定期全量），这一轮会慢，属正常。
@@ -147,11 +147,11 @@ node <技能目录>/scripts/patrol-evidence.mjs --thread <threadId>@<environment
    - `config.mode` 是 `off`，或 `config.repos` 为空；
    - `~/.config/bstack/PAUSE` 存在；
    - 本轮模型阶梯已降到 `fallback` 档：额度紧张时只做恢复。
-2. 交接优先：本轮记成「等待空位」的交接（[交接与 settle](references/handoff.md) 第 3 步）先占空位，它们在等的设备本轮不派新问题。
+2. 交接优先：重读 `patrol-state.mjs` 的 `pendingHandoffs`，合并本轮新增项，按 [待交接队列](references/handoff.md#待交接队列) 先用动作后空位重试。每个待交接项都有本轮结果后，才把剩余空位交给新问题；仍在等的目标设备本轮不派新问题。
 3. 按 t3-dispatch 技能执行，属于巡检调用：`dry-run` 走到它的第 2 步只出计划，`auto` 全程执行。它第 1 步的 `--capacity-only` 快照就是本轮动作之后的空位，整轮只跑这一次。派活线程的模型取 t3-dispatch 配置的 `model`，不取模型阶梯。
 4. 本轮新派出的线程不再回到第 1–4 步判定，下一轮按候选正常巡检。
 
-**完成标准**：派或不派都有依据；`auto` 下每条派活都有认领结果、线程 link 和回读结论，失败的已归还；`dry-run` 的计划已列出。
+**完成标准**：全部待交接项已逐条复核并记录仍阻塞、已建待接手或有证据销账；派或不派都有依据；`auto` 下每条派活都有认领结果、线程 link 和回读结论，失败的已归还；`dry-run` 的计划已列出。
 
 ## 6. 汇报
 
@@ -159,7 +159,7 @@ node <技能目录>/scripts/patrol-evidence.mjs --thread <threadId>@<environment
 
 开头写模型档位与依据，以及分诊结果（全量与否、有事/静默数，取 `checks`）。环境集合变化时附环境对照表。固定「例行复核」引用 checks：失败处理、监听、命名、久审清单各总数及成功/跳过/失败数；issue 编码回读与修复数。队列恢复附取消/保留/失败/剩余数，未知不写 0。
 
-交接、等待空位、settle、久审审计单列，写来源与去向或依据；「本轮派活」按 t3-dispatch 第 4 步写，`dry-run` 标明「未执行」；已定案记结论、授权/规则来源与执行状态；规则缺口记「建议改技能」，不靠跨轮承诺补规则。
+交接、等待空位、settle、久审审计单列，写来源与去向或依据；待交接队列逐条列出目标设备、当前阻塞与本轮结果，含历史遗留项；「本轮派活」按 t3-dispatch 第 4 步写，`dry-run` 标明「未执行」；已定案记结论、授权/规则来源与执行状态；规则缺口记「建议改技能」，不靠跨轮承诺补规则。
 
 「需要你决定」只列必须由用户提供的授权、产品取舍、互斥的用户要求或无法从环境核实的交接身份。每条写清所缺的用户输入、选项、默认保持状态与依据；技术方案、修在哪个 PR、复审次数及尚在运行的顾问任务不列入。取证/工具失败、额度不足或重复推进无效另列「阻塞」：证据、已做补救、下一责任方与可观察的恢复条件；仅当恢复确实需要用户操作时才转入「需要你决定」。实际未测、仅豁免、审查者缺席、仅启动等状态照实保留。
 
@@ -173,4 +173,4 @@ node <技能目录>/scripts/patrol-state.mjs commit --snapshot /tmp/t3-patrol-sn
 
 本轮出现过额度失败（无论是否已换档恢复）就带 `--quota-failure`。
 
-**完成标准**：命令输出了本轮的 `snapshotAt` 与档位。
+**完成标准**：命令输出了本轮的 `snapshotAt` 与档位；重读状态确认待交接队列与本轮新增、保留、销账结果一致。

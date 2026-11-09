@@ -52,6 +52,14 @@ test("失败、待答请求、取证失败、久审、未消费结论都算有�
   assert.ok(tri({ status: "completed", prs: ["o/r#1:open(stale)"] }).triageReasons.includes("结论未消费"));
 });
 
+test("跨设备待交接：来源无新活动、来源设备未释放也每轮复核，销账后才可静默", () => {
+  const source = { status: "completed", lastMsgAt: ago(240), lastRunEndedAt: ago(240), prs: ["o/r#46:merged"], pendingHandoff: { targetEnvironmentId: "mini", blocker: "池 4/4" } };
+  assert.deepEqual(tri(source).triageReasons, ["待交接未销账"]);
+  // 目标 Mini 释放名额不会改变来源 MBP 的 deviceFreed，仍须被唤起。
+  assert.equal(triageOf(source, { since: ago(20), thresholds, now: NOW, deviceFreed: false }).triage, "hot");
+  assert.equal(tri({ ...source, pendingHandoff: undefined }).triage, "quiet");
+});
+
 test("排队超时", () => {
   assert.deepEqual(tri({ status: "queued", lastRunEndedAt: ago(45) }).triageReasons, ["排队超时"]);
   assert.equal(tri({ status: "queued", lastRunEndedAt: ago(5) }).triage, "quiet");

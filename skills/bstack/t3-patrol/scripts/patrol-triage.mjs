@@ -37,6 +37,8 @@ export function triageOf(c, { since, thresholds, now = Date.now(), deviceFreed =
   };
 
   if (s === null) reasons.push("全量");
+  // 交接是未销账的工作，不依赖来源消息变化或来源设备释放资源。
+  if (c.pendingHandoff) reasons.push("待交接未销账");
   if (c.incomplete || c.error) reasons.push("取证失败");
   if (FAILED.has(c.status)) reasons.push("失败");
   if ((c.pendingRequestCount ?? 0) > 0) reasons.push("待答请求");
