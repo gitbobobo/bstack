@@ -17,7 +17,7 @@ import { capacityOf } from "./patrol-capacity.mjs";
 import { call, connect, hasSession, NO_SESSION, pool } from "./t3-mcp.mjs";
 import { configure as configurePr, prLiveOf } from "./pr-live.mjs";
 import { loadState } from "./patrol-state.mjs";
-import { fullRoundOf, triageOf, WAIT_MARK } from "./patrol-triage.mjs";
+import { bgKillsOf, fullRoundOf, triageOf, WAIT_MARK } from "./patrol-triage.mjs";
 import { briefOf } from "./patrol-brief.mjs";
 
 const args = process.argv.slice(2);
@@ -143,7 +143,7 @@ async function tailOf(environmentId, t) {
   const first = head.items.find((i) => i.type === "user_message");
   const lastMsgAt = Date.parse(msgs.at(-1)?.updatedAt ?? "") || null;
   return {
-    ...(LIVE.has(t.status) ? await spinOf(environmentId, t, lastMsgAt) : {}),
+    ...(await activityOf(environmentId, t, lastMsgAt)),
     // t3_thread_list 不带 worktreePath，只有 t3_thread_read 的 thread 有。
     hasWorktree: Boolean(head.thread?.worktreePath),
     task: clip(first?.text, 300),
@@ -156,14 +156,25 @@ async function tailOf(environmentId, t) {
   };
 }
 
-// 在跑线程的空转迹象：最近 30 个工具调用里有几种不同命令、距最后一条消息多少分钟。
-// 退化循环会反复执行同一类命令，只看消息尾部时它和正常干活没有区别。
-async function spinOf(environmentId, t, lastMsgAt) {
+// 尾部活动里的两类迹象，只看消息尾部时都和正常干活没有区别：
+// - 后台进程随工具超时被杀（bgKills，不论在跑还是停着）；
+// - 在跑线程的空转：最近 30 个工具调用里有几种不同命令、距最后一条消息多少分钟。退化循环会反复执行同一类命令。
+async function activityOf(environmentId, t, lastMsgAt) {
   const env = environmentId ? { environmentId } : {};
-  const r = await call("t3_thread_read", { threadId: t.threadId, view: "activity", afterPosition: Math.max(0, (t.itemCount ?? 0) - 40), limit: 60, maxCharsPerItem: 200, ...env });
+  // 600 字够装下启动命令和紧跟其后的超时输出。
+  // 停着的线程只为 bgKills 多读这一次，读不到不把线程记成取证失败。
+  const r = await call("t3_thread_read", { threadId: t.threadId, view: "activity", afterPosition: Math.max(0, (t.itemCount ?? 0) - 60), limit: 60, maxCharsPerItem: 600, ...env }).catch((e) => {
+    if (LIVE.has(t.status)) throw e;
+    return null;
+  });
+  if (!r) return {};
+  const bgKills = bgKillsOf(r.items);
+  const out = bgKills ? { bgKills } : {};
+  if (!LIVE.has(t.status)) return out;
   const calls = r.items.filter((i) => i.type === "command_execution" || i.type === "dynamic_tool").slice(-30);
   const norm = (i) => String(i.text ?? i.title ?? "").replace(/\s+/g, " ").slice(0, 120);
   return {
+    ...out,
     recentToolCalls: calls.length,
     distinctRecentCommands: new Set(calls.map(norm)).size,
     sampleCommand: calls.length ? clip(norm(calls.at(-1)), 160) : null,

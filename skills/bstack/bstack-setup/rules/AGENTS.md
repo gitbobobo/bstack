@@ -15,11 +15,19 @@
   cmd > /tmp/x.log 2>&1; s=$?; tail -30 /tmp/x.log; echo "exit=$s"
   ```
 
+- 要活过本次工具调用的长命令（全量门禁、构建、E2E），用所在 harness 的后台写法启动，输出写日志文件，之后读日志跟进：
+  - devin：exec 传 `timeout=0`，用 `get_output` 读输出。
+  - Claude Code：Bash 传 `run_in_background: true`，用 BashOutput 读输出。
+  - pi：bash 不传 `timeout`，命令写成 `nohup <cmd> > <日志> 2>&1 &`，让这次调用立即返回——pi 在 shell 退出时就返回，后台进程随之存活；轮询放到下一次调用。stdout/stderr 必须重定向到文件：调用返回后管道关闭，还往管道写的进程会被 SIGPIPE 杀掉。
+  - 其他 harness：用它自带的后台模式；没有就照 pi 的写法，启动后用 `ps -o pid,pgid,command -p <pid>` 确认进程还在。
+
+  启动后台进程的那次调用返回超时（`Command timed out` 之类），说明后台进程已随进程组一起被杀，换上面的写法重启；这类被杀不是内存或调度问题。跟进时按 pid 或 cwd 认自己的进程，`pgrep -f <名字>` 会匹配到其他工作树的同名进程。
+
 - 向外部服务发非 ASCII 内容（中文评论、JSON 体）：先写 UTF-8 无 BOM 文件再引用——`gh --body-file`、`gh api --input`、`curl --data-binary @file`；不内联、不经 stdin 管道。
 
 ## macOS 环境
 
-- 没有 `setsid`、`timeout`；命令超时会连同整个进程组被杀——`nohup`、`disown` 都不脱离进程组，救不了。要存活过本轮的进程用终端工具自带的 detached/后台模式。
+- 没有 `setsid`、`timeout`；工具调用超时或被中断时整个进程组一起被杀——`nohup`、`disown` 都不脱离进程组。长命令按「执行命令」的后台写法启动。
 - exec 报 "terminal failed to create" / 目录不存在：会话 cwd（典型是被删除的 git worktree）失效后不可恢复——终端在命令运行前就失败，`cd` 救不回来。不要重试；结束本轮并向用户说明哪些收尾步骤没做（Fast Ship 状态、PR sync、分支清理、工作树回收），等用户在有效目录里开新会话接手。
 
 ## Windows 环境

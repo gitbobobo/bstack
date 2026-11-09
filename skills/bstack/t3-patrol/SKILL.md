@@ -83,6 +83,7 @@ node <技能目录>/scripts/patrol-evidence.mjs --thread <threadId>@<environment
 | 已审计但范围未落地或仍修范围外意见 | 首次 M1；再次命中按 [技术收敛](references/convergence.md) 区分执行缺口与方案反例，再选 M1/M7/M14 |
 | 路径已落地，仍出现 `$pr-review-loop`「卡住时」所述的 blocker 复发、修法反转或同机制新 blocker | 按 [技术收敛](references/convergence.md) 请求有新证据的复审与根因处理；已有对应处理在执行则记录进展 |
 | 命中 convergenceAuditThreads，`thresholds.convergenceResendHours` 内未发过 M2 | 核轮次与当前 HEAD 未关闭意见的级别后 M2（预算收口） |
+| `triageReasons` 含「后台进程随超时被杀」（`bgKills`） | 在跑就先 interrupt，再发 M18；停着直接发 M18 |
 | 同一测试失败签名反复触发门禁重跑，未见新假设、修复或环境变化 | 按 `$pr-review-loop`「测试失败处置」核对证据与下一步；确认无有效任务在执行后 interrupt，再用 M3 要求转入诊断 |
 | 有活跃 run，尾部活动显示同一命令或同一失败反复出现，上一轮以来没有新输出 | interrupt，再发 M3：写明重复的证据，要它先查明原因再继续。原因由它查 |
 | 有活跃 run，尚未证实空转 | 有近期处理活动、长任务进展或合理等待证据则不打扰；预算内取证仍不足记证据不足 |

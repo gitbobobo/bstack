@@ -1,20 +1,23 @@
 #!/usr/bin/env node
-// 资源检查：重验证（全量构建、门禁、E2E）开跑前，量本机工作树所在盘的剩余空间与 CPU 繁忙度，给出能不能跑。
+// 资源检查：重验证（全量构建、门禁、E2E）开跑前，量本机工作树所在盘的剩余空间、CPU 繁忙度与可用内存，给出能不能跑。
 // 巡检只按名额派活，磁盘与负载由干活的线程在用到时自己看：它最清楚这一步要多少空间。
 //
-// 用法：node resource-check.mjs [--need <GB>] [--floor <GB>] [--path <目录>] [--reclaim] [--gc <t3-worktree-gc.mjs 路径>]
+// 用法：node resource-check.mjs [--need <GB>] [--floor <GB>] [--path <目录>] [--queued] [--reclaim] [--gc <t3-worktree-gc.mjs 路径>]
 //   --need   这一步预计新增的磁盘占用（构建产物等），缺省 0
 //   --floor  跑完后至少留给本机的剩余空间，缺省 20
 //   --path   要量的目录，缺省当前目录（工作树）；不存在时退到 T3 工作树根或主目录
+//   --queued 这一步经仓库的调度入口/编译槽排队：CPU 繁忙交给队列，不进判定（多线程常驻的机器上 CPU 几乎总是满的，
+//            按 CPU 等空闲会一直轮不到）
 //   --reclaim 先跑 t3-code 技能的 t3-worktree-gc.mjs --purge-build --apply：删已终结线程的孤儿工作树，
 //            保留下来的工作树只清可重建的构建产物；只回收别人留下的垃圾，不动在用工作树
-// 输出 { host, platform, path, diskFreeGB, diskTotalGB, needGB, floorGB, disk, cpus, cpuBusyPct, load, verdict, reclaim? }
-//   disk: ok | short（剩余 − need < floor）；load: ok | busy（1 秒采样 CPU 繁忙 ≥ 85%）；verdict: go | wait
+// 输出 { host, platform, path, diskFreeGB, diskTotalGB, needGB, floorGB, disk, cpus, cpuBusyPct, load, memAvailablePct, memory, queued, verdict, reclaim? }
+//   disk: ok | short（剩余 − need < floor）；load: ok | busy（1 秒采样 CPU 繁忙 ≥ 85%）；
+//   memory: ok | low（可用内存 < 10%）| unknown；verdict: go | wait
 // 退出码：0 可以跑；3 资源不足（verdict=wait）；1 回收失败；2 用法错误。
 
 import { spawnSync } from "node:child_process";
 import { existsSync, realpathSync, statfsSync } from "node:fs";
-import { cpus, homedir, hostname, platform } from "node:os";
+import { cpus, freemem, homedir, hostname, platform, totalmem } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -22,6 +25,7 @@ const SKILL_DIR = dirname(dirname(fileURLToPath(import.meta.url)));
 // bstack 技能安装时同级排布（~/.agents/skills/<name>）。
 export const DEFAULT_GC = join(dirname(SKILL_DIR), "t3-code", "scripts", "t3-worktree-gc.mjs");
 export const BUSY_PCT = 85;
+export const MEM_LOW_PCT = 10;
 
 export function probePath(path, env = process.env) {
   if (path && existsSync(path)) return path;
@@ -45,10 +49,27 @@ export async function cpuBusyPct(ms = 1000) {
   return total > 0 ? Math.round((1 - (b.idle - a.idle) / total) * 100) : 0;
 }
 
-export function verdictOf({ diskFreeGB, needGB, floorGB, busyPct }) {
+// macOS 有意把空闲页压得很低（vm_stat 的 free 常年只有几十 MB），os.freemem 在那里读的就是它，不能当可用内存。
+// 改读 memory_pressure 的系统空闲百分比（计入可回收的 inactive/purgeable）；其他平台 os.freemem 已是可用内存。
+export function parseMemoryPressure(out) {
+  const m = /free percentage:\s*(\d+)%/i.exec(String(out ?? ""));
+  return m ? Number(m[1]) : null;
+}
+
+export function memAvailablePct() {
+  if (platform() === "darwin") {
+    const r = spawnSync("memory_pressure", ["-Q"], { encoding: "utf8", timeout: 10000 });
+    return r.status === 0 ? parseMemoryPressure(r.stdout) : null;
+  }
+  return Math.round((freemem() / totalmem()) * 100);
+}
+
+export function verdictOf({ diskFreeGB, needGB, floorGB, busyPct, memPct = null, queued = false }) {
   const disk = diskFreeGB - needGB >= floorGB ? "ok" : "short";
   const load = busyPct >= BUSY_PCT ? "busy" : "ok";
-  return { disk, load, verdict: disk === "ok" && load === "ok" ? "go" : "wait" };
+  const memory = memPct == null ? "unknown" : memPct < MEM_LOW_PCT ? "low" : "ok";
+  const go = disk === "ok" && memory !== "low" && (queued || load === "ok");
+  return { disk, load, memory, verdict: go ? "go" : "wait" };
 }
 
 // gc 只输出文字：留汇总行与失败行，逐目录结论太长，不进回复。
@@ -82,6 +103,7 @@ if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToP
   const args = process.argv.slice(2);
   let gc = DEFAULT_GC;
   let doReclaim = false;
+  let queued = false;
   let needGB = 0;
   let floorGB = 20;
   let path = process.cwd();
@@ -89,13 +111,14 @@ if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToP
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === "--reclaim") doReclaim = true;
+    else if (a === "--queued") queued = true;
     else if (a === "--gc" && args[i + 1]) gc = args[++i];
     else if (a === "--path" && args[i + 1]) path = args[++i];
     else if (a === "--need" && args[i + 1]) needGB = num(args[++i]);
     else if (a === "--floor" && args[i + 1]) floorGB = num(args[++i]);
     else needGB = NaN;
     if (Number.isNaN(needGB) || Number.isNaN(floorGB)) {
-      console.error("用法：node resource-check.mjs [--need <GB>] [--floor <GB>] [--path <目录>] [--reclaim] [--gc <t3-worktree-gc.mjs 路径>]");
+      console.error("用法：node resource-check.mjs [--need <GB>] [--floor <GB>] [--path <目录>] [--queued] [--reclaim] [--gc <t3-worktree-gc.mjs 路径>]");
       process.exit(2);
     }
   }
@@ -103,9 +126,10 @@ if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToP
   const rec = doReclaim ? reclaim(gc, path) : null;
   const disk = diskOf(path);
   const busyPct = await cpuBusyPct();
-  const v = verdictOf({ diskFreeGB: disk.diskFreeGB, needGB, floorGB, busyPct });
+  const memPct = memAvailablePct();
+  const v = verdictOf({ diskFreeGB: disk.diskFreeGB, needGB, floorGB, busyPct, memPct, queued });
   console.log(
-    JSON.stringify({ host: hostname(), platform: platform(), path, ...disk, needGB, floorGB, disk: v.disk, cpus: cpus().length, cpuBusyPct: busyPct, load: v.load, verdict: v.verdict, ...(rec ? { reclaim: rec } : {}) }, null, 1),
+    JSON.stringify({ host: hostname(), platform: platform(), path, ...disk, needGB, floorGB, disk: v.disk, cpus: cpus().length, cpuBusyPct: busyPct, load: v.load, memAvailablePct: memPct, memory: v.memory, queued, verdict: v.verdict, ...(rec ? { reclaim: rec } : {}) }, null, 1),
   );
   process.exit(rec && !rec.ok ? 1 : v.verdict === "go" ? 0 : 3);
 }

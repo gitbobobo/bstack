@@ -17,6 +17,7 @@
 - **候选** `environments[].candidates`：已剔除子代理线程、首条消息是派活模板且没有工作树的执行线程、Fast Ship 审查线程（「代码审查 · PR #N」「视觉审查 · PR #N」）、「额度探测」「资源探测」（旧版遗留）线程和本线程；剔除数量在 `delegatedExcluded`。
   - 每条带 `triage`（`hot`/`quiet`）与 `triageReasons`。
   - 有事候选带全部字段：`link`、`status`、`hasWorktree`、`prs`、`lastMsgAt`、`lastRunEndedAt`、最近 3 次 `runs`、`pendingRequestCount`、`task`（首条用户消息）、`tail`（最后 4 条消息，保留首尾共 600 字——代理常在长汇报末尾才提问）、`prHealth`；在跑的还有空转迹象 `distinctRecentCommands`（最近 30 个工具调用里不同命令数）、`sampleCommand`、`minutesSinceLastMessage`。
+  - `bgKills`：尾部 60 条活动里，命令行带单独 `&` 的后台启动却以超时结束的次数（`count`）、最近时间（`lastAt`）与命令（`sample`）——后台进程已随进程组被杀。在跑和停着的候选都采。
   - `waitingResources`：线程停着且最后一条消息以 `【等待资源】` 开头（t3-orchestrator「资源不足时」的约定），带标记时间与首行。
   - 静默候选只留识别与分诊字段。
 - **PR 实况** `candidates[].prHealth[]`（逐 open PR）：
@@ -35,7 +36,7 @@
 
 ## 分诊规则
 
-有事的原因（`triageReasons`）：全量、待交接未销账、取证失败、失败、待答请求、排队超时、久审；在跑线程的疑似空转、消息沉默；停住线程的上轮后有新活动、PR 有新事件、审查类检查久未出结论、HEAD 无审查与检查、结论未消费、PR 实况缺失、提问久未答；等资源线程的设备空出名额（本轮占用比状态文件里上一轮的少）、等待满 `triage.resourceWakeHours`。久审只在有别的变化或全量时一并标出。阈值类原因只在超时发生在两轮之间时触发一次，之后靠线程的新活动（包括对巡检消息的响应）再次叫醒。`triage.fullEveryHours` 一次的全量兜住长期静默却卡住的线程。规则实现见 `scripts/patrol-triage.mjs`。
+有事的原因（`triageReasons`）：全量、待交接未销账、取证失败、失败、待答请求、排队超时、久审、后台进程随超时被杀（上一轮以来出现过）；在跑线程的疑似空转、消息沉默；停住线程的上轮后有新活动、PR 有新事件、审查类检查久未出结论、HEAD 无审查与检查、结论未消费、PR 实况缺失、提问久未答；等资源线程的设备空出名额（本轮占用比状态文件里上一轮的少）、等待满 `triage.resourceWakeHours`。久审只在有别的变化或全量时一并标出。阈值类原因只在超时发生在两轮之间时触发一次，之后靠线程的新活动（包括对巡检消息的响应）再次叫醒。`triage.fullEveryHours` 一次的全量兜住长期静默却卡住的线程。规则实现见 `scripts/patrol-triage.mjs`。
 
 ## 补读
 

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { fullRoundOf, triageOf } from "./patrol-triage.mjs";
+import { bgKillsOf, fullRoundOf, triageOf } from "./patrol-triage.mjs";
 
 const NOW = Date.parse("2026-11-08T12:00:00Z");
 const ago = (min) => new Date(NOW - min * 60000).toISOString();
@@ -73,4 +73,28 @@ test("等待资源：无变化时静默；设备空出名额或等待在两轮�
   const long = { ...base, waitingResources: { at: ago(200) } };
   assert.deepEqual(triageOf(long, { since, thresholds, now: NOW, resourceWakeHours: 3 }).triageReasons, ["等待资源已满 3 小时"]);
   assert.equal(triageOf({ ...base, waitingResources: { at: ago(400) } }, { since, thresholds, now: NOW, resourceWakeHours: 3 }).triage, "quiet");
+});
+
+test("后台进程随超时被杀：单独的 & 加超时输出才算", () => {
+  const cmd = (text, at = ago(10)) => ({ type: "command_execution", text, updatedAt: at });
+  const items = [
+    cmd("$ cd /w && nohup pnpm pr-check > /tmp/a.log 2>&1 & echo \"pid $!\"\nCommand timed out", ago(30)),
+    cmd("$ cd /w && pnpm test > /tmp/b.log 2>&1; echo exit=$?\nCommand timed out"),
+    cmd("$ pnpm build &> /tmp/c.log\nCommand timed out after 30 seconds"),
+    cmd("$ nohup sleep 9 > /tmp/d.log 2>&1 &\nExited with code 0"),
+    { type: "dynamic_tool", text: "x & y\nCommand timed out" },
+    cmd("$ cd /w && nohup pnpm pr-check > /tmp/e.log 2>&1 & echo started; sleep 240\nCommand timed out after 280000ms", ago(5)),
+  ];
+  const k = bgKillsOf(items);
+  assert.equal(k.count, 2);
+  assert.equal(k.lastAt, ago(5));
+  assert.match(k.sample, /prcheck|pr-check/);
+  assert.equal(bgKillsOf(items.slice(1, 5)), null);
+});
+
+test("后台进程随超时被杀：上一轮以来出现过就叫醒，在跑与停着都算", () => {
+  const stopped = { status: "completed", lastMsgAt: ago(200), lastRunEndedAt: ago(200) };
+  assert.deepEqual(tri({ ...stopped, bgKills: { count: 1, lastAt: ago(10) } }).triageReasons, ["后台进程随超时被杀"]);
+  assert.equal(tri({ ...stopped, bgKills: { count: 3, lastAt: ago(120) } }).triage, "quiet");
+  assert.deepEqual(tri({ status: "running", recentToolCalls: 30, distinctRecentCommands: 12, minutesSinceLastMessage: 10, bgKills: { count: 1, lastAt: ago(10) } }).triageReasons, ["后台进程随超时被杀"]);
 });

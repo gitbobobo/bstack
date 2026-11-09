@@ -21,6 +21,20 @@ export function fullRoundOf(lastRound, { fullEveryHours }, now = Date.now()) {
   return { full: false, since: lastRound.snapshotAt };
 }
 
+// 后台进程随工具超时被杀：命令行里有单独的 `&`（排除 `&&`、`2>&1`、`&>`、`|&`），这次调用却以超时结束。
+// harness 超时会杀整个进程组，`nohup … &` 起的后台进程跟着死；代理常把它误诊成内存压力或调度器误杀，反复重跑。
+// items 是 t3_thread_read activity 视图的条目，命令条目的 text 形如 "$ <命令>\n<输出>"。
+const BG_LAUNCH = /(?<![&>|])&(?![&>])/;
+export function bgKillsOf(items) {
+  const hits = (items ?? []).filter((i) => {
+    if (i.type !== "command_execution") return false;
+    const [cmd, ...out] = String(i.text ?? "").replace(/^\$ /, "").split("\n");
+    return BG_LAUNCH.test(cmd) && /timed out/i.test(out.join("\n"));
+  });
+  if (!hits.length) return null;
+  return { count: hits.length, lastAt: hits.at(-1).updatedAt ?? null, sample: String(hits.at(-1).text).split("\n")[0].slice(0, 200) };
+}
+
 // 线程停在资源不足时按约定留下的标记（t3-orchestrator「资源不足时」）：最后一条消息首行以它开头。
 export const WAIT_MARK = "【等待资源】";
 
@@ -43,6 +57,8 @@ export function triageOf(c, { since, thresholds, now = Date.now(), deviceFreed =
   if (FAILED.has(c.status)) reasons.push("失败");
   if ((c.pendingRequestCount ?? 0) > 0) reasons.push("待答请求");
   if (QUEUED.has(c.status) && ms(c.lastRunEndedAt) && now - ms(c.lastRunEndedAt) > thresholds.queuedMinutes * 60000) reasons.push("排队超时");
+  // 不论在跑还是停着：每次都白白丢掉一轮验证，上一轮以来出现过就叫醒。
+  if (c.bgKills && (s === null || after(c.bgKills.lastAt))) reasons.push("后台进程随超时被杀");
 
   if (RUNNING.has(c.status)) {
     if ((c.recentToolCalls ?? 0) >= 10 && (c.distinctRecentCommands ?? 99) < thresholds.minDistinctCommands) reasons.push("疑似空转");
