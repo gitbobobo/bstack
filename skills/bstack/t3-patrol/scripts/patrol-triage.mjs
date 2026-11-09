@@ -21,15 +21,18 @@ export function fullRoundOf(lastRound, { fullEveryHours }, now = Date.now()) {
   return { full: false, since: lastRound.snapshotAt };
 }
 
-// 后台进程随工具超时被杀：命令行里有单独的 `&`（排除 `&&`、`2>&1`、`&>`、`|&`），这次调用却以超时结束。
-// harness 超时会杀整个进程组，`nohup … &` 起的后台进程跟着死；代理常把它误诊成内存压力或调度器误杀，反复重跑。
-// items 是 t3_thread_read activity 视图的条目，命令条目的 text 形如 "$ <命令>\n<输出>"。
+// 只凭明确的 POSIX `nohup … &` 启动加工具超时判 bgKills；cmd 的 `&` 是顺序分隔符。
+// 缺少 shell 元数据时保守识别，其余后台/存活问题交给持续停驻超时分支核验。
+// items 是 activity 条目，text 形如 "$ <命令>\n<输出>"；屏蔽引号与转义里的字面量。
 const BG_LAUNCH = /(?<![&>|])&(?![&>])/;
+const NOHUP = /(?:^|[;&|])\s*(?:\/\S*\/)?nohup\s/;
+const shellCode = (cmd) => cmd.replace(/'[^']*'|"(?:\\.|[^"\\])*"|\\./g, " ");
 export function bgKillsOf(items) {
   const hits = (items ?? []).filter((i) => {
     if (i.type !== "command_execution") return false;
     const [cmd, ...out] = String(i.text ?? "").replace(/^\$ /, "").split("\n");
-    return BG_LAUNCH.test(cmd) && /timed out/i.test(out.join("\n"));
+    const code = shellCode(cmd);
+    return NOHUP.test(code) && BG_LAUNCH.test(code) && /timed out/i.test(out.join("\n"));
   });
   if (!hits.length) return null;
   return { count: hits.length, lastAt: hits.at(-1).updatedAt ?? null, sample: String(hits.at(-1).text).split("\n")[0].slice(0, 200) };

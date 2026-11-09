@@ -149,11 +149,11 @@ node <技能目录>/scripts/patrol-evidence.mjs --thread <threadId>@<environment
    - `config.mode` 是 `off`，或 `config.repos` 为空；
    - `~/.config/bstack/PAUSE` 存在；
    - 本轮模型阶梯已降到 `fallback` 档：额度紧张时只做恢复。
-2. 交接优先：重读 `patrol-state.mjs` 的 `pendingHandoffs`，合并本轮新增项，按 [待交接队列](references/handoff.md#待交接队列) 先用动作后空位重试。每个待交接项都有本轮结果后，才把剩余空位交给新问题；仍在等的目标设备本轮不派新问题。
+2. 交接优先：重读 `patrol-state.mjs` 的 `pendingHandoffs`，合并本轮新增项，按 [待交接队列](references/handoff.md#待交接队列) 先用动作后空位重试。每个待交接项都有本轮结果后，才把剩余空位交给新问题；交接优先的阻挡范围按该文「派活隔离」落实到容量池。
 3. 按 t3-dispatch 技能执行，属于巡检调用：`dry-run` 走到它的第 2 步只出计划，`auto` 全程执行。它第 1 步的 `--capacity-only` 快照就是本轮动作之后的空位，整轮只跑这一次。派活模型按 [t3-dispatch「派活模型」](../t3-dispatch/SKILL.md#派活模型) 选择，传入本轮已核实的额度失败证据与可用档位；恢复、交接和新问题共用这些证据。
 4. 本轮新派出的线程不再回到第 1–4 步判定，下一轮按候选正常巡检。
 
-**完成标准**：全部待交接项已逐条复核并记录仍阻塞、已建待接手或有证据销账；派或不派都有依据；`auto` 下每条派活都有认领结果、线程 link 和回读结论，失败的已归还；`dry-run` 的计划已列出。
+**完成标准**：全部待交接项已逐条复核并记录仍阻塞、已建待接手或有证据销账；每个设备的各仓库池都有派活结果或具体停派依据；`auto` 下每条派活都有认领结果、线程 link 和回读结论，失败的已归还；`dry-run` 的计划已列出。
 
 ## 6. 汇报
 

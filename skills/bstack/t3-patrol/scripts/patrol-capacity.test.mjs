@@ -41,6 +41,18 @@ test("设备总上限缺省为各池之和，两个池可以同时用满；审�
   assert.deepEqual([bare.device, bare.max, bare.pools, bare.freeOther], [null, 5, [], 5]);
 });
 
+test("交接等 Musiver 池 4/4 时，Mac mini 的独立 TMA 池仍有 2 个派活名额", () => {
+  const device = { device: "mac-mini", pools: [{ repos: [MUSIVER], max: 4 }, { repos: ["tma"], max: 2 }] };
+  const threads = Array.from({ length: 4 }, (_, i) => ({ title: `Musiver #${i}`, projectId: "p-musiver" }));
+  const c = capacityOf({ threads, projects, device, cfg: CFG });
+  assert.equal(c.freeByRepo[MUSIVER], 0);
+  assert.equal(c.freeByRepo["fj.frp.musiver.cn/fjbobo/tma"], 2);
+  assert.equal(c.blocked, undefined);
+  // 同一场景若碰到设备总上限，才会连带阻挡独立池。
+  const full = capacityOf({ threads, projects, device: { ...device, maxActiveThreads: 4 }, cfg: CFG });
+  assert.equal(full.freeByRepo["fj.frp.musiver.cn/fjbobo/tma"], 0);
+});
+
 test("每个线程只进第一个匹配的池；没有池匹配的只占设备名额", () => {
   const device = { device: "mac-mini", maxActiveThreads: 6, pools: [{ repos: [MUSIVER], max: 2 }, { repos: ["tma", "musiver"], max: 2 }] };
   const threads = ["p-musiver", "p-musiver", "p-doc", "p-skills"].map((projectId, i) => ({ title: `t${i}`, projectId }));

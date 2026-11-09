@@ -95,7 +95,7 @@ test("等待资源：无变化时静默；设备空出名额或等待在两轮�
   assert.equal(triageOf({ ...base, waitingResources: { at: ago(400) } }, { since, thresholds, now: NOW, resourceWakeHours: 3 }).triage, "quiet");
 });
 
-test("后台进程随超时被杀：单独的 & 加超时输出才算", () => {
+test("后台进程随超时被杀：明确的 nohup 后台启动加超时输出才算", () => {
   const cmd = (text, at = ago(10)) => ({ type: "command_execution", text, updatedAt: at });
   const items = [
     cmd("$ cd /w && nohup pnpm pr-check > /tmp/a.log 2>&1 & echo \"pid $!\"\nCommand timed out", ago(30)),
@@ -110,6 +110,21 @@ test("后台进程随超时被杀：单独的 & 加超时输出才算", () => {
   assert.equal(k.lastAt, ago(5));
   assert.match(k.sample, /prcheck|pr-check/);
   assert.equal(bgKillsOf(items.slice(1, 5)), null);
+});
+
+test("cmd 顺序分隔、PowerShell 启动及字面量 & 不构成 POSIX 后台被杀证据", () => {
+  const cmd = (line) => ({ type: "command_execution", text: `$ ${line}\nCommand timed out`, updatedAt: ago(10) });
+  for (const line of [
+    'cd /d C:\\work & node gate.mjs > gate.log 2>&1 & echo exit=%errorlevel%',
+    'cmd /c "node gate.mjs & echo done"',
+    'powershell -Command "Start-Process node -ArgumentList gate.mjs"',
+    '& node gate.mjs',
+    'echo "nohup node gate.mjs &"',
+    "echo 'nohup node gate.mjs &'",
+    'nohup node gate.mjs --label "a & b" > gate.log 2>&1',
+    'nohup node gate.mjs \\&',
+  ]) assert.equal(bgKillsOf([cmd(line)]), null, line);
+  assert.equal(bgKillsOf([cmd('/usr/bin/nohup node gate.mjs > gate.log 2>&1 &')]).count, 1);
 });
 
 test("后台进程随超时被杀：上一轮以来出现过就叫醒，在跑与停着都算", () => {
