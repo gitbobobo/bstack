@@ -3,7 +3,7 @@
 // 每小时一轮、二十来个候选，多数结论是「在跑，不打扰」或「上轮后没变化」。逐条深读把一轮拖到 20 分钟以上，
 // 却不改变动作。分诊按「上一轮以来的变化」与「跨过阈值」判定：线程有新活动、PR 有新事件、某个等待在两轮之间超时，
 // 都会让它变成有事；巡检发出的消息会触发目标线程的新 run，下一轮自然回到有事，动作验证不会漏。
-// 只靠变化判定可能让卡住的线程长期静默，所以隔 fullEveryHours 做一次全量（所有候选都按有事处理）。
+// 未结 PR 的停驻与 pending 超时是持续条件，每轮复核；fullEveryHours 全量只兜住其余漏项。
 
 const FAILED = new Set(["failed", "interrupted", "cancelled"]);
 const QUEUED = new Set(["preparing", "queued", "starting"]);
@@ -44,6 +44,7 @@ export function triageOf(c, { since, thresholds, now = Date.now(), deviceFreed =
   const reasons = [];
   const s = since ? ms(since) : null;
   const after = (iso) => s !== null && ms(iso) > s;
+  const overdue = (iso, minutes) => ms(iso) > 0 && now - ms(iso) >= minutes * 60000;
   const crossed = (iso, minutes) => {
     // 截止时间落在 (上一轮, 本轮] 之间：等待在两轮之间超时。
     const due = ms(iso) + minutes * 60000;
@@ -65,13 +66,16 @@ export function triageOf(c, { since, thresholds, now = Date.now(), deviceFreed =
     if ((c.minutesSinceLastMessage ?? 0) > thresholds.silenceMinutes) reasons.push("消息沉默");
   } else if (!QUEUED.has(c.status)) {
     if (after(c.lastMsgAt) || after(c.lastRunEndedAt)) reasons.push("上轮后有新活动");
+    const hasOpenPr = (c.prHealth ?? []).length > 0 || (c.prs ?? []).some((p) => /:open\b/.test(p));
+    const lastActivity = Math.max(ms(c.lastMsgAt), ms(c.lastRunEndedAt));
+    if (hasOpenPr && lastActivity > 0 && now - lastActivity >= thresholds.silenceMinutes * 60000) reasons.push("未结 PR 停驻超时");
     for (const h of c.prHealth ?? []) {
       if (after(h.latestAt) || after(h.headAt)) reasons.push(`${h.pr} 有新事件`);
       // 结论可能是 HEAD 上的 review，也可能是检查状态（审查服务常写成提交状态）。
       for (const ck of (h.checks ?? []).filter((x) => x.state === "pending")) {
-        if (crossed(ck.at, thresholds.reviewWaitMinutes)) reasons.push(`${h.pr} ${ck.name} 久未出结论`);
+        if (overdue(ck.at, thresholds.reviewWaitMinutes)) reasons.push(`${h.pr} ${ck.name} 久未出结论`);
       }
-      if (!h.headReview && !(h.checks ?? []).length && crossed(h.headAt, thresholds.reviewWaitMinutes)) reasons.push(`${h.pr} HEAD 无审查与检查`);
+      if (!h.headReview && !(h.checks ?? []).length && overdue(h.headAt, thresholds.reviewWaitMinutes)) reasons.push(`${h.pr} HEAD 无审查与检查`);
     }
     if ((c.prs ?? []).some((p) => p.includes("(stale)"))) reasons.push("结论未消费");
     if ((c.prs ?? []).some((p) => p.includes("(health-unavailable)"))) reasons.push("PR 实况缺失");

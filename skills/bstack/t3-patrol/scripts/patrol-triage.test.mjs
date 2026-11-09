@@ -32,14 +32,34 @@ test("停住的线程：上轮后无变化为静默，有新活动为有事", ()
   assert.deepEqual(tri({ status: "completed", lastMsgAt: ago(20), lastRunEndedAt: ago(20) }).triageReasons, ["上轮后有新活动"]);
 });
 
-test("PR 有新事件、检查久未出结论在两轮之间超时才算有事", () => {
-  const base = { status: "completed", lastMsgAt: ago(200), lastRunEndedAt: ago(200) };
-  assert.deepEqual(tri({ ...base, prHealth: [{ pr: "#1", latestAt: ago(10), headAt: ago(300) }] }).triageReasons, ["#1 有新事件"]);
+test("PR 新事件与持续超时：超时早于上一轮仍复核", () => {
+  const base = { status: "completed", lastMsgAt: ago(20), lastRunEndedAt: ago(20) };
+  const check = (c) => tri(c).triageReasons.filter((r) => r !== "上轮后有新活动");
+  assert.deepEqual(check({ ...base, prHealth: [{ pr: "#1", latestAt: ago(10), headAt: ago(300), headReview: { state: "APPROVED" } }] }), ["#1 有新事件"]);
   // 审查中 45 分钟：截止时间（15 分钟前）落在两轮之间。
-  assert.deepEqual(tri({ ...base, prHealth: [{ pr: "#1", headAt: ago(300), checks: [{ name: "代码审查", state: "pending", at: ago(45) }] }] }).triageReasons, ["#1 代码审查 久未出结论"]);
-  // 上一轮已经超时：本轮不再因此变成有事。
-  assert.equal(tri({ ...base, prHealth: [{ pr: "#1", headAt: ago(300), checks: [{ name: "代码审查", state: "pending", at: ago(200) }] }] }).triage, "quiet");
-  assert.deepEqual(tri({ ...base, prHealth: [{ pr: "#1", headAt: ago(45), checks: [] }] }).triageReasons, ["#1 有新事件", "#1 HEAD 无审查与检查"]);
+  assert.deepEqual(check({ ...base, prHealth: [{ pr: "#1", headAt: ago(300), checks: [{ name: "代码审查", state: "pending", at: ago(45) }] }] }), ["#1 代码审查 久未出结论"]);
+  assert.deepEqual(check({ ...base, prHealth: [{ pr: "#1", headAt: ago(300), checks: [{ name: "代码审查", state: "pending", at: ago(200) }] }] }), ["#1 代码审查 久未出结论"]);
+  assert.deepEqual(check({ ...base, prHealth: [{ pr: "#1", headAt: ago(45), checks: [] }] }), ["#1 有新事件", "#1 HEAD 无审查与检查"]);
+  assert.deepEqual(check({ ...base, prHealth: [{ pr: "#1", headAt: ago(300), checks: [] }] }), ["#1 HEAD 无审查与检查"]);
+});
+
+test("#21 回归：代理已结束、旧 pending 无更新，连续两轮均有事", () => {
+  const c = { status: "completed", lastMsgAt: ago(107), lastRunEndedAt: ago(107), prs: ["o/r#21:open"],
+    prHealth: [{ pr: "#21", headAt: ago(900), checks: [{ name: "musiver/pr-check", state: "pending", at: ago(139) }] }] };
+  for (const s of [ago(60), ago(10)]) {
+    assert.deepEqual(tri(c, s).triageReasons, ["未结 PR 停驻超时", "#21 musiver/pr-check 久未出结论"]);
+  }
+  assert.equal(tri({ ...c, prHealth: [] }).triage, "hot"); // 仅关联信息也能触发。
+  assert.equal(tri({ ...c, prs: ["o/r#21:merged"], prHealth: [] }).triage, "quiet");
+  assert.equal(tri({ ...c, prHealth: [], lastRunEndedAt: ago(5) }).triageReasons.includes("未结 PR 停驻超时"), false);
+});
+
+test("停驻阈值边界：未结 PR 到期才复核，成功检查不豁免未交付线程", () => {
+  const c = { status: "completed", prs: ["o/r#1:open"], lastMsgAt: ago(59), lastRunEndedAt: ago(59) };
+  assert.equal(tri(c, ago(10)).triage, "quiet");
+  assert.deepEqual(tri({ ...c, lastMsgAt: ago(60), lastRunEndedAt: ago(60) }, ago(10)).triageReasons, ["未结 PR 停驻超时"]);
+  assert.deepEqual(tri({ ...c, lastMsgAt: ago(120), lastRunEndedAt: ago(120),
+    prHealth: [{ pr: "#1", checks: [{ name: "gate", state: "success", at: ago(120) }] }] }, ago(10)).triageReasons, ["未结 PR 停驻超时"]);
 });
 
 test("失败、待答请求、取证失败、久审、未消费结论都算有事", () => {
