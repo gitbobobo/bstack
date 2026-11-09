@@ -4,14 +4,15 @@
 // 用法：node dispatch-launch.mjs --plan <计划 JSON> [--dry-run]
 // 计划 JSON（UTF-8 文件，推荐理由写在里面，不进命令行）：
 //   { "launches": [ { "repo": "<repos[].repo>", "ids": ["<问题 ID>", …], "environmentId": "…", "projectId": "…",
-//                     "title": "INT-1234 主题", "reason": "推荐理由" } ] }
+//                     "title": "INT-1234 主题", "reason": "推荐理由" } ], "modelSelection": { "instanceId": "…", "model": "…", "options": {} } }
+// modelSelection 可省略；额度换档时按技能规则填本轮模型，仅覆盖本次派出，不写配置。
 //   ids 第一个是主问题（提示词按它渲染），其余是合并进同一线程的重复问题，一并认领、记账。
 // 逐条执行，一条做完再做下一条：
 //   0. 查重：按主问题编号在各可达环境该仓库的项目里 t3_thread_search，标题或任务书命中未结线程就跳过整条
 //      （挑选可能越出 dispatch-plan 的备选表，表外问题没查过重）；
 //   1. 认领 ids（主问题认领失败就跳过整条；附带问题失败只记下）；
 //   2. 推荐理由写临时文件，按主问题渲染提示词；
-//   3. t3_thread_launch：模型与 runtimeMode 取 t3-dispatch 配置，workspaceStrategy 为 worktree（repos[].baseRef，startFromOrigin），
+//   3. t3_thread_launch：模型取计划 modelSelection（缺省取配置），runtimeMode 取配置，workspaceStrategy 为 worktree（repos[].baseRef，startFromOrigin），
 //      clientRequestId = t3-dispatch-<主问题 ID>-<认领时间>，重试不会建出第二个线程；
 //   4. 每个 id 记账（record）；
 //   5. 回读：每 10 秒读一次，最多 90 秒，直到 run 进入 starting/running 且有 worktreePath。
@@ -31,6 +32,15 @@ import { call, connect, hasSession, NO_SESSION } from "../../t3-patrol/scripts/t
 export function validatePlan(plan, config) {
   const errors = [];
   if (!Array.isArray(plan?.launches) || !plan.launches.length) errors.push("计划里没有 launches");
+  if (plan?.modelSelection !== undefined) {
+    const m = plan.modelSelection;
+    if (!m || typeof m !== "object" || Array.isArray(m)
+      || ![m.instanceId, m.model].every((x) => typeof x === "string" && x.trim())
+      || (m.options !== undefined && (!m.options || typeof m.options !== "object" || Array.isArray(m.options)))
+      || Object.keys(m).some((k) => !["instanceId", "model", "options"].includes(k))) {
+      errors.push("modelSelection：须带非空字符串 instanceId 与 model，options 为对象；仅支持这三个键");
+    }
+  }
   for (const [i, l] of (plan?.launches ?? []).entries()) {
     const at = `launches[${i}]`;
     if (!config.repos.some((r) => r.repo === String(l.repo ?? "").toLowerCase())) errors.push(`${at}.repo：${l.repo} 不在 t3-dispatch.json 的 repos 里`);
@@ -39,6 +49,8 @@ export function validatePlan(plan, config) {
   }
   return errors;
 }
+
+export const launchConfigFor = (plan, config) => ({ ...config, model: plan.modelSelection ?? config.model });
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const FAILED = new Set(["failed", "interrupted", "cancelled"]);
@@ -163,12 +175,13 @@ if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToP
       console.log(JSON.stringify({ ok: true, launches: plan.launches.length }, null, 1));
       process.exit(0);
     }
+    const launchConfig = launchConfigFor(plan, config);
     if (!hasSession()) throw new Error(NO_SESSION);
     await connect("t3-dispatch-launch");
     const dir = mkdtempSync(join(tmpdir(), "t3-dispatch-"));
     const results = [];
     try {
-      for (const l of plan.launches) results.push(await launchOne(l, config, dir));
+      for (const l of plan.launches) results.push(await launchOne(l, launchConfig, dir));
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

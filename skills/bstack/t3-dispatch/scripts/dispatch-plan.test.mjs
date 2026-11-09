@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildPlan, rankOf } from "./dispatch-plan.mjs";
-import { validatePlan } from "./dispatch-launch.mjs";
+import { validatePlan, launchConfigFor } from "./dispatch-launch.mjs";
 
 const MUS = "fj.frp.musiver.cn/fjbobo/musiver";
 const TMA = "fj.frp.musiver.cn/fjbobo/tma";
@@ -87,4 +87,19 @@ test("计划校验", () => {
   const errs = validatePlan({ launches: [{ repo: "x/y", ids: [], title: "t" }] }, cfg);
   assert.ok(errs.some((e) => /不在/.test(e)) && errs.some((e) => /ids/.test(e)) && errs.some((e) => /environmentId/.test(e)));
   assert.ok(validatePlan({}, cfg).length);
+});
+
+test("本轮模型覆盖：保留完整档位选项与运行模式，不改配置；缺省仍用配置", () => {
+  const cfg = { repos: [{ repo: MUS }], runtimeMode: "full-access", model: { instanceId: "pi", model: "cliproxyapi/glm-5.3-flash", options: { thinking: "medium" } } };
+  const before = structuredClone(cfg);
+  const modelSelection = { instanceId: "acpRegistry_devin", model: "swe-2-high", options: { thought_level: "medium" } };
+  const plan = { launches: [{ repo: MUS, ids: ["a"], environmentId: "e", projectId: "p", title: "t", reason: "r" }], modelSelection };
+  assert.deepEqual(validatePlan(plan, cfg), []);
+  assert.deepEqual(launchConfigFor(plan, cfg).model, modelSelection);
+  assert.equal(launchConfigFor(plan, cfg).runtimeMode, "full-access");
+  assert.deepEqual(launchConfigFor({ launches: plan.launches }, cfg).model, cfg.model);
+  assert.deepEqual(cfg, before);
+  for (const bad of [null, [], {}, { ...modelSelection, model: " " }, { ...modelSelection, instanceId: "" }, { ...modelSelection, options: [] }, { ...modelSelection, options: null }, { ...modelSelection, fallback: true }]) {
+    assert.ok(validatePlan({ ...plan, modelSelection: bad }, cfg).some((e) => /modelSelection/.test(e)), JSON.stringify(bad));
+  }
 });

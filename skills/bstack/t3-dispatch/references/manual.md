@@ -8,6 +8,6 @@
 4. **派出**，逐条做完再做下一条：
    1. `issue-source.mjs claim --repo <repo> --id <问题 ID>`，输出的 `at` 是认领时间；失败就跳过。
    2. 推荐理由写进 UTF-8 文件，`issue-source.mjs render --repo <repo> --id <问题 ID> --reason-file <文件>`，`message` 原样用。
-   3. `t3_thread_launch`：目标 `environmentId` 与该环境的仓库 `projectId`；`title` 按 naming.md；`modelSelection`、`runtimeMode` 取配置；`workspaceStrategy` 为 `{type:"worktree", baseRef:<repos[].baseRef>, startFromOrigin:true}`；`clientRequestId` 为 `t3-dispatch-<问题 ID>-<at>`。
+   3. `t3_thread_launch`：目标 `environmentId` 与该环境的仓库 `projectId`；`title` 按 naming.md；`modelSelection` 按 SKILL.md「派活模型」取本轮模型（默认取配置），`runtimeMode` 取配置；`workspaceStrategy` 为 `{type:"worktree", baseRef:<repos[].baseRef>, startFromOrigin:true}`；`clientRequestId` 为 `t3-dispatch-<问题 ID>-<at>`。
    4. `issue-source.mjs record --repo <repo> --id <问题 ID> --env <environmentId> --thread <threadId>`。
-   5. `t3_thread_read`（`limit` 1）确认 run 进入 starting 或 running、`worktreePath` 有值；建线程报错或工作树没就绪时 `release` 归还。
+   5. `t3_thread_read`（`limit` 1）确认 run 进入 starting 或 running、`worktreePath` 有值；工作树仍在准备时保留认领，交下一轮核对；建线程或 run 失败时 `release` 归还，额度换档及原线程恢复按 SKILL.md 第 3 步处理。

@@ -18,6 +18,16 @@ description: 从问题来源挑问题，在各 T3 环境建工作树线程派活
    - `active` 是已派出、还没了结的问题：对每条在其 `environmentId` 上 `t3_thread_read`（`limit` 1）。线程不存在、已 settle 或已归档时 `release`：问题还在进行中且没有 PR 就归还，已推进或有 PR 的只了结台账。线程还开着就不动，它归巡检管。
    - 归还的问题会重新进候选；派过 `limits.maxAttempts` 次的，`list` 会把它放进 `skipped`，报告里列出来交给用户看。
 
+### 派活模型
+
+默认用配置的 `model`。额度失败时复用 [t3-patrol 故障恢复「模型优先级」](../t3-patrol/references/recovery.md#模型优先级) 的归因、当轮证据、阶梯与回升规则；巡检调用直接沿用本轮证据与已恢复运行的档位，独立调用则读取生效的 `modelLadder` 并按该规则判定。配置的默认模型不是任务书点名；用户或项目明确指定模型时仍以其约束为准。
+
+- 配置模型未证实额度耗尽时照常使用；已证实耗尽时，从阶梯取本轮可用的非 `fallback` 档，完整保留 `instanceId`、`model`、`options`。还有普通档可用就继续新问题派活；仅剩 `fallback` 或普通档均已证实不可用时暂停新问题，只做恢复。
+- 在第 2 步计划顶层写 `modelSelection` 传递本轮所选模型；省略时脚本使用配置模型。持久配置保持原样。`dry-run` 只列选择与证据，不建探测线程。
+- 派出后才发现额度失败：按第 3 步处理已建线程与认领，不重建同一问题；恢复后的普通档用于本轮剩余计划。
+
+完成标准：所用模型及证据已记录；暂停时列明普通档不可用或已到兜底档的依据，单个默认模型额度不足本身不足以停派。
+
 ## 1. 空位与备选
 
 1. `node <t3-patrol 技能目录>/scripts/patrol-snapshot.mjs --capacity-only > /tmp/t3-dispatch-capacity.json`。每个环境带 `capacity`、`projects`（项目 id 与 `canonicalKey`）和 `openThreads`（未 settle 的顶层线程标题）。退出码 2 表示当前 harness 拿不到 T3 MCP 会话（如 Codex）：改走 [手工派活](references/manual.md)。
@@ -40,7 +50,8 @@ description: 从问题来源挑问题，在各 T3 环境建工作树线程派活
 
 ```json
 { "launches": [ { "repo": "<repo>", "ids": ["<主问题 ID>", "<合并的重复问题 ID>"], "environmentId": "<devices[].environmentId>",
-                  "projectId": "<devices[].projectId>", "title": "INT-1234 主题", "reason": "为什么优先、范围边界、并行分工" } ] }
+                  "projectId": "<devices[].projectId>", "title": "INT-1234 主题", "reason": "为什么优先、范围边界、并行分工" } ],
+  "modelSelection": { "instanceId": "<本轮实例>", "model": "<本轮模型>", "options": {} } }
 ```
 
 `title` 按 [t3-patrol naming.md](../t3-patrol/references/naming.md)。`dry-run` 到此为止：列出计划，报告标明「未执行」。
@@ -53,19 +64,19 @@ description: 从问题来源挑问题，在各 T3 环境建工作树线程派活
 node <技能目录>/scripts/dispatch-launch.mjs --plan <计划文件> > /tmp/t3-dispatch-launched.json
 ```
 
-逐条按主问题编号跨环境查重（表外挑的问题也覆盖，不必另写查重）、认领、按 `repos[].template` 渲染提示词、`t3_thread_launch` 建工作树线程（模型与 `runtimeMode` 取配置，`clientRequestId` 防重建）、记账、回读 run 与 `worktreePath`（最多等 90 秒）。结果按字段读：
+逐条按主问题编号跨环境查重（表外挑的问题也覆盖，不必另写查重）、认领、按 `repos[].template` 渲染提示词、`t3_thread_launch` 建工作树线程（模型取计划的 `modelSelection`，省略则取配置；`runtimeMode` 取配置，`clientRequestId` 防重建）、记账、回读 run 与 `worktreePath`（最多等 90 秒）。结果按字段读：
 
 - `pending`：工作树还在准备，认领与台账已保留，这算派出成功，下一轮巡检按候选核对；不要手工归还或重新认领。
 - `duplicate`：已有未结线程在做，整条跳过，写进报告。
-- `error`：建线程失败或 run 已失败，脚本已归还认领（`released`）；主问题认领失败的是已被别人认领或状态变了。线程已建但失败的 link 写进报告交给巡检恢复。
+- `error`：建线程失败或 run 已失败，脚本已归还认领（`released`）；主问题认领失败的是已被别人认领或状态变了。线程已建但失败时补读对应 run 报错：代理额度失败按「派活模型」换档，复用已建线程按 t3-patrol 故障恢复续跑并验证；工作区准备失败走其专门分支。额度恢复成功后，对已归还的问题重新认领并 `record` 到原线程，恢复失败则保留 link 与归还结果。建线程请求报错且无法确认是否已创建时，先按编号查重。已有线程的问题从重试计划中移除，剩余计划才可换档再派。
 
 退出码 1 表示有 `error`。
 
-完成标准：每条计划都有结果（`link` 与回读状态，或 `error` 与归还情况）。
+完成标准：每条计划都有结果（`link` 与回读状态，或 `error` 与归还情况）；额度失败项已完成一次原线程补救与回读，或记录无法补救的证据；恢复成功项的认领与台账已对回原线程，剩余计划已用普通可用档派出或有明确暂停依据。
 
 ## 4. 报告
 
-- **本轮派活**：每条写问题编号、标题、设备、线程 link 和一句推荐理由。
+- **本轮派活**：写所用模型与选择依据；每条写问题编号、标题、设备、线程 link 和一句推荐理由。
 - **跳过**：被跳过的高优先级问题逐条写原因；其余只给计数：`skipped` 多少，挑选阶段硬性跳过（缺信息、要决策、重叠等）多少、因优先级或空位暂缓多少。
 - **空位**：每台设备的可建数与本轮用掉的数（`dry-run` 写计划占用），卡住的写原因（名额、池、闸、节流）。
 - **待办**：归还失败、准备失败的线程、配置警告。
