@@ -164,14 +164,6 @@ create-verification-skill 生成的验证技能的维护回路：逐功能核查
 
 详见 [skills/forks/maintain-verification-skill/SKILL.md](skills/forks/maintain-verification-skill/SKILL.md)。
 
-### retro
-
-复盘一次编码会话，向 agent 工作环境提改进建议。依赖同仓库的 writing-for-agents（单独安装时需一并安装）。仅限用户主动调用。
-
-来源：[mattpocock/skills — skills/engineering/retro](https://github.com/mattpocock/skills/tree/main/skills/engineering/retro)；另吸收 [cursor/plugins — pstack/skills/correct](https://github.com/cursor/plugins/tree/main/pstack/skills/correct) 的两条主张。
-
-详见 [skills/forks/retro/SKILL.md](skills/forks/retro/SKILL.md)。
-
 ### writing-for-agents
 
 给 agent 写文档（技能、AGENTS.md 等）的通用参考：context pointer、信息层级、完成标准、删减原则。
