@@ -12,6 +12,8 @@
 
 技能的安装与更新步骤见 [docs/setup.md](docs/setup.md)（通过 `skills` CLI 安装到通用目录 + Claude Code，避免链接到所有 agent）。
 
+审查衍生任务统一执行 [改动准入](skills/general/pr-review-loop/references/change-admission.md)：先证实问题与修法，再决定本次修、独立交付、暂存或不采纳；派活、巡检与收尾沿用这一裁决。复盘依据见 [Musiver PR 分析](docs/musiver-pr-admission-audit.md)。
+
 ## 给 Agent 的安装提示词
 
 在新设备上，把下面代码块的内容直接发给任意 agent，即可按文档安装/更新本仓库全部技能：
@@ -62,13 +64,13 @@ git 操作偏好：可审计粒度的规范提交、远程同步（未推送分�
 
 ### pr-review-loop
 
-开 PR 前确定模板，在描述里写清意图与范围；PR 写请求使用原子分配的独占临时目录，显式绑定目标并回读确认，避免并行工作树串用正文；审查按预算推进：默认 3 轮，安全、数据、并发类 blocker 才延长到 5 轮，后续轮只核对改动代码与未关闭意见。意见按意图自行分级（blocker / should / nit / wrong），审查者的 P0–P2 只是线索，只为 blocker 和 should 推送，nit 一行回复不改代码；某轮只剩 nit 就收尾。同一 blocker 反复复发时按需读取方向审计。测试失败统一分诊、限制无效重跑，复用 diagnosing-bugs 定位根因；临时隔离须报告覆盖缺口与恢复安排。宿主回复接口按需读取引用文件，审查期间不追目标分支。
+审查建议转代码、issue、PR 或交接前先做改动准入，UI 先核对设计意图，nit 不自动立项。开 PR 前确定模板，在描述里写清意图与范围；PR 写请求使用原子分配的独占临时目录，显式绑定目标并回读确认，避免并行工作树串用正文；审查按预算推进：默认 3 轮，安全、数据、并发类 blocker 才延长到 5 轮，后续轮只核对改动代码与未关闭意见。意见按意图自行分级（blocker / should / nit / wrong），审查者的 P0–P2 只是线索，只为 blocker 和 should 推送，nit 一行回复不改代码；某轮只剩 nit 就收尾。同一 blocker 反复复发时按需读取方向审计。测试失败统一分诊、限制无效重跑，复用 diagnosing-bugs 定位根因；临时隔离须报告覆盖缺口与恢复安排。宿主回复接口按需读取引用文件，审查期间不追目标分支。
 
 详见 [skills/general/pr-review-loop/SKILL.md](skills/general/pr-review-loop/SKILL.md)。
 
 ### pr-finish
 
-PR 收尾：对最新目标分支一次性整合（默认 merge）并解决冲突、处理阻塞合并的基线问题；收尾推送触发的审查沿用 pr-review-loop 的账本与预算，只为整合带来的 blocker 再修，无冲突的整合只等检查；合并后交接后续工作、关闭关联问题、回收工作树与分支。检查与合并入口、合并方式、交接约定读仓库自己的文档，未声明时用默认做法。PR 审查收敛、用户要求收尾时使用。
+PR 收尾：对最新目标分支一次性整合（默认 merge）并解决冲突、处理阻塞合并的基线问题；收尾推送触发的审查沿用 pr-review-loop 的账本与预算，只为整合带来的 blocker 再修，无冲突的整合只等检查；合并后分流遗留，只交接已准入的后续工作；候选可留在原记录，不为纯验收强造 PR。随后关闭关联问题、回收工作树与分支。检查与合并入口、合并方式、交接约定读仓库自己的文档，未声明时用默认做法。PR 审查收敛、用户要求收尾时使用。
 
 详见 [skills/general/pr-finish/SKILL.md](skills/general/pr-finish/SKILL.md)。
 
