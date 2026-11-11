@@ -145,3 +145,7 @@ harness 拒绝执行工具时（例如 `Permission denied for this tool`、`was 
 用户要求更新模型参考时，按 [references/models.md](references/models.md) 末尾的「更新来源与标准」执行：先列出改动建议，用户确认后再改。
 
 `scripts/route-data.mjs` 是默认路由数据，改它要跑 `node --test scripts/route.test.mjs scripts/route-config.test.mjs`。用户在 `~/.config/bstack/t3-orchestrator.json` 覆盖模型状态、入口和候选顺序（经 bstack-setup 按 [references/setup.md](references/setup.md) 配置）；`route.mjs` 读取生效值，配置有问题时在输出里报 `WARN 配置`。
+
+## 本机收尾让路
+
+启动本机重任务或合并前，以及收到收尾让路消息时，按 `$t3-code`「收尾窗口」核实有效租约并在安全边界让路。
