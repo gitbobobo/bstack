@@ -77,7 +77,7 @@ T3 在事件到达时唤醒本线程。等外部结果时登记监听，然后�
 
 ## 工作树回收（t3-worktree-gc）
 
-T3 线程绑定的工作树（`~/.t3/worktrees/<项目分组>/<名>`）在线程结束后不会自动清理。同一绑定工作树可能经 junction/符号链接以多个路径等价可达（数据目录迁移后常见）：看到工作树路径「变了」先确认是不是同一目录（Windows `dir /al`/`fsutil reparsepoint query`，POSIX `readlink`/`stat`），不要当成目录迁移。收尾时用 `scripts/t3-worktree-gc.mjs` 只回收「其他已终结线程」的工作树——自己所在的树留给后续会话，绑定中的树永远不碰（删掉绑定目录会让该线程终端永久失效）。
+T3 线程绑定的工作树（`~/.t3/worktrees/<项目分组>/<名>`）在线程结束后不会自动清理。同一绑定工作树可能经 junction/符号链接以多个路径等价可达（数据目录迁移后常见）：看到工作树路径「变了」先确认是不是同一目录（Windows `dir /al`/`fsutil reparsepoint query`，POSIX `readlink`/`stat`），不要当成目录迁移。日常收尾只定向回收本任务记录的临时树，不顺带全盘 GC；磁盘告急或用户要求维护时才扫描其他树。用 `scripts/t3-worktree-gc.mjs` 只回收「其他已终结线程」的工作树——自己所在的树留给后续会话，绑定中的树永远不碰（删掉绑定目录会让该线程终端永久失效）。
 
 ```bash
 node <技能目录>/scripts/t3-worktree-gc.mjs               # dry-run：逐目录打印结论
@@ -87,7 +87,25 @@ node <技能目录>/scripts/t3-worktree-gc.mjs --purge-build [--apply]  # 附带
 node <技能目录>/scripts/t3-worktree-gc.mjs --purge-build --measure-size  # 显式统计候选产物大小
 node <技能目录>/scripts/t3-worktree-gc.mjs --diagnose    # 对已阻断的树也收集 git 原因
 node <技能目录>/scripts/t3-worktree-gc.mjs --no-external # 不检查扫描根之外的临时工作树
+node <技能目录>/scripts/t3-worktree-gc.mjs --disposable --path <工作树绝对路径> --apply
+node <技能目录>/scripts/t3-worktree-gc.mjs --disposable --path <工作树绝对路径> --delivered-head <完整SHA> --apply
 ```
+
+### 日常收尾：定向快清理
+
+`--path` 可重复，只检查指定目录，不枚举其他工作树或外部树。`--disposable` 明确将 ignored 内容视为可丢弃的临时数据：直接跳过逐文件展开、凭据/证书/本地数据库识别和内容读取，不统计大小；非 ignored 未跟踪目录按目录报告，不逐文件展开。只允许 `T3CODE_HOME/worktrees`（缺省 `~/.t3/worktrees`）内的链接工作树，真实路径也必须在根内；独立 clone、根外树继续使用保守模式。
+
+已经核实交付的目标可附 `--delivered-head <完整SHA>`：这是调用者对该提交已推送或已合并的明确声明，不是脚本自动推断。必须与 `--disposable` 和单个 `--path` 配用；扫描和删除前 HEAD 都必须吻合，免 fetch 和 patch 等价验证。没有交付证据就省略该参数，仍验证远端；快清理模式每仓库只 fetch 一次，删除前重新检查本地状态和交付条件。
+
+快清理仍保留 self、线程绑定、活跃 run、数据库、占用、脏源码、索引隐藏标记和子模块检查；普通树和占位树均核对后代绑定，包括 ignored 内的活跃嵌套工作树，删除前刷新状态。ignored 中的证书、配置、嵌套仓库等会一并丢弃，只用于已约定为临时数据的树。已确认目标和交付状态后直接 `--apply`，不必先全量预演再运行一次。当前绑定线程尚未终结时只记录待回收路径，按 `$git-prefs` 清空当前树保留目录壳；不为等待 GC 完成挂监听或延迟 PR 收尾。
+
+### 有界交付验证（所有模式）
+
+默认首次交付验证启动后，整次运行共享 10 秒截止窗口，每棵树最多 5 秒；`--verify-budget-ms <正整数>` 可调整整次窗口，单树上限仍为 5 秒。fetch、祖先检查、cherry、diff/log/patch-id 都受剩余时间约束，扫描和 apply 复查不重置窗口。它不是整个 GC 的墙钟上限：文件扫描、占用检查和物理删除另计。
+
+祖先关系用一次 `for-each-ref --contains=HEAD` 检查全部 origin 引用；深度 patch 比较只查明确上游和远端默认分支（未设 origin/HEAD 时尝试 main/master），最多两个候选，不遍历所有 topic 分支。任一验证命令超时/失败立即停止该树的后续比较，或预算耗尽即 skip；只表示“未能证明已交付”，不据此删除。fetch 失败在本轮按仓库缓存，其他树不重复请求。已因脏源码、珍贵文件或索引问题阻断的树，默认也不再联网验证；`--diagnose` 才补查，仍受预算限制。困难的已交付目标可核实后定向提供精确 HEAD，而不是反复全盘预演。
+
+下文是默认保守 GC（未加 `--disposable`）与磁盘维护模式。
 
 **外部临时工作树**：线程为基线截图、对照、复现在扫描根之外 `git worktree add` 的树，用完忘删就没人收（曾有基线树带着 46 GiB 的 `core/target` 留在 `~/work/artifacts`）。默认从扫描根里各工作树、以及 T3 项目主检出所属的仓库出发，列它们注册的链接工作树，取根外、非主检出的那些，报告行标「外部 <绝对路径>」。只有 detached HEAD 的进入下面的回收判定（基线/对照树的典型形态，没有分支可丢）；带分支的外部树可能是手开的长期工作树，只报告。显式 `--root` 是定向扫描，不找外部树。
 
@@ -98,18 +116,18 @@ node <技能目录>/scripts/t3-worktree-gc.mjs --no-external # 不检查扫描�
 全部满足才删，任一不满足则 skip 并注明原因：
 
 - 调用者 cwd 不在该工作树内（self 永不删）；
-- 是 git 链接工作树（独立 clone skip）。非 git/gitfile 失效的残留里，整树只含占位/系统垃圾文件（T3 合并 PR 后留的 `.keep`/`.worktree-placeholder`、`.DS_Store` 等）的占位目录同样过绑定/占用检查后删除；含其他内容标 not-a-worktree 只报告。`--apply` 收尾顺带 rmdir 本轮删空的二层分组目录；
+- 是 git 链接工作树（独立 clone skip）。非 git/gitfile 失效的残留里，整树只含占位/系统垃圾文件（T3 合并 PR 后留的 `.keep`/`.worktree-placeholder`、`.DS_Store` 等）的占位目录同样过绑定/占用检查后删除；含其他内容标 not-a-worktree 只报告。`--apply` 收尾只尝试 rmdir 本轮已删目标的分组父目录，并刷新绑定/占用检查，不枚举清扫其他空目录；
 - 绑定的线程全部已终结（settled / archived / deleted 任一；委派子线程的 settledOverride 永不写入，改看 subagents 表 child_thread_id/provider_thread_id 关联行——全部终态即算终结，无关联行仍算未终结；零绑定标 unbound 可删），且未终结线程没有 queued/preparing/starting/running/waiting 状态的 run——已终结线程上的 running 行是投影滞留（见「已观察到的坑」），降级为备注放行；
 - `git status --porcelain -uall` 为空（`-uall` 覆盖 `status.showUntrackedFiles` 配置；所有读工作树状态的调用带 `-c core.fsmonitor=false -c core.untrackedCache=false`，防 fsmonitor 钩子/未跟踪缓存误报把本地编辑藏掉）；ignored 逐文件展开里没有命中「珍贵模式」的条目——珍贵模式 = 凭据类文件类型（`.env`、密钥/证书/keystore、`*.properties`、kubeconfig、`.kube`/`.docker`/`.azure` 等云凭据目录、`.config/gh`/`gcloud`（项目本地 `GH_CONFIG_DIR` 等 CLI 凭据区）、`*.tfstate*`/`local.settings.json`、`hosts.yml`、`.git-crypt`、凭据命名、本地数据库等，全集见脚本里 `PRECIOUS_PATTERNS`/`PRECIOUS_SUBSTRINGS`）；命中前先过 `BENIGN_DIR_SEGMENTS` 良性目录段滤掉产物/依赖目录（含 `.build`/`.tmp`/`Pods`/`Carthage`/`SourcePackages` 等 SwiftPM、CocoaPods 检出与派生数据），命中列出文件，其余 ignored 条目收敛到顶层名进报告、超 8 个截断。`*.properties` 命中再过内容级豁免：整文件键都在工具链白名单（`sdk.dir`/`ndk.dir`/`cmake.dir`/`flutter.*`）的是 IDE 生成的 SDK 指针而非凭据（`local.properties` 常态），放行进报告；其他键、不可解析行、读取失败维持阻断；
 - 没有 ls-files 下探不了的目录（嵌套 git 仓库等尾斜杠条目；良性目录段内的豁免——`.build/checkouts` 这类依赖检出不算用户仓库）、没有 git 子模块（索引里没有 mode 160000 的 gitlink）、没有 assume-unchanged/skip-worktree 标记文件（`ls-files -v` 小写或 `S` 标签；两项合并成一次 `ls-files -s -v`）——这些路径的内部状态对所有检查不可见，一律不删；
-- HEAD 改动已在远端：HEAD 是某 `refs/remotes/origin/*` 的祖先，或 `git cherry` 逐提交 patch 等价（rebase/单提交 squash 合并），或整支 `diff(base..HEAD)` 的 patch-id 命中 `base..ref` 上某提交（多提交 squash 合并，上游比对封顶 400 个提交），或对 base 无净改动。patch 等价放行的是改动内容——提交对象仍丢弃，squash 工作流正是如此；内容对不上的孤立提交仍阻断。判定前先对该仓库跑一次 `fetch origin --prune` 刷新本地跟踪引用——远端删过分支后残留的 tracking ref 不代表已推送；远端不可达即 skip。注意 dry-run 也会执行这一步：fetch 需要联网、会更新本地 `refs/remotes/origin/*`（已禁交互凭据提示，缺凭据直接判不可达不卡终端）。patch 等价的分支在 `--apply` 后用 `branch -D` 强删（git 视角是未合并分支，但内容已在远端）；
+- HEAD 改动已在远端：HEAD 是某 `refs/remotes/origin/*` 的祖先，或对上述有限候选 `git cherry` 逐提交 patch 等价（rebase/单提交 squash 合并），或整支 `diff(base..HEAD)` 的 patch-id 命中 `base..ref` 上某提交（多提交 squash 合并，上游比对封顶 400 个提交），或对 base 无净改动。patch 等价放行的是改动内容——提交对象仍丢弃，squash 工作流正是如此；内容对不上的孤立提交仍阻断。判定前先对该仓库跑一次 `fetch origin --prune` 刷新本地跟踪引用——远端删过分支后残留的 tracking ref 不代表已推送；远端不可达即 skip。注意 dry-run 也会执行这一步：fetch 需要联网、会更新本地 `refs/remotes/origin/*`（已禁交互凭据提示，缺凭据直接判不可达不卡终端）。patch 等价的分支在 `--apply` 后用 `branch -D` 强删（git 视角是未合并分支，但内容已在远端）；
 - 没有进程以它为 cwd（POSIX 用 lsof，缺席时 Linux 退 /proc；检查不可用仍是阻断——看不到占用无从归因。例外：绑定线程全部终结时，占用者只可能是已终结线程的残留进程——孤儿代理/模拟器/守护进程——降级为备注放行，删掉干净且已推送的目录只让残留进程 cwd 失效；未绑定目录的占用无法归因——可能是闲逛进去的活线程——维持阻断。Windows 不查，靠删除失败兜底）。
 
 `--apply` 在真正删除前对该目录重拍线程绑定/活跃 run/进程占用快照并重查 git 侧全部条件，收窄扫描与执行之间的并发窗口。报告末尾汇总行附「在用工作树」计数（有未终结绑定线程或进行中 run 的目录数）。
 
 数据库 `userdata/statev2.sqlite` 只读打开（node:sqlite 优先，退回 sqlite3 CLI）；缺席或打不开时此根下全部 skip，不做删除。`--apply` 下用 `rmSync` 删目录后 `git worktree prune` 注销（不用 `worktree remove`：spawn 超时会把数万文件的递归删除砍在半途，留下半删残留），再用 `git branch -d` 兜底删本地分支（改动已验证在远端的分支 `-d` 拒删时改用 `-D`——patch 等价与已推送未合入当前 HEAD 都算，失败保留并注明）；任一步失败标 failed 继续下一个，退出码置非 0；绝不结束进程、不换更强硬的命令重试。
 
-测试：`node <技能目录>/scripts/t3-worktree-gc.test.mjs`——在临时目录造夹具（git 仓库 + 假 origin + 最小 statev2.sqlite），覆盖每条 skip 原因；不碰真实 `~/.t3`。
+测试：`node <技能目录>/scripts/t3-worktree-gc.test.mjs`——在临时目录造夹具（git 仓库 + 假 origin + 最小 statev2.sqlite），覆盖保守模式、快清理和删除前变更阻断；`t3-worktree-gc.verify.test.mjs` 另覆盖多分支超时回放、候选范围、跨树/复查预算与失败保留。不碰真实 `~/.t3`。耗时对比用 `scripts/t3-worktree-gc.bench.mjs --baseline <旧脚本绝对路径>`：同量工作树与 ignored 文件，默认各 3 轮，分别记录扫描、apply 和旧预演+apply / 新直接 apply 的中位数；本地 bare origin 不代表真实联网耗时，夹具和日志保留供复核；本次结果见 [工作树快清理基准](references/worktree-gc-benchmark.md)。
 
 外部依赖：T3 目前不能解除线程与工作树的绑定、也没有「退回 root」的接口（`t3_worktree_handoff` 只能转入新工作树）；绑定中的工作树只能等线程终结后由 gc 回收，解绑能力依赖 T3 产品改动。
 

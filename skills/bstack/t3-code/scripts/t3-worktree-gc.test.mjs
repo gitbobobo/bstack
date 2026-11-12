@@ -10,7 +10,7 @@
 
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { existsSync, chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { platform, tmpdir } from "node:os";
 import { join, sep } from "node:path";
@@ -440,6 +440,182 @@ test("self：调用者 cwd 在工作树内时该树被跳过", { skip: isWindows
   assert.match(lineFor(out, "wt-self"), /^skip\s.*(self|位于此工作树内)/);
 });
 
+test("快清理：跳过 ignored 数据，仍保护在用线程和未交付源码", () => {
+  const out = runGc(["--disposable", "--root", wtRoot]);
+  for (const name of ["wt-precious", "wt-keystore", "wt-localmixed", "wt-hiddendir", "wt-clouddir"])
+    assert.match(lineFor(out, name), /^delete\s.*ignored 数据可丢弃/);
+  for (const name of ["wt-unsettled", "wt-delegated", "wt-delrun", "wt-alias", "wt-dirty", "wt-unpushed", "wt-indexflags", "wt-submod", "wt-fsmon"])
+    assert.match(lineFor(out, name), /^skip\s/, name);
+});
+
+test("定向快清理：已交付 HEAD 免联网，只检查明确目标", () => {
+  const sha = git(["-C", D.precious, "rev-parse", "HEAD"]);
+  const hook = join(tmp, "offline-hook.mjs");
+  writeFileSync(hook, `import cp from 'node:child_process';
+import { syncBuiltinESMExports } from 'node:module';
+const original = cp.execFileSync;
+cp.execFileSync = function(cmd, args, opts) {
+  if (args.includes('fetch') || (args.includes('ls-files') && args.includes('-i'))) throw new Error('forbidden slow check');
+  return original.call(this, cmd, args, opts);
+};
+syncBuiltinESMExports();`);
+  const out = execFileSync(process.execPath, ["--import", pathToFileURL(hook).href, SCRIPT,
+    "--disposable", "--path", D.precious, "--delivered-head", sha], {
+    cwd: tmp, encoding: "utf8", env: { ...process.env, T3CODE_HOME: t3home }, stdio: ["ignore", "pipe", "pipe"],
+  });
+  assert.match(lineFor(out, "wt-precious"), /^delete\s.*已交付 HEAD/);
+  assert.equal(out.split("\n").filter(l => /^(delete|skip)\s/.test(l)).length, 1);
+  assert.match(runGc(["--disposable", "--path", D.precious, "--delivered-head", "0".repeat(40)]), /HEAD 与已交付提交不一致/);
+  assert.match(lineFor(runGc(["--disposable", "--path", D.self, "--delivered-head", sha], { cwd: D.self }), "wt-self"), /^skip\s.*self/);
+});
+
+test("快清理参数与路径边界：拒绝根外目录、不完整声明和工作树子目录", () => {
+  for (const args of [
+    ["--path"], ["--path", ""], ["--delivered-head"],
+    ["--delivered-head", "a".repeat(40)],
+    ["--disposable", "--path", D.clean, "--delivered-head", "abc"],
+    ["--disposable", "--path", D.clean, "--path", D.precious, "--delivered-head", "a".repeat(40)],
+    ["--disposable", "--root", tmp], ["--disposable", "--path", mainRepo],
+    ["--path", wtRoot],
+  ]) {
+    const r = spawnSync(process.execPath, [SCRIPT, ...args], { cwd: tmp, encoding: "utf8", env: { ...process.env, T3CODE_HOME: t3home } });
+    assert.equal(r.status, 2, args.join(" ") + r.stdout + r.stderr);
+  }
+  const host = join(group, "wt-subdir-probe");
+  git(["-C", mainRepo, "worktree", "add", "--detach", host]);
+  const sub = join(host, "not-a-root");
+  mkdirSync(sub);
+  writeFileSync(join(sub, "source.txt"), "keep\n");
+  const out = runGc(["--disposable", "--path", sub, "--apply"]);
+  assert.match(out, /not-a-worktree/);
+  assert.ok(existsSync(join(sub, "source.txt")));
+  const placeholder = join(host, "placeholder-child");
+  mkdirSync(placeholder);
+  writeFileSync(join(placeholder, ".keep"), "temporary\n");
+  const phOut = runGc(["--disposable", "--path", placeholder, "--apply"]);
+  assert.match(phOut, /^deleted\s.*占位目录/m);
+  assert.doesNotMatch(phOut, /branch=/, "占位目标不能继承父工作树身份");
+  assert.ok(existsSync(join(sub, "source.txt")));
+  git(["-C", mainRepo, "worktree", "remove", "--force", host]);
+});
+
+test("定向占位目录：不能绕过后代目录的活跃线程绑定", () => {
+  const parent = join(wtRoot, "placeholder-group");
+  const child = join(parent, "live-child");
+  mkdirSync(child, { recursive: true });
+  writeFileSync(join(child, ".keep"), "temporary\n");
+  const { DatabaseSync } = req("node:sqlite");
+  const db = new DatabaseSync(dbPath);
+  insThread(db, { id: "t-placeholder-child", wt: child });
+  db.close();
+  const out = runGc(["--disposable", "--path", parent, "--apply"]);
+  assert.match(out, /^skip\s.*未终结/m);
+  assert.ok(existsSync(join(child, ".keep")));
+});
+
+test("快清理：保护 ignored 目录中绑定活跃线程的嵌套工作树", () => {
+  const parent = join(group, "wt-fast-nested-live");
+  const child = join(parent, "local", "nested-live");
+  git(["-C", mainRepo, "worktree", "add", "--detach", parent]);
+  git(["-C", mainRepo, "worktree", "add", "--detach", child]);
+  const { DatabaseSync } = req("node:sqlite");
+  const db = new DatabaseSync(dbPath);
+  insThread(db, { id: "t-nested-live", wt: child });
+  db.close();
+  try {
+    const sha = git(["-C", parent, "rev-parse", "HEAD"]);
+    const out = runGc(["--disposable", "--path", parent, "--delivered-head", sha, "--apply"]);
+    assert.match(out, /^skip\s.*未终结/m);
+    assert.ok(existsSync(join(child, ".git")), "活跃嵌套工作树必须保留");
+    assert.ok(existsSync(join(parent, ".git")));
+  } finally {
+    if (existsSync(child)) git(["-C", mainRepo, "worktree", "remove", "--force", child]);
+    if (existsSync(parent)) git(["-C", mainRepo, "worktree", "remove", "--force", parent]);
+    git(["-C", mainRepo, "worktree", "prune"]);
+  }
+});
+
+test("定向回收：不清扫无关空目录或其活跃绑定", () => {
+  const target = join(group, "wt-target-only");
+  const unrelated = join(wtRoot, "unrelated-empty");
+  const live = join(wtRoot, "unrelated-live-empty");
+  for (const p of [target, unrelated, live]) mkdirSync(p);
+  writeFileSync(join(target, ".keep"), "temporary\n");
+  const { DatabaseSync } = req("node:sqlite");
+  const db = new DatabaseSync(dbPath);
+  insThread(db, { id: "t-unrelated-live-empty", wt: live });
+  db.close();
+  const out = runGc(["--disposable", "--path", target, "--apply"]);
+  assert.match(out, /^deleted\s.*wt-target-only/m);
+  assert.ok(!existsSync(target));
+  assert.ok(existsSync(unrelated), "不能扫掉范围外空目录");
+  assert.ok(existsSync(live), "不能扫掉范围外活跃绑定目录");
+});
+
+test("快清理：拒绝符号链接/junction 目标", t => {
+  const alias = join(group, "wt-fast-link");
+  try { symlinkSync(D.clean, alias, isWindows ? "junction" : "dir"); }
+  catch (e) {
+    if (["EPERM", "EACCES"].includes(e.code)) return t.skip("无创建链接权限");
+    throw e;
+  }
+  const r = spawnSync(process.execPath, [SCRIPT, "--disposable", "--path", alias, "--apply"], {
+    cwd: tmp, encoding: "utf8", env: { ...process.env, T3CODE_HOME: t3home },
+  });
+  assert.equal(r.status, 2, r.stdout + r.stderr);
+  assert.ok(existsSync(D.clean));
+  // 清除链接本身，不递归目标。
+  unlinkSync(alias);
+});
+
+test("快清理：数据库缺席仍阻断单目标删除", () => {
+  const dbFile = readFileSync(dbPath);
+  // 以 SQLite 打开失败的文件代替数据库，随后完整恢复。
+  try {
+    writeFileSync(dbPath, "not sqlite");
+    assert.match(lineFor(runGc(["--disposable", "--path", D.clean, "--apply"]), "wt-clean"), /^skip\s.*数据库.*缺席/);
+    assert.ok(existsSync(D.clean));
+  } finally { writeFileSync(dbPath, dbFile); }
+});
+
+test("定向快清理 apply：删除临时凭据数据，复查期间新增提交则保留", () => {
+  for (const mutate of [false, true]) {
+    const wt = join(group, `wt-fast-apply-${mutate}`);
+    git(["-C", mainRepo, "worktree", "add", "-b", `fast-apply-${mutate}`, wt]);
+    writeFileSync(join(wt, ".env"), "TEMP=fixture\n");
+    const sha = git(["-C", wt, "rev-parse", "HEAD"]);
+    const hook = join(tmp, `apply-hook-${mutate}.mjs`);
+    writeFileSync(hook, `import cp from 'node:child_process';
+import fs from 'node:fs';
+import { syncBuiltinESMExports } from 'node:module';
+const original = cp.execFileSync;
+let n = 0;
+cp.execFileSync = function(cmd, args, opts) {
+  if (args.includes('fetch') || (args.includes('ls-files') && args.includes('-i'))) throw new Error('forbidden slow check');
+  if (${mutate} && args.includes('status') && ++n === 2) {
+    fs.writeFileSync(${JSON.stringify(join(wt, "new-source.txt"))}, 'new work');
+    original('git', ['-C', ${JSON.stringify(wt)}, 'add', 'new-source.txt']);
+    original('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', '-c', 'commit.gpgsign=false', '-C', ${JSON.stringify(wt)}, 'commit', '-m', 'new work']);
+  }
+  return original.call(this, cmd, args, opts);
+};
+syncBuiltinESMExports();`);
+    const out = execFileSync(process.execPath, ["--import", pathToFileURL(hook).href, SCRIPT,
+      "--disposable", "--path", wt, "--delivered-head", sha, "--apply"], {
+      cwd: tmp, encoding: "utf8", env: { ...process.env, T3CODE_HOME: t3home }, stdio: ["ignore", "pipe", "pipe"],
+    });
+    if (mutate) {
+      assert.match(out, /删除前复查发现阻断.*HEAD 与已交付提交不一致/);
+      assert.ok(existsSync(join(wt, "new-source.txt")));
+      git(["-C", mainRepo, "worktree", "remove", "--force", wt]);
+    } else {
+      assert.match(out, /^deleted\s/m);
+      assert.ok(!existsSync(wt));
+      assert.equal(git(["-C", mainRepo, "branch", "--list", `fast-apply-${mutate}`]), "");
+    }
+  }
+});
+
 test("--root 缺值：报错退出而非静默回退 ~/.t3", () => {
   for (const argv of [["--root"], ["--apply", "--root"], ["--root", "--apply"], ["--root", ""], ["--root", "   "]]) {
     const r = spawnSync(process.execPath, [SCRIPT, ...argv], {
@@ -520,9 +696,10 @@ test("purge 默认不运行 du，且输出阶段进度", () => {
   const firstGit = r.calls.findIndex((c) => c.cmd === "git");
   const header = r.calls.findIndex((c) => c.stream === "stdout" && c.text.startsWith("扫描根："));
   assert.ok(header >= 0 && header < firstGit, "首次 git 调用前即输出扫描根");
-  const fetch = r.calls.findIndex((c) => c.args?.includes("fetch"));
-  assert.ok(fetch > 0);
-  assert.match(r.calls[fetch - 1].text, /进度.*开始.*fetch/, "慢命令执行前即输出阶段信息");
+  assert.ok(!r.calls.some(c => c.args?.includes("fetch")), "已因脏树阻断，不再联网验证提交");
+  const status = r.calls.findIndex(c => c.args?.includes("status"));
+  assert.ok(status > 0);
+  assert.match(r.calls[status - 1].text, /进度.*开始.*status/, "慢命令执行前即输出阶段信息");
   const report = r.calls.findIndex((c) => c.stream === "stdout" && c.text.startsWith("skip "));
   const discovery = r.calls.findIndex((c) => c.args?.includes("--directory"));
   assert.ok(report >= 0 && report < discovery, "先输出树的结论，再发现/统计产物");
@@ -610,7 +787,8 @@ test("purge 删除前重新确认产物标记", () => {
 });
 
 test("--apply：只删可删工作树并清理本地分支", () => {
-  const out = runGc(["--apply"]);
+  // 此用例断言整个大型夹具都收完，显式扩大总窗口；默认预算耗尽的保留行为另测。
+  const out = runGc(["--apply", "--verify-budget-ms", "60000"]);
   const deletable = ["wt-clean", "wt-unbound", "wt-self", "wt-toplevel", "wt-artifacts", "wt-classfiles", "wt-buildnested", "wt-buildprecious", "wt-squash", "wt-squash2", "wt-deldone", "wt-delprov", "wt-activerun", "wt-localsdk", "wt-occupied", "wt-pushedelse"];
   if (isWindows) deletable.push("wt-occunbound"); // Windows 不做占用检查，零绑定占用树会被删
   for (const name of deletable) {

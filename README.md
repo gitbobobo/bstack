@@ -32,7 +32,7 @@
 
 ### t3-code
 
-本机 T3 Code 运行状态的内部参考：状态库表布局与会话查询方法、子线程取证（`view:"activity"` 与 `file_change` 快照恢复）、编排机制事实、监听与唤醒（含 MCP 工具延迟加载与本账号评论不唤醒的坑）与平台坑；含孤儿工作树回收脚本 `t3-worktree-gc.mjs`（默认还检查扫描根之外被遗忘的 detached 临时工作树，如基线截图树；实时输出进度，`--purge-build` 可只清保留树的构建产物，空间统计需显式加 `--measure-size`）；跨环境复盘用 `t3-activity-scan.mjs` 经 T3 MCP 端点收集各环境活跃线程及其技能读取记录。收尾循环可申请 FIFO 独占窗口（`finish-window.mjs`），协调本机资源与同目标分支的合并，并自动到期释放。专用技能。
+本机 T3 Code 运行状态的内部参考：状态库表布局与会话查询方法、子线程取证（`view:"activity"` 与 `file_change` 快照恢复）、编排机制事实、监听与唤醒（含 MCP 工具延迟加载与本账号评论不唤醒的坑）与平台坑；含孤儿工作树回收脚本 `t3-worktree-gc.mjs`（日常收尾用 `--disposable --path` 定向快清理，临时 ignored 数据不扫描，已核实交付的精确 HEAD 可免联网验证；所有模式的交付验证有总预算，超时即止，不再逐 topic 分支反复比较；全盘保守 GC 留给按需维护，含根外 detached 临时树发现、`--purge-build` 构建产物回收及显式 `--measure-size` 空间统计）；跨环境复盘用 `t3-activity-scan.mjs` 经 T3 MCP 端点收集各环境活跃线程及其技能读取记录。收尾循环可申请 FIFO 独占窗口（`finish-window.mjs`），协调本机资源与同目标分支的合并，并自动到期释放。专用技能。
 
 详见 [skills/bstack/t3-code/SKILL.md](skills/bstack/t3-code/SKILL.md)。
 

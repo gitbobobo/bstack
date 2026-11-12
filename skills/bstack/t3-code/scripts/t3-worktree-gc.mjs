@@ -16,6 +16,16 @@
 //   --measure-size                       # 显式运行 du 统计候选产物大小（可能慢）
 //   --diagnose                           # 对已阻断的树也收集 git 原因
 //   --no-external                        # 不检查扫描根之外的临时工作树（见 externalCandidates；--root 时自动关闭）
+//   --path <dir>                         # 可重复；只检查明确目标，关闭其他树发现
+//   --disposable                         # T3 根内临时树：ignored 数据不扫描、可丢弃
+//   --delivered-head <完整SHA>            # 单目标快清理：调用者已核实交付的 HEAD，免联网
+//   --verify-budget-ms <毫秒>             # 交付验证共享截止窗口（默认 10000，单树最多 5000）
+//
+// 日常收尾用 --disposable --path ... --apply，不顺带全盘 GC 或先预演一遍。
+// 快清理覆盖下列 f/g：status 用 -unormal（仍覆盖 untracked=no），跳过 ignored
+// 检查；每仓库 fetch 一次。附精确已交付 HEAD 时只核对 HEAD，免 fetch/patch
+// 计算；删除前仍重查状态。所有模式交付验证限时，深度比较仅上游/默认分支，
+// 超时即止并保留树；已阻断的树默认不做后续联网。其余绑定/路径/源码防护不变。
 //
 // 环境变量 T3CODE_HOME 覆盖 ~/.t3（worktrees=<home>/worktrees、
 // 数据库=<home>/userdata/statev2.sqlite），主要给测试夹具用。
@@ -27,7 +37,7 @@
 //   a. 不是调用者自己所在的工作树（process.cwd() 的 realpath 不在其内）；
 //   b. 是 git 链接工作树（rev-parse 成功且 --git-dir 与 --git-common-dir 解析后
 //      不同；相同是独立 clone。非 git 目录/gitfile 失效标 not-a-worktree 只报告）；
-//   c. DB 里 worktreePath 等于该路径的线程全部已终结（settledOverride='settled'、
+//   c. DB 里 worktreePath 等于该路径或后代路径的线程全部已终结（settledOverride='settled'、
 //      archived 或 deleted 任一；委派子线程的 settledOverride 永不写入，
 //      改看 subagents 表关联行是否全部终态）。有未终结线程则区分主线程/
 //      委派线程报告。零绑定允许回收，报告标 unbound；
@@ -90,26 +100,47 @@ import { execFileSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, rmdirSync, statSync, lstatSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir, platform } from "node:os";
-import { join, relative, resolve, sep } from "node:path";
+import { dirname, join, relative, resolve, sep } from "node:path";
 
 const req = createRequire(import.meta.url);
 
 // ---------- 参数 ----------
 const args = process.argv.slice(2);
-const usage = "用法：node t3-worktree-gc.mjs [--apply] [--purge-build [--measure-size]] [--diagnose] [--root <dir>] [--no-external]";
+const usage = "用法：node t3-worktree-gc.mjs [--apply] [--purge-build [--measure-size]] [--diagnose] [--root <dir>] [--no-external] [--path <dir> ...] [--disposable [--delivered-head <sha>]] [--verify-budget-ms <毫秒>]";
 let apply = false;
 let rootOverride = null;
 let purgeBuild = false;
 let measureSize = false;
 let diagnose = false;
 let external = true;
+let disposable = false;
+let deliveredHead = null;
+let verifyBudgetMs = 10000;
+const targetPaths = [];
 for (let i = 0; i < args.length; i++) {
   if (args[i] === "--apply") apply = true;
   else if (args[i] === "--purge-build") purgeBuild = true;
   else if (args[i] === "--measure-size") measureSize = true;
   else if (args[i] === "--diagnose") diagnose = true;
   else if (args[i] === "--no-external") external = false;
-  else if (args[i] === "--root") {
+  else if (args[i] === "--disposable") disposable = true;
+  else if (args[i] === "--verify-budget-ms") {
+    const v = args[++i];
+    if (!v || !/^\d+$/.test(v) || !Number.isSafeInteger(Number(v)) || Number(v) <= 0) {
+      console.error(`--verify-budget-ms 需要正整数毫秒\n${usage}`);
+      process.exit(2);
+    }
+    verifyBudgetMs = Number(v);
+  } else if (["--path", "--delivered-head"].includes(args[i])) {
+    const flag = args[i];
+    const v = args[++i];
+    if (!v?.trim() || v.startsWith("--")) {
+      console.error(`${flag} 需要参数\n${usage}`);
+      process.exit(2);
+    }
+    if (flag === "--path") targetPaths.push(resolve(v));
+    else deliveredHead = v;
+  } else if (args[i] === "--root") {
     const v = args[++i];
     // 缺值/空白/以 -- 开头：拒绝静默回退——resolve("") 会落到调用者 cwd，
     // --apply --root "$空变量" 会把 cwd 下的目录当工作树根扫描
@@ -129,17 +160,23 @@ if (measureSize && !purgeBuild) {
   process.exit(2);
 }
 
+if (deliveredHead && (!disposable || targetPaths.length !== 1 || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(deliveredHead))) {
+  console.error(`--delivered-head 需要 --disposable、一个 --path 和完整提交 SHA\n${usage}`);
+  process.exit(2);
+}
+
 const t3Home = process.env.T3CODE_HOME || join(homedir(), ".t3");
 const scanRoot = resolve(rootOverride ?? join(t3Home, "worktrees"));
 const dbPath = join(t3Home, "userdata", "statev2.sqlite");
 const isWindows = platform() === "win32";
+const managedRoot = resolve(t3Home, "worktrees");
 
 // ---------- 工具 ----------
 // 数组传参，禁止拼 shell 字符串；失败不抛异常，由调用处按保守策略处理。
 const progress = (text) => console.error(`[进度] ${text}`);
 function shErr(cmd, argv, opts = {}) {
   const started = performance.now();
-  const heavy = ["du", "lsof"].includes(cmd) || argv.some((a) => ["status", "ls-files", "fetch", "submodule", "cherry", "patch-id", "diff", "log"].includes(a));
+  const heavy = ["du", "lsof"].includes(cmd) || argv.some((a) => ["status", "ls-files", "fetch", "submodule", "cherry", "patch-id", "diff", "log", "for-each-ref", "merge-base"].includes(a));
   const label = `${cmd} ${argv.join(" ")}`;
   if (heavy) progress(`开始 ${label}`);
   const done = (result) => {
@@ -160,7 +197,7 @@ function shErr(cmd, argv, opts = {}) {
     return { ok: true, out: out.trim(), err: "" };
   } catch (e) {
     done(`失败 ${e.code ?? e.status ?? "unknown"}${e.signal ? ` signal=${e.signal}` : ""}`);
-    return { ok: false, out: "", err: String(e.stderr?.toString() || e.message).trim() };
+    return { ok: false, out: "", timedOut: e.code === "ETIMEDOUT", err: String(e.stderr?.toString() || e.message).trim() };
   }
 }
 const sh = (cmd, argv, opts = {}) => {
@@ -596,11 +633,16 @@ function snapshotDb() {
 
 // DB 里同一工作树可能有多种路径拼写（如 /tmp 与 /private/tmp）：原路径与
 // realpath 两个键下的绑定列表合并，按 thread_id 去重。
-function boundThreads(byWt, dir, wtReal) {
+function boundThreads(byWt, dir, wtReal, includeDescendants = true) {
   const m = new Map();
   for (const key of new Set([norm(dir), wtReal].filter(Boolean))) {
     for (const t of byWt.get(key) ?? []) m.set(t.id, t);
   }
+  // 整树删除也会删除 ignored 子目录中的工作树，后代绑定一律保护；只查 DB。
+  if (includeDescendants)
+    for (const [key, threads] of byWt)
+      if (inside(key, norm(dir)) || inside(key, wtReal))
+        for (const t of threads) m.set(t.id, t);
   return [...m.values()];
 }
 
@@ -611,10 +653,12 @@ function snapshotReasons(dir, wtReal, snap, occ, notes) {
   const reasons = [];
   let inUse = false;
   let bound = [];
+  let directBound = [];
   if (!snap.state) {
     reasons.push(snap.note ?? "数据库缺席，不做删除");
   } else {
     bound = boundThreads(snap.state.byWt, dir, wtReal);
+    directBound = boundThreads(snap.state.byWt, dir, wtReal, false);
     if (bound.length === 0) notes.push("unbound");
     const unsettled = bound.filter((t) => !t.settled);
     if (unsettled.length) {
@@ -653,7 +697,7 @@ function snapshotReasons(dir, wtReal, snap, occ, notes) {
       // 代理、模拟器、守护进程）——降级为备注放行：已验证干净+已推送的
       // 目录删掉只让残留进程 cwd 失效，没有数据损失；未绑定目录里的
       // 占用无法归因（可能是闲逛进去的活线程/用户进程），维持阻断
-      if (bound.length && bound.every((t) => t.settled)) notes.push(`${msg}（绑定线程已全部终结，判为残留进程）`);
+      if (directBound.length && directBound.every((t) => t.settled) && bound.every((t) => t.settled)) notes.push(`${msg}（绑定线程已全部终结，判为残留进程）`);
       else reasons.push(msg);
     }
   }
@@ -663,14 +707,43 @@ function snapshotReasons(dir, wtReal, snap, occ, notes) {
 // 远端跟踪引用只是本地缓存：远端分支被删/强推后本地 ref 仍在，「已推送」
 // 会误判。每个公共 git 目录跑一次 fetch --prune 刷新后再判（worktree 共享
 // refs，按 gitCommon 去重）；取不到远端视为无法验证，该仓库整组 skip。
+// 预算覆盖 fetch 与提交图/patch 验证，跨树和 apply 复查共享；不约束文件扫描/物理删除。
+// 一棵树最多 5 秒，整次默认 10 秒。时间/错误只代表“未能证明”，绝不作为可删除证据。
+class VerificationStopped extends Error {}
+let verifyDeadline = null;
+const treeVerifyDeadlines = new Map();
+function verifier(dir) {
+  const now = performance.now();
+  verifyDeadline ??= now + verifyBudgetMs;
+  const key = norm(dir);
+  if (!treeVerifyDeadlines.has(key)) treeVerifyDeadlines.set(key, now + 5000);
+  const deadline = Math.min(verifyDeadline, treeVerifyDeadlines.get(key));
+  const check = () => {
+    const left = Math.floor(deadline - performance.now());
+    if (left <= 0) throw new VerificationStopped("交付验证预算耗尽，保留工作树");
+    return left;
+  };
+  return {
+    out(argv, opts = {}, optional = false) {
+      const timeout = Math.min(check(), opts.timeout ?? 5000);
+      const r = shErr("git", argv, { ...opts, timeout });
+      if (r.timedOut) throw new VerificationStopped("交付验证命令超时，停止后续比较并保留工作树");
+      check(); // 命令成功但已超预算，也不能将其作为放行证据
+      if (!r.ok && !optional) throw new VerificationStopped("交付验证命令失败，停止后续比较并保留工作树");
+      return r.ok ? r.out : null;
+    },
+  };
+}
 const fetchCache = new Map(); // gitCommon → boolean
 // norm(dir) → 该树分支允许 branch -D：HEAD 改动已验证在远端（祖先已推送
 // 或 patch/整支等价/无净改动）。-d 只认「合入当前 HEAD」，不查远端祖先——
 // 推上远端其他分支的支端同样会被拒，-D 丢弃的只是本地引用不丢内容。
 const forceDelOk = new Set();
-function refreshRemote(gitCommon, fresh = false) {
+function refreshRemote(gitCommon, verify, fresh = false) {
   if (fresh) fetchCache.delete(gitCommon); // 删除前复查不复用扫描期的旧快照
   if (!fetchCache.has(gitCommon)) {
+    // 失败/超时也缓存，其他工作树不重试同仓库的失败请求。
+    fetchCache.set(gitCommon, false);
     // 禁交互凭据提示：缺 HTTPS/SSH 凭据时 git 会经 /dev/tty 弹提示卡到超时；
     // 让它们直接失败走「远端不可达」分支。
     const env = { GIT_TERMINAL_PROMPT: "0" };
@@ -679,11 +752,11 @@ function refreshRemote(gitCommon, fresh = false) {
     const hasSshCmd =
       process.env.GIT_SSH_COMMAND ||
       process.env.GIT_SSH ||
-      sh("git", ["--git-dir", gitCommon, "config", "--get", "core.sshCommand"]);
+      verify.out(["--git-dir", gitCommon, "config", "--get", "core.sshCommand"], {}, true);
     if (!hasSshCmd) env.GIT_SSH_COMMAND = "ssh -o BatchMode=yes";
     fetchCache.set(
       gitCommon,
-      shErr("git", ["--git-dir", gitCommon, "fetch", "origin", "--prune"], { timeout: 120000, env }).ok
+      verify.out(["--git-dir", gitCommon, "fetch", "origin", "--prune"], { env }) !== null
     );
   }
   return fetchCache.get(gitCommon);
@@ -691,46 +764,47 @@ function refreshRemote(gitCommon, fresh = false) {
 
 // diff 文本 → patch-id 集合：git patch-id 从 stdin 读，git log -p 多提交
 // 输入按 "commit <sha>" 行分节、逐提交各产一个 id；单个 git diff 输出一 id。
-function patchIdsOf(diffText) {
-  const r = sh("git", ["patch-id", "--stable"], { input: diffText, maxBuffer: 256 * 1024 * 1024 });
-  if (r === null) return null;
+function patchIdsOf(diffText, verify) {
+  const r = verify.out(["patch-id", "--stable"], { input: diffText, maxBuffer: 256 * 1024 * 1024 });
   return new Set(r.split("\n").map((l) => l.split(/\s/)[0]).filter(Boolean));
 }
 
 // g. HEAD 改动是否已在远端，按顺序取首个成立的方式，返回报告文案：
 //   - HEAD 是某 origin ref 的祖先（常规推送、merge 合并后远端分支仍在）；
-//   - git cherry <ref> HEAD 无 '+'：逐提交 patch 等价（rebase 合并、单提交 squash）；
+//   - 明确上游/默认分支（最多两个）git cherry 无 '+'：逐提交 patch 等价；
 //   - 整支 diff(base..HEAD) 的 patch-id 命中 base..ref 上某提交（多提交 squash：
 //     N 个本地提交被压成远端 1 个，逐提交 cherry 对不上，整支 diff 能对上）；
 //   - diff(base..HEAD) 为空：相对上游无净改动，内容层面无可丢。
 // patch 等价只证明改动内容已进远端，提交对象仍随删除丢弃——squash 合并的
 // 本地分支正是这个形态；内容对不上的孤立提交仍按未推送阻断。
-function headShipped(dir, refs) {
-  for (const ref of refs)
-    if (shErr("git", ["-C", dir, "merge-base", "--is-ancestor", "HEAD", ref]).ok)
-      return "HEAD 已推送";
-  for (const ref of refs) {
-    const c = sh("git", ["-C", dir, "cherry", ref, "HEAD"]);
-    if (c !== null && !c.split("\n").some((l) => l.startsWith("+")))
+function headShipped(dir, verify) {
+  // 一次 Git 遍历完成所有 origin 引用的祖先检查，避免逐 ref 启动进程。
+  const contains = verify.out(["-C", dir, "for-each-ref", "--contains=HEAD", "--count=1", "--format=%(refname)", "refs/remotes/origin"]);
+  if (contains) return "HEAD 已推送";
+
+  // 深度 patch 比较只对明确上游和默认分支做；不把每个 topic 都当作候选。
+  const upstream = verify.out(["-C", dir, "rev-parse", "--symbolic-full-name", "@{upstream}"], {}, true);
+  const defaultRef = verify.out(["-C", dir, "symbolic-ref", "-q", "refs/remotes/origin/HEAD"], {}, true);
+  const refs = verify.out(["-C", dir, "for-each-ref", "--format=%(refname)", "refs/remotes/origin"]).split("\n").filter(Boolean);
+  if (!refs.length) return "";
+  const primary = defaultRef || ["refs/remotes/origin/main", "refs/remotes/origin/master"].find(r => refs.includes(r));
+  const candidates = [...new Set([upstream, primary].filter(r => r?.startsWith("refs/remotes/origin/") && refs.includes(r)))];
+  const diffCache = new Map(); // 同一 merge-base 不重复生成本地整支 patch
+  for (const ref of candidates) {
+    const c = verify.out(["-C", dir, "cherry", ref, "HEAD"]);
+    if (!c.split("\n").some(l => l.startsWith("+")))
       return `HEAD 各提交 patch 等价于 ${ref} 上的提交（rebase/squash 合并）`;
-  }
-  for (const ref of refs) {
-    const base = sh("git", ["-C", dir, "merge-base", "HEAD", ref]);
+    const base = verify.out(["-C", dir, "merge-base", "HEAD", ref], {}, true);
     if (!base) continue;
-    const diff = sh("git", ["-C", dir, "diff", base, "HEAD"], { maxBuffer: 256 * 1024 * 1024 });
-    if (diff === null) continue;
-    if (!diff.trim()) return `相对 ${ref} 无净改动`;
-    const bp = patchIdsOf(diff)?.values().next().value;
+    if (!diffCache.has(base)) {
+      const diff = verify.out(["-C", dir, "diff", "--no-ext-diff", "--no-textconv", base, "HEAD"], { maxBuffer: 256 * 1024 * 1024 });
+      if (!diff.trim()) return `相对 ${ref} 无净改动`;
+      diffCache.set(base, patchIdsOf(diff, verify).values().next().value);
+    }
+    const bp = diffCache.get(base);
     if (!bp) continue;
-    // 上游侧逐提交 patch-id：git log -p 的输出按 commit 行分节，patch-id
-    // 逐提交各产一行；封顶 400 个提交，日志体积上限与 ls-files 同规格
-    const up = sh(
-      "git",
-      ["-C", dir, "log", "--no-merges", "-n", "400", "-p", `${base}..${ref}`],
-      { maxBuffer: 256 * 1024 * 1024, timeout: 60000 }
-    );
-    if (up === null) continue;
-    if (patchIdsOf(up)?.has(bp)) return `HEAD 整支改动等价于 ${ref} 上的提交（squash 合并）`;
+    const up = verify.out(["-C", dir, "log", "--no-ext-diff", "--no-textconv", "--no-merges", "-n", "400", "-p", `${base}..${ref}`], { maxBuffer: 256 * 1024 * 1024 });
+    if (patchIdsOf(up, verify).has(bp)) return `HEAD 整支改动等价于 ${ref} 上的提交（squash 合并）`;
   }
   return null;
 }
@@ -738,7 +812,7 @@ function headShipped(dir, refs) {
 // f/g. git 侧判定：未提交变更、忽略文件里的珍贵内容、HEAD 已推送、
 // assume-unchanged/skip-worktree 标记。扫描与删除前复查共用：间隔期间
 // 后台进程可能新写 .env 或本地提交。notes 只在扫描阶段收集 ignored 列名；
-// refetch=true 时强制重跑 fetch，复查不用扫描期的远端快照。
+// refetch=true 时保守模式强制重跑 fetch；快清理复用本轮远端快照。
 function gitStateReasons(dir, notes, gitCommon, refetch = false) {
   const reasons = [];
   // FSMonitor 钩子/守护进程陈旧或误报时，被修改的 index 条目仍标
@@ -748,17 +822,21 @@ function gitStateReasons(dir, notes, gitCommon, refetch = false) {
   const NF = ["-c", "core.fsmonitor=false", "-c", "core.untrackedCache=false"];
   // -uall 强制逐文件展开并覆盖 status.showUntrackedFiles=no 配置——
   // 配置为 no 时普通 untracked 文件完全不报，会把脏树误判干净
-  const st = sh("git", [...NF, "-C", dir, "status", "--porcelain", "-uall"]);
+  const st = sh("git", [...NF, "-C", dir, "status", "--porcelain", disposable ? "-unormal" : "-uall"]);
   if (st === null) reasons.push("git status 执行失败");
   else {
     const dirty = st.split("\n").filter(Boolean);
     if (dirty.length) reasons.push(`${dirty.length} 个未提交文件`);
   }
 
+  if (reasons.length && !diagnose) return reasons;
+
   // ignored 逐文件展开（ls-files 不受折叠/status 配置影响）：先过良性
   // 目录段滤掉编译产物防误报，剩余逐文件匹配珍贵模式。输出可能 10MB+
   //（数万 ignored 文件），缓冲给足、超时放宽
-  const ls = sh("git", [...NF, "-C", dir, "ls-files", "-o", "-i", "--exclude-standard", "-z"], { maxBuffer: 256 * 1024 * 1024, timeout: 60000 });
+  // 临时树明确允许丢弃 ignored 数据：在 Git 遍历前跳过，而不是展开后过滤。
+  const ls = disposable ? "" : sh("git", [...NF, "-C", dir, "ls-files", "-o", "-i", "--exclude-standard", "-z"], { maxBuffer: 256 * 1024 * 1024, timeout: 60000 });
+  if (disposable) notes.push("临时树：ignored 数据可丢弃，未扫描");
   if (ls === null) reasons.push("git ls-files 执行失败");
   else {
     const ignored = ls.split("\0").filter(Boolean);
@@ -828,23 +906,38 @@ function gitStateReasons(dir, notes, gitCommon, refetch = false) {
     if (subs.size) reasons.push(`含 git 子模块（其内部本地状态不可评估）：${subs.size} 个`);
   }
 
-  if (sh("git", ["--git-dir", gitCommon, "remote", "get-url", "origin"]) === null)
-    reasons.push("无 origin 远端配置");
-  else if (!refreshRemote(gitCommon, refetch))
-    reasons.push("远端不可达，无法验证推送状态（fetch origin --prune 失败）");
-  else {
-    const refs = (sh("git", ["-C", dir, "for-each-ref", "--format=%(refname)", "refs/remotes/origin"]) ?? "")
-      .split("\n")
-      .filter(Boolean);
-    if (refs.length === 0) reasons.push("无 refs/remotes/origin/* 远端引用");
+  // 已因源码/索引/ignored 内容阻断时，不再联网做注定不能放行的深度比较。
+  if (reasons.length && !diagnose) return reasons;
+
+  // 调用者已核实交付的精确 HEAD：免联网；复查仍核对 HEAD 防止期间新增提交。
+  // 这不是自动推断的“已合并”，参数本身是调用者对该提交已交付的声明。
+  if (deliveredHead) {
+    const head = sh("git", ["-C", dir, "rev-parse", "HEAD"]);
+    if (head?.toLowerCase() !== deliveredHead.toLowerCase()) reasons.push("HEAD 与已交付提交不一致");
     else {
-      const shipped = headShipped(dir, refs);
-      if (!shipped) reasons.push("HEAD 不在任何 origin 分支上（本地提交未推送）");
+      notes.push(`已交付 HEAD ${head}`);
+      forceDelOk.add(norm(dir));
+    }
+    return reasons;
+  }
+  try {
+    const verify = verifier(dir);
+    if (verify.out(["--git-dir", gitCommon, "remote", "get-url", "origin"], {}, true) === null)
+      reasons.push("无 origin 远端配置");
+    else if (!refreshRemote(gitCommon, verify, refetch && !disposable))
+      reasons.push("远端刷新未完成，无法验证推送状态（本轮不重试失败的 fetch）");
+    else {
+      const shipped = headShipped(dir, verify);
+      if (shipped === "") reasons.push("无 refs/remotes/origin/* 远端引用");
+      else if (!shipped) reasons.push("HEAD 未确认交付（可能本地提交未推送；未遍历其他 topic 分支做 patch 比较）");
       else {
         notes.push(shipped);
-        forceDelOk.add(norm(dir)); // 任一种「已在远端」成立，-D 都不丢内容
+        forceDelOk.add(norm(dir));
       }
     }
+  } catch (e) {
+    if (!(e instanceof VerificationStopped)) throw e;
+    reasons.push(e.message);
   }
   return reasons;
 }
@@ -938,6 +1031,7 @@ const fmtBytes = (b) => (b === null ? "未知" : b >= 2 ** 30 ? `${(b / 2 ** 30)
 
 // ---------- 主流程 ----------
 const rows = []; // { verdict, rel, branch, detail }
+const removedTreeDirs = new Set(); // 分组收尾只能处理本轮真正删过子树的父目录
 const counts = { delete: 0, deleted: 0, skip: 0, "not-a-worktree": 0, failed: 0, purge: 0, purged: 0 };
 let purgeTotal = 0;
 let purgeUnknown = false;
@@ -958,7 +1052,23 @@ if (!existsSync(scanRoot)) {
   process.exit(0);
 }
 
-console.log(`扫描根：${scanRoot}${apply ? "（--apply）" : "（dry-run）"}`);
+// 快清理只接受 T3 管理根内的真实目录；自定义根不能扩大授权范围。
+// 同时约束词法路径和 realpath，避免别名或 junction 指向根外。
+function managedPath(dir) {
+  const rootReal = tryReal(managedRoot) ?? norm(managedRoot);
+  const real = tryReal(dir);
+  return inside(norm(dir), norm(managedRoot)) && norm(dir) !== norm(managedRoot) &&
+    real && !lstatSync(dir).isSymbolicLink() && inside(real, rootReal) && real !== rootReal;
+}
+if (disposable && ((!managedPath(scanRoot) && norm(scanRoot) !== norm(managedRoot)) || targetPaths.some((p) => !managedPath(p)))) {
+  console.error("--disposable 只允许 T3 worktrees 管理根内的目录（含真实路径）");
+  process.exit(2);
+}
+if (targetPaths.some((p) => !inside(norm(p), norm(scanRoot)) || norm(p) === norm(scanRoot))) {
+  console.error("--path 必须是扫描根内的具体工作树，不能是扫描根本身");
+  process.exit(2);
+}
+console.log(`扫描根：${scanRoot}${apply ? "（--apply）" : "（dry-run）"}${disposable ? "（临时树快清理）" : ""}`);
 progress("读取线程绑定与进程占用快照");
 const dbSnap = snapshotDb();
 const occSnap = computeOccupants();
@@ -970,9 +1080,9 @@ let inUseDirs = 0; // 扫描期判定为「在用」（未终结线程绑定/进
 const relOf = (p) => (relative(scanRoot, p) || p).replaceAll(sep, "/");
 
 progress("收集候选工作树");
-const rootDirs = candidates(scanRoot);
+const rootDirs = targetPaths.length ? [...new Set(targetPaths)] : candidates(scanRoot);
 // 显式 --root 是定向扫描：不顺着仓库去找根外的工作树。
-const externals = external && !rootOverride ? externalCandidates(rootDirs, scanRoot) : [];
+const externals = external && !rootOverride && !targetPaths.length && !disposable ? externalCandidates(rootDirs, scanRoot) : [];
 const extOf = new Map(externals.map((e) => [e.dir, e]));
 for (const dir of [...rootDirs, ...externals.map((e) => e.dir)]) {
   const ext = extOf.get(dir);
@@ -981,12 +1091,23 @@ for (const dir of [...rootDirs, ...externals.map((e) => e.dir)]) {
   const reasons = [];
   const notes = [];
   const wtReal = tryReal(dir) ?? norm(dir);
+  if (disposable && !managedPath(dir)) {
+    report("skip", rel, "临时树路径越出 T3 管理根", null);
+    continue;
+  }
+  // 定向目标必须本身有 .git，不能让 Git 向上找到父树而误删其子目录。
+  if (targetPaths.length && !existsSync(join(dir, ".git")) && !placeholderOnly(dir)) {
+    report("not-a-worktree", rel, "目标不是工作树根或占位目录", null);
+    continue;
+  }
 
   // b. git 链接工作树判定。非 git/gitfile 失效的残留里，整树只含占位/系统
   //    垃圾文件的是「占位目录」（T3 合并 PR 后删工作树留的 cwd 占位，文件
   //    自述 safe to delete）——过同样的 self/绑定/占用检查后删除；含其他
   //    内容的维持 not-a-worktree 只报告。
-  const gitDirOut = sh("git", ["-C", dir, "rev-parse", "--git-dir"]);
+  const gitDirOut = targetPaths.length && !existsSync(join(dir, ".git"))
+    ? null // 占位目标没有自己的 Git 元数据，不能继承父工作树的分支身份
+    : sh("git", ["-C", dir, "rev-parse", "--git-dir"]);
   if (gitDirOut === null) {
     if (!placeholderOnly(dir)) {
       report("not-a-worktree", rel, "非 git 目录或 gitfile 失效的残留", null);
@@ -1007,6 +1128,7 @@ for (const dir of [...rootDirs, ...externals.map((e) => e.dir)]) {
     }
     // 删除前重拍绑定/占用复查（与工作树同一 TOCTOU 收窄逻辑）
     const rePh = snapshotReasons(dir, wtReal, snapshotDb(), computeOccupants(), []).reasons;
+    if (disposable && (!managedPath(dir) || tryReal(dir) !== wtReal)) rePh.push("删除前占位目录路径改变或越界");
     if (rePh.length) {
       report("skip", rel, `删除前复查发现阻断：${rePh.join("；")}`, null);
       continue;
@@ -1015,7 +1137,10 @@ for (const dir of [...rootDirs, ...externals.map((e) => e.dir)]) {
       rmSync(dir, { recursive: true }); // 内容已逐条核验为占位文件
     } catch {}
     if (existsSync(dir)) report("failed", rel, "占位目录删除失败", null);
-    else report("deleted", rel, notes.join("；"), null);
+    else {
+      removedTreeDirs.add(dir);
+      report("deleted", rel, notes.join("；"), null);
+    }
     continue;
   }
   const branch = sh("git", ["-C", dir, "symbolic-ref", "-q", "--short", "HEAD"]);
@@ -1107,6 +1232,7 @@ for (const dir of [...rootDirs, ...externals.map((e) => e.dir)]) {
   // 删除前重拍复查（收窄 TOCTOU）：线程绑定/活跃 run/进程占用可能已变；
   // git 状态同样重查——扫描与执行之间后台进程可能新写 ignored 凭据或本地提交
   const reReasons = [
+    ...(disposable && (!managedPath(dir) || (tryReal(dir) ?? norm(dir)) !== wtReal) ? ["删除前工作树路径改变或越界"] : []),
     ...snapshotReasons(dir, wtReal, snapshotDb(), computeOccupants(), []).reasons,
     ...gitStateReasons(dir, [], gitCommon, true),
   ];
@@ -1142,24 +1268,17 @@ for (const dir of [...rootDirs, ...externals.map((e) => e.dir)]) {
       else notes.push(`分支 ${branch} 保留（${bf.err || "branch -D 失败"}）`);
     } else notes.push(`分支 ${branch} 保留（${bd.err || "branch -d 失败"}）`);
   }
+  removedTreeDirs.add(dir);
   report("deleted", rel, notes.join("；"), branch);
 }
 
-// 收尾清扫：本轮删空的二层分组目录（如 musiver/ 下工作树删光后剩的空壳）
-// 一并 rmdir。只动空目录——rmdirSync 对非空目录报错，天然兜底；调用者 cwd
-// 与有进程 cwd 落在里面的跳过。
+// 仅清理本轮删除子树后留下的一级分组，不枚举/删除其他空目录。
 if (apply) {
-  for (const g of subdirs(scanRoot)) {
+  const groups = new Set([...removedTreeDirs].map(dirname).filter(g => dirname(g) === scanRoot));
+  for (const g of groups) {
     const gr = tryReal(g) ?? norm(g);
-    if (inside(cwdReal, gr)) continue;
-    let busy = false;
-    if (occSnap)
-      for (const p of occSnap.keys())
-        if (inside(tryReal(p) ?? norm(p), gr)) {
-          busy = true;
-          break;
-        }
-    if (busy) continue;
+    if (!existsSync(g) || inside(cwdReal, gr)) continue;
+    if (snapshotReasons(g, gr, snapshotDb(), computeOccupants(), []).reasons.length) continue;
     try {
       rmdirSync(g);
       report("deleted", relOf(g), "删空的分组目录", null);
