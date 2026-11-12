@@ -7,11 +7,11 @@
 //   slots       本轮最多还能派几个（perRun、perDay 余量与各仓库空位之和取小；perDay 为 0 不限）；为 0 时不列候选
 //   devices     该仓库有空位的设备（alias、environmentId、projectId、free）
 //   shortlist   粗排后的前 max(5, 空位×per-slot) 条：ref、id、title、labels、excerpt、category（粗分类）、
-//               rank（越小越优先）、needsInfo（正文像在等补信息）、attempts
+//               rank（越小越优先）、needsInfo（正文像在等补信息）、priority（用户优先）、attempts
 //   excluded    已有未结线程或台账在派的问题（附依据）；more 是排在表外的候选数
 // --detail：表内每条再读一次详情，附 body（前 N 字）与 consensus（共识摘要），挑选时不必逐条 show；0 关闭。
 // 粗排只是排序提示：按标题与标签的关键词归类（崩溃/丢数据 → 门禁/构建/发版 → 安全 → 功能错误 → 性能 → 体验 → 重构），
-// 同类按「高 / 中 / 低」标记。挑选仍按 SKILL.md 第 3 步逐条判断。
+// 用户优先标签先于粗排；同类按「高 / 中 / 低」标记。挑选仍按 SKILL.md 第 2 步逐条判断。
 // 有 T3 MCP 会话时，再对表内问题在各设备该仓库的项目里 t3_thread_search 查重；没有会话只按标题与台账查重。
 
 import { readFileSync, realpathSync } from "node:fs";
@@ -20,6 +20,8 @@ import { loadConfig } from "./dispatch-config.mjs";
 import { ledgerSummary, readLedger, run } from "./issue-source.mjs";
 import { loadEnvironments } from "../../t3-patrol/scripts/patrol-config.mjs";
 import { call, connect, hasSession, pool } from "../../t3-patrol/scripts/t3-mcp.mjs";
+
+import { labelPolicy } from "./dispatch-labels.mjs";
 
 const CATEGORIES = [
   ["无法使用/丢数据", /崩溃|闪退|无法启动|启动失败|白屏|卡死|丢失|误删|数据损坏|无法播放|crash|panic/i],
@@ -81,13 +83,16 @@ export function buildPlan({ capacity, config, environments, ledger, listOf, perS
       const thread = openThreads.find((t) => refRe(c.ref).test(t.title ?? ""));
       if (thread) r.excluded.push({ ref: c.ref, title: c.title, reason: `已有未结线程「${thread.title}」`, link: thread.link });
       else if (activeIds.has(c.id)) r.excluded.push({ ref: c.ref, title: c.title, reason: "台账里已派出、线程未了结" });
-      else cands.push({ ...c, ...rankOf(c) });
+      else if (labelPolicy(c.labels).deferred) r.excluded.push({ ref: c.ref, title: c.title, reason: "bstack:defer 暂缓自动派活" });
+      else cands.push({ ...c, ...rankOf(c), priority: labelPolicy(c.labels).priority });
     }
-    cands.sort((a, b) => a.needsInfo - b.needsInfo || a.rank - b.rank || String(b.updatedAt).localeCompare(String(a.updatedAt)));
+    cands.sort((a, b) => Number(b.priority) - Number(a.priority) || a.needsInfo - b.needsInfo || a.rank - b.rank || String(b.updatedAt).localeCompare(String(a.updatedAt)));
     const n = Math.max(5, r.slots * perSlot);
-    r.shortlist = cands.slice(0, n).map(({ id, ref, title, labels, excerpt, category, rank, needsInfo, attempts }) => ({ id, ref, title, labels, excerpt, category, rank, needsInfo, ...(attempts ? { attempts } : {}) }));
+    r.shortlist = cands.slice(0, n).map(({ id, ref, title, labels, excerpt, category, rank, needsInfo, priority, attempts }) => ({ id, ref, title, labels, excerpt, category, rank, needsInfo, priority, ...(attempts ? { attempts } : {}) }));
     r.more = Math.max(0, cands.length - n);
     r.sourceSkipped = listed.skipped.length;
+    r.labelConflicts = listed.skipped.filter((s) => s.conflict);
+    r.deferred = listed.skipped.filter((s) => /bstack:defer/.test(s.reason ?? "")).length;
   }
   return { slots, budget, launchedToday: summary.launched, repos, skipped };
 }
@@ -159,7 +164,7 @@ if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToP
             c.detailError = String(e.message ?? e);
           }
         }
-        r.shortlist.sort((a, b) => a.needsInfo - b.needsInfo);
+        r.shortlist.sort((a, b) => Number(b.priority) - Number(a.priority) || a.needsInfo - b.needsInfo);
       }
     }
     if (plan.slots > 0 && hasSession()) {

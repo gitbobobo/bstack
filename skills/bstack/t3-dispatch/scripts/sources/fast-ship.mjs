@@ -6,6 +6,8 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import { DISPATCH_LABELS, labelPolicy } from "../dispatch-labels.mjs";
+
 const PAGE = 100;
 const STATUS_OF = (issue) => issue.internal_meta?.workflow_status || "unset";
 // https://host/owner/name(.git) 与 git@host:owner/name(.git) 都折成 host/owner/name，与 T3 的 canonicalKey 对齐。
@@ -64,6 +66,69 @@ const clip = (s, n) => {
   return t.length > n ? `${t.slice(0, n)}…` : t;
 };
 
+const labelsOf = (issue) => [...new Set([
+  ...(issue.internal_meta?.labels ?? []), ...(issue.github?.labels ?? []),
+].map((l) => l.name))];
+
+// Fast Ship 的标签目录来自公开仓，创建也必须落在 repository_url，而非代码主仓。
+export function ensureLabels(api, { repo, project, checkOnly = false, createLabel = createRepoLabel }) {
+  const pid = project ?? resolveProject(api, repo);
+  const result = { project: pid, existing: [], created: [], missing: [], warnings: [] };
+  try {
+    const labels = data(api("GET", `/api/projects/${pid}/issues/repo-labels`), "列仓库标签");
+    const names = new Set(labels.map((l) => l.name.toLowerCase()));
+    const missing = DISPATCH_LABELS.filter((l) => !names.has(l.name));
+    result.missing = missing.map((l) => l.name);
+    result.existing = DISPATCH_LABELS.filter((l) => names.has(l.name)).map((l) => l.name);
+    if (checkOnly) result.missing = missing.map((l) => l.name);
+    else if (missing.length) {
+      const p = data(api("GET", `/api/projects/${pid}`), "读项目");
+      if (!p.repository_url) throw new Error("项目未关联公开仓库，无法创建标签");
+      if (new URL(p.repository_url).hostname !== "github.com") throw new Error("非 github.com 仓库：按 references/labels.md 确认 GitHub Enterprise / Forgejo 并维护标签目录");
+      for (const label of missing) {
+        try {
+          const created = createLabel(p.repository_url, label);
+          (created === false ? result.existing : result.created).push(label.name);
+          result.missing = result.missing.filter((name) => name !== label.name);
+        } catch (e) {
+          result.warnings.push(`${label.name}：${e.message}`);
+        }
+      }
+    }
+  } catch (e) {
+    result.warnings.push(`标签检查未完成：${e.message}`);
+  }
+  return result;
+}
+
+function createRepoLabel(repository, label) {
+  const url = new URL(repository);
+  const repo = url.pathname.replace(/^\/|\/$/g, "").replace(/\.git$/, "");
+  if (repo.split("/").length !== 2) throw new Error(`无效的公开仓地址 ${repository}`);
+  const endpoint = `repos/${repo}/labels`;
+  const getArgs = ["api", "--hostname", url.hostname, `${endpoint}/${encodeURIComponent(label.name)}`];
+  const read = () => spawnSync("gh", getArgs, { encoding: "utf8", timeout: 60000 });
+  // Fast Ship 目录可能仍在缓存中；实时查询避免重复创建及覆盖用户自定义属性。
+  const before = read();
+  if (before.status === 0 && JSON.parse(before.stdout).name?.toLowerCase() === label.name) return false;
+  if (!/HTTP 404/.test(before.stderr ?? "")) throw new Error((before.stderr || before.error?.message || "读取标签失败").trim());
+  const dir = mkdtempSync(join(tmpdir(), "t3-labels-"));
+  try {
+    const file = join(dir, "label.json");
+    writeFileSync(file, JSON.stringify(label), "utf8");
+    const r = spawnSync("gh", ["api", "--hostname", url.hostname, endpoint, "--method", "POST", "--input", file], { encoding: "utf8", timeout: 60000 });
+    if (r.status !== 0) {
+      const after = read();
+      if (after.status === 0 && JSON.parse(after.stdout).name?.toLowerCase() === label.name) return false;
+      throw new Error((r.stderr || r.error?.message || "创建失败").trim());
+    }
+    if (JSON.parse(r.stdout).name?.toLowerCase() !== label.name) throw new Error("创建响应未确认标签名");
+    return true;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 function summarize(issue, trusted, excerpt = 400) {
   const prs = issue.pull_request_summary ?? { total: 0, open: 0, merged: 0 };
   return {
@@ -74,7 +139,7 @@ function summarize(issue, trusted, excerpt = 400) {
     origin: issue.source,
     author: issue.author?.login ?? null,
     trusted,
-    labels: (issue.internal_meta?.labels ?? []).map((l) => l.name),
+    labels: labelsOf(issue),
     prs: prs.total,
     createdAt: issue.created_at,
     updatedAt: issue.updated_at,
@@ -94,7 +159,9 @@ export function list(api, { repo, project, statuses, trustedUsers = [], excerpt 
       for (const issue of d.items) {
         const trusted = issue.source !== "github" || trustedSet.has(String(issue.author?.login ?? "").toLowerCase());
         const s = summarize(issue, trusted, 0);
-        if (s.prs > 0) skipped.push({ ref: s.ref, title: s.title, reason: `已关联 ${s.prs} 个 PR` });
+        const policy = labelPolicy(s.labels);
+        if (policy.deferred) skipped.push({ ref: s.ref, title: s.title, reason: policy.conflict ? "标签冲突：bstack:defer 与 bstack:priority 同时存在，暂缓生效" : "bstack:defer 暂缓自动派活", conflict: policy.conflict });
+        else if (s.prs > 0) skipped.push({ ref: s.ref, title: s.title, reason: `已关联 ${s.prs} 个 PR` });
         else if (!trusted) skipped.push({ ref: s.ref, title: s.title, reason: `GitHub 导入，作者 ${s.author} 不在 trustedUsers` });
         else candidates.push(s);
       }
@@ -132,6 +199,8 @@ function setStatus(api, id, status) {
 // 认领前先回读：别人刚认领、或问题已关闭，都不能覆盖。
 export function claim(api, { id, statuses }) {
   const { issue, status } = metaOf(api, id);
+  const policy = labelPolicy(labelsOf(issue));
+  if (policy.deferred) throw new Error(`${issue.reference} ${policy.conflict ? "标签冲突，" : ""}bstack:defer 暂缓自动派活`);
   if (issue.state !== "open") throw new Error(`${issue.reference} 已关闭`);
   if (!statuses.includes(status)) throw new Error(`${issue.reference} 当前是 ${status}，不在准入状态 ${statuses.join("/")} 里`);
   if ((issue.pull_requests ?? []).length) throw new Error(`${issue.reference} 已关联 PR`);

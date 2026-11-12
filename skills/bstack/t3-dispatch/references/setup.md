@@ -38,4 +38,5 @@ version: 1
 ## 4. 写配置并试跑
 
 1. 按 bstack-setup「写配置」规则写 `t3-dispatch.json`，跑 `node <技能目录>/scripts/dispatch-config.mjs`：退出码 0，`warnings` 为空。
-2. 试跑：按 SKILL.md 走到第 2 步，只出计划不认领，交给用户过目。用户对挑选有异议时，把规则缺口记成「建议改技能」，或调整 `statuses`、`devices`。
+2. 安装初始化或新增仓库后，按[派活标签](labels.md)核实问题所属仓库与 GitHub / Forgejo 服务类型，检查并补齐标签目录；核对问题标签确实进入 `list` / `show`。完成标准：每个配置仓库都有检查结果，权限或来源能力缺口已记录。
+3. 试跑：按 SKILL.md 走到第 2 步，只出计划不认领，交给用户过目。用户对挑选有异议时，把规则缺口记成「建议改技能」，或调整 `statuses`、`devices`。

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { claim, list, release, repoKeyOf, resolveProject, sourceBlock } from "./sources/fast-ship.mjs";
+import { ensureLabels, claim, list, release, repoKeyOf, resolveProject, sourceBlock } from "./sources/fast-ship.mjs";
 import { ledgerSummary, readLedger, renderMessage, run } from "./issue-source.mjs";
 import { loadConfig, validateRepos } from "./dispatch-config.mjs";
 
@@ -190,4 +190,56 @@ test("CLI 流程：认领记台账、归还回到认领前状态、渲染用用�
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("标签：读取内部与导入标签；暂缓覆盖优先；认领前再检查最新标签", () => {
+  const { api, byId, writes } = fakeApi({ issues: [
+    issue(1),
+    issue(2, { internal_meta: { labels: [{ name: "bstack:defer" }, { name: "bstack:priority" }] } }),
+    issue(3, { github: { labels: [{ name: "bstack:priority" }] } }),
+  ] });
+  const r = list(api, { repo: REPO, project: "p1", statuses: ["unset"], excerpt: 0 });
+  assert.deepEqual(r.candidates.map((c) => c.id), ["id-1", "id-3"]);
+  assert.deepEqual(r.candidates[1].labels, ["bstack:priority"]);
+  assert.equal(r.skipped[0].conflict, true);
+  byId.get("id-1").internal_meta = { labels: [{ name: "bstack:defer" }] };
+  assert.throws(() => claim(api, { id: "id-1", statuses: ["unset"] }), /bstack:defer/);
+  assert.equal(writes.length, 0);
+  byId.get("id-1").internal_meta.labels = [];
+  claim(api, { id: "id-1", statuses: ["unset"] });
+  assert.equal(writes.length, 1);
+});
+
+test("标签目录：只读检查、补齐缺失项、保留已有项、创建失败与 Forgejo 分支", () => {
+  const labels = [{ name: "bstack:priority", color: "123456", description: "mine" }];
+  let repository = "https://github.com/owner/issues";
+  const created = [];
+  const api = (method, path) => {
+    assert.equal(method, "GET");
+    if (path.endsWith("/repo-labels")) return ok(labels);
+    if (path === "/api/projects/p1") return ok({ repository_url: repository });
+    throw new Error(path);
+  };
+  const options = { repo: REPO, project: "p1", createLabel: (url, label) => { created.push([url, label.name]); labels.push(label); } };
+  const checked = ensureLabels(api, { ...options, checkOnly: true });
+  assert.deepEqual(checked.missing, ["bstack:defer"]);
+  assert.equal(created.length, 0);
+  const added = ensureLabels(api, options);
+  assert.deepEqual(added.created, ["bstack:defer"]);
+  assert.deepEqual(created, [[repository, "bstack:defer"]]);
+  assert.equal(labels[0].description, "mine");
+  ensureLabels(api, options);
+  assert.equal(created.length, 1, "重复运行无写请求");
+  labels.pop();
+  const failed = ensureLabels(api, { ...options, createLabel: () => { throw new Error("403"); } });
+  assert.deepEqual(failed.missing, ["bstack:defer"]);
+  assert.match(failed.warnings[0], /403/);
+  const cached = ensureLabels(api, { ...options, createLabel: () => false });
+  assert.deepEqual(cached.missing, []);
+  assert.deepEqual(cached.created, []);
+  assert.ok(cached.existing.includes("bstack:defer"));
+  repository = "https://forge.example/owner/issues";
+  const forgejo = ensureLabels(api, options);
+  assert.match(forgejo.warnings[0], /Forgejo/);
+  assert.equal(created.length, 1, "未知主机保持只读，交技能识别服务");
 });

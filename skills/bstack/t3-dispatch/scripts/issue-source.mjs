@@ -2,6 +2,7 @@
 // 问题来源统一入口：派活只经这里读写问题，换来源不改派活流程。
 //
 // 用法（--repo 取 t3-dispatch.json 里 repos[].repo）：
+//   node issue-source.mjs ensure-labels --repo <key> [--check 1]   补齐标签目录；--check 1 只读
 //   node issue-source.mjs list    --repo <key> [--excerpt 400]       可派的候选与跳过原因（--excerpt 0 不带正文摘要；派过 limits.maxAttempts 次的跳过）
 //   node issue-source.mjs show    --repo <key> --id <问题 ID>         单条详情（正文、共识、PR）
 //   node issue-source.mjs claim   --repo <key> --id <问题 ID>         认领（Fast Ship 置 in_progress），记入派活台账；输出带认领时间 at
@@ -100,6 +101,8 @@ export function run(cmd, opts, { env = process.env, api } = {}) {
   };
   const base = { repo: repoCfg.repo, source: repoCfg.source };
   switch (cmd) {
+    case "ensure-labels":
+      return src.ensureLabels(call, { ...repoCfg, checkOnly: opts.check === "1" });
     case "list": {
       const r = src.list(call, { ...repoCfg, trustedUsers: config.trustedUsers, excerpt: Number(opts.excerpt ?? 400) });
       const attempts = new Map();
@@ -160,7 +163,7 @@ if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToP
     if (!cmd) throw Object.assign(new Error("缺少命令"), { usage: true });
     console.log(JSON.stringify(run(cmd, opts), null, 1));
   } catch (e) {
-    console.error(`${e.message}${e.usage ? "\n用法：node issue-source.mjs <list|show|claim|release|render|record|ledger> --repo <key> [--id <问题 ID>] …" : ""}`);
+    console.error(`${e.message}${e.usage ? "\n用法：node issue-source.mjs <ensure-labels|list|show|claim|release|render|record|ledger> --repo <key> [--id <问题 ID>] …" : ""}`);
     process.exit(e.usage ? 2 : 1);
   }
 }

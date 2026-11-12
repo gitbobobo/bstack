@@ -103,3 +103,20 @@ test("本轮模型覆盖：保留完整档位选项与运行模式，不改配�
     assert.ok(validatePlan({ ...plan, modelSelection: bad }, cfg).some((e) => /modelSelection/.test(e)), JSON.stringify(bad));
   }
 });
+
+test("用户优先项在截表前提升，暂缓排除，无标签仍参与技术排序", () => {
+  const ordinary = Array.from({ length: 10 }, (_, i) => cand(`INT-${i}`, "启动崩溃"));
+  const plan = buildPlan({
+    capacity: { environments: [env("e-pc", [1, 0])] }, config, environments, ledger: [],
+    listOf: () => ({ candidates: [...ordinary,
+      cand("INT-90", "架构重构", { labels: ["bstack:priority"] }),
+      cand("INT-91", "启动崩溃", { labels: ["bstack:priority", "bstack:defer"] }),
+    ], skipped: [] }),
+  });
+  const r = plan.repos[0];
+  assert.equal(r.shortlist[0].ref, "INT-90");
+  assert.equal(r.shortlist[0].priority, true);
+  assert.equal(r.shortlist.length, 5);
+  assert.ok(r.shortlist.slice(1).every((c) => !c.priority));
+  assert.ok(r.excluded.some((c) => c.ref === "INT-91"));
+});
