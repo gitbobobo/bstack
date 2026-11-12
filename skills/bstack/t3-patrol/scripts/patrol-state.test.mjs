@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { loadState, statePath, putHandoff, resolveHandoff } from "./patrol-state.mjs";
 
 const entry = { sourceEnvironmentId: "mbp", sourceThreadId: "ios", sourceLink: "t3-thread://ios", targetEnvironmentId: "mini", canonicalKey: "host/repo", task: "Android 后续", handoffRef: "来源收尾消息", waitingSince: "2026-11-09T04:00:00Z", blocker: "Musiver 池 4/4" };
@@ -34,7 +35,7 @@ test("commit 保留交接队列；旧状态兼容，损坏状态报错而非清�
     const input = join(dir, "entry.json");
     writeFileSync(input, JSON.stringify(entry));
     const run = (...args) => {
-      const r = spawnSync(process.execPath, [new URL("./patrol-state.mjs", import.meta.url).pathname, ...args], { env, encoding: "utf8" });
+      const r = spawnSync(process.execPath, [fileURLToPath(new URL("./patrol-state.mjs", import.meta.url)), ...args], { env, encoding: "utf8" });
       assert.equal(r.status, 0, r.stderr);
     };
     run("handoff-put", "--file", input);
