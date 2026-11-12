@@ -32,7 +32,7 @@
 
 ### t3-code
 
-本机 T3 Code 运行状态的内部参考：状态库表布局与会话查询方法、子线程取证（`view:"activity"` 与 `file_change` 快照恢复）、编排机制事实、监听与唤醒（含 MCP 工具延迟加载与本账号评论不唤醒的坑）与平台坑；含孤儿工作树回收脚本 `t3-worktree-gc.mjs`（日常收尾用 `--disposable --path` 定向快清理，临时 ignored 数据不扫描，已核实交付的精确 HEAD 可免联网验证；所有模式的交付验证有总预算，超时即止，不再逐 topic 分支反复比较；全盘保守 GC 留给按需维护，含根外 detached 临时树发现、`--purge-build` 构建产物回收及显式 `--measure-size` 空间统计）；跨环境复盘用 `t3-activity-scan.mjs` 经 T3 MCP 端点收集各环境活跃线程及其技能读取记录。收尾循环可申请 FIFO 独占窗口（`finish-window.mjs`），协调本机资源与同目标分支的合并，并自动到期释放。专用技能。
+本机 T3 Code 运行状态的内部参考：状态库表布局与会话查询方法、子线程取证（`view:"activity"` 与 `file_change` 快照恢复）、编排机制事实、监听与唤醒（含 MCP 工具延迟加载与本账号评论不唤醒的坑）与平台坑；含孤儿工作树回收脚本 `t3-worktree-gc.mjs`（日常收尾用 `--disposable --path` 定向快清理，临时 ignored 数据不扫描，已核实交付的精确 HEAD 可免联网验证；所有模式的交付验证有总预算，超时即止，不再逐 topic 分支反复比较；全盘保守 GC 留给按需维护，含根外 detached 临时树发现、`--purge-build` 构建产物回收及显式 `--measure-size` 空间统计）；跨环境复盘用 `t3-activity-scan.mjs` 经 T3 MCP 端点收集各环境活跃线程及其技能读取记录。收尾循环可申请 FIFO 独占窗口（`finish-window.mjs`），协调本机资源与同目标分支的合并，并自动到期释放；按实际资源占用区分轻重，低资源检查继续，分支冻结只限同仓库同目标。专用技能。
 
 详见 [skills/bstack/t3-code/SKILL.md](skills/bstack/t3-code/SKILL.md)。
 
@@ -50,7 +50,7 @@ T3 Code 多 harness 编排：pi / codex / devin / factory droid 四个 harness�
 
 ### t3-dispatch
 
-从问题来源挑问题，按各设备空位在 T3 环境建工作树线程派活。流程：对账派活台账 → 用 t3-patrol 的容量规则算各设备可建数（`patrol-snapshot.mjs --capacity-only`，只看名额） → `scripts/dispatch-plan.mjs` 只为有空位的仓库列候选，先跨环境查重、按关键词粗排，给出「空位 × 3」条备选（附正文与共识） → 模型按信息完整度、决策依赖与优先级挑选，按仓库文档的设备分工匹配设备，写成计划文件 → `scripts/dispatch-launch.mjs` 逐条查重、认领、渲染提示词、建线程、记账、回读确认开工（工作树仍在准备的保留认领、交下一轮核对），失败归还；已派线程没交付就结束时归还重派，同一问题有重派上限。问题来源经 `scripts/issue-source.mjs` 统一读写，目前接 Fast Ship（经 fast-ship 技能的脚本调用，按代码主仓地址匹配项目）；派活提示词模板放 `~/.config/bstack/templates/`，`{{source_block}}` 处插入来源附加块；台账在 `~/.config/bstack/state/`，只在本机。偏好在 `~/.config/bstack/t3-dispatch.json`（`scripts/dispatch-config.mjs` 输出生效配置），巡检调用按 `mode`（off / dry-run / auto）决定是否执行，用户当面要求派活直接执行。默认模型额度耗尽时复用巡检的当轮证据与模型阶梯，用普通可用档继续派活；计划的 `modelSelection` 仅覆盖本轮，不改持久配置，仅剩兜底档时暂停新问题。用户可用 `bstack:priority` 优先实现、`bstack:defer` 暂缓自动派活，无标签问题沿用原规则；初始化、新增仓库及每轮派活检查标签目录，按问题所属 GitHub / Forgejo 仓库补齐缺失标签，dry-run 只检查。初始化见 `references/setup.md`，标签规则见 [labels.md](skills/bstack/t3-dispatch/references/labels.md)。依赖同级安装的 t3-patrol 与 fast-ship。
+从问题来源挑问题，按各设备空位在 T3 环境建工作树线程派活。流程：对账派活台账 → 用 t3-patrol 的容量规则算各设备可建数（`patrol-snapshot.mjs --capacity-only`，只看名额） → `scripts/dispatch-plan.mjs` 只为有空位的仓库列候选，先跨环境查重、按关键词粗排，给出「空位 × 3」条备选（附正文与共识） → 模型先摘要初筛，对拟派出项及关键歧义补读全文，按仓库设备分工匹配独立交付切片（多平台可串行接力，整项验收后才结项）；余位最多补选一批表外候选，报告已核/未核范围，再写成计划文件 → `scripts/dispatch-launch.mjs` 逐条查重、认领、渲染提示词、建线程、记账、回读确认开工（工作树仍在准备的保留认领、交下一轮核对），失败归还；已派线程没交付就结束时归还重派，同一问题有重派上限。问题来源经 `scripts/issue-source.mjs` 统一读写，目前接 Fast Ship（经 fast-ship 技能的脚本调用，按代码主仓地址匹配项目）；派活提示词模板放 `~/.config/bstack/templates/`，`{{source_block}}` 处插入来源附加块；台账在 `~/.config/bstack/state/`，只在本机。偏好在 `~/.config/bstack/t3-dispatch.json`（`scripts/dispatch-config.mjs` 输出生效配置），巡检调用按 `mode`（off / dry-run / auto）决定是否执行，用户当面要求派活直接执行。默认模型额度耗尽时复用巡检的当轮证据与模型阶梯，用普通可用档继续派活；计划的 `modelSelection` 仅覆盖本轮，不改持久配置，仅剩兜底档时暂停新问题。用户可用 `bstack:priority` 优先实现、`bstack:defer` 暂缓自动派活，无标签问题沿用原规则；初始化、新增仓库及每轮派活检查标签目录，按问题所属 GitHub / Forgejo 仓库补齐缺失标签，dry-run 只检查。初始化见 `references/setup.md`，标签规则见 [labels.md](skills/bstack/t3-dispatch/references/labels.md)。依赖同级安装的 t3-patrol 与 fast-ship。
 
 详见 [skills/bstack/t3-dispatch/SKILL.md](skills/bstack/t3-dispatch/SKILL.md)。
 
@@ -64,13 +64,13 @@ git 操作偏好：可审计粒度的规范提交、远程同步（未推送分�
 
 ### pr-review-loop
 
-审查建议转代码、issue、PR 或交接前先做改动准入，UI 先核对设计意图，nit 不自动立项。开 PR 前确定模板，在描述里写清意图与范围；PR 写请求使用原子分配的独占临时目录，显式绑定目标并回读确认，避免并行工作树串用正文；审查按预算推进：默认 3 轮，安全、数据、并发类 blocker 才延长到 5 轮，后续轮只核对改动代码与未关闭意见。意见按意图自行分级（blocker / should / nit / wrong），审查者的 P0–P2 只是线索，只为 blocker 和 should 推送，nit 一行回复不改代码；某轮只剩 nit 就收尾。同一 blocker 反复复发时按需读取方向审计。测试失败统一分诊、限制无效重跑，复用 diagnosing-bugs 定位根因；临时隔离须报告覆盖缺口与恢复安排。宿主回复接口按需读取引用文件，审查期间不追目标分支。
+审查建议转代码、issue、PR 或交接前先做改动准入，UI 先核对设计意图，nit 不自动立项。开 PR 前确定模板，在描述里写清意图与范围；PR 写请求使用原子分配的独占临时目录，显式绑定目标并回读确认，避免并行工作树串用正文；审查按预算推进：默认 3 轮，安全、数据、并发类 blocker 才延长到 5 轮，后续轮只核对改动代码与未关闭意见。意见按意图自行分级（blocker / should / nit / wrong），审查者的 P0–P2 只是线索，只为 blocker 和 should 推送，nit 一行回复不改代码；某轮只剩 nit 就收尾。同一 blocker 反复复发时按需读取方向审计。测试失败统一分诊、限制无效重跑，复用 diagnosing-bugs 定位根因；临时隔离须报告覆盖缺口与恢复安排。宿主回复接口按需读取引用文件，审查期间不追目标分支；T3 撤监听保留 PR 交付关联，陈旧通知查队列而非 unlink。
 
 详见 [skills/general/pr-review-loop/SKILL.md](skills/general/pr-review-loop/SKILL.md)。
 
 ### pr-finish
 
-PR 收尾：对最新目标分支一次性整合（默认 merge）并解决冲突、处理阻塞合并的基线问题；收尾推送触发的审查沿用 pr-review-loop 的账本与预算，只为整合带来的 blocker 再修，无冲突的整合只等检查；合并后分流遗留，只交接已准入的后续工作；候选可留在原记录，不为纯验收强造 PR。T3 环境反复追赶目标分支时可转入收尾窗口协调。随后关闭关联问题、回收工作树与分支。检查与合并入口、合并方式、交接约定读仓库自己的文档，未声明时用默认做法。PR 审查收敛、用户要求收尾时使用。
+PR 收尾：对最新目标分支一次性整合（默认 merge）并解决冲突、处理阻塞合并的基线问题；收尾推送触发的审查沿用 pr-review-loop 的账本与预算，只为整合带来的 blocker 再修，无冲突的整合只等检查；合并后分流遗留，只交接已准入的后续工作；候选可留在原记录，不为纯验收强造 PR。T3 环境反复追赶目标分支时可转入收尾窗口协调。随后关闭关联问题、回收工作树与分支；T3 保留 PR 交付关联供巡检核对收口。检查与合并入口、合并方式、交接约定读仓库自己的文档，未声明时用默认做法。PR 审查收敛、用户要求收尾时使用。
 
 详见 [skills/general/pr-finish/SKILL.md](skills/general/pr-finish/SKILL.md)。
 
