@@ -339,7 +339,8 @@ after(() => {
 
 // ---------- 用例 ----------
 test("dry-run：逐目录判定，不删任何东西", () => {
-  const out = runGc();
+  // 断言整套大型夹具的分类；预算耗尽的保留行为由专门用例验证。
+  const out = runGc(["--verify-budget-ms", "60000"]);
   assert.match(lineFor(out, "wt-clean"), /^delete\s/);
   assert.match(lineFor(out, "wt-unbound"), /^delete\s.*unbound/);
   assert.match(lineFor(out, "wt-toplevel"), /^delete\s/); // 无分组层布局也能识别
