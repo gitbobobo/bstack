@@ -147,7 +147,7 @@ function summarize(issue, trusted, excerpt = 400) {
   };
 }
 
-// 准入：open、状态在 statuses 里。跳过：已关联 PR、GitHub 导入且作者不在 trustedUsers。
+// 准入：open、状态在 statuses 里；用户优先标签覆盖 GitHub 作者限制，暂缓与 PR 检查优先。
 export function list(api, { repo, project, statuses, trustedUsers = [], excerpt }) {
   const pid = project ?? resolveProject(api, repo);
   const trustedSet = new Set(trustedUsers.map((u) => u.toLowerCase()));
@@ -162,7 +162,7 @@ export function list(api, { repo, project, statuses, trustedUsers = [], excerpt 
         const policy = labelPolicy(s.labels);
         if (policy.deferred) skipped.push({ ref: s.ref, title: s.title, reason: policy.conflict ? "标签冲突：bstack:defer 与 bstack:priority 同时存在，暂缓生效" : "bstack:defer 暂缓自动派活", conflict: policy.conflict });
         else if (s.prs > 0) skipped.push({ ref: s.ref, title: s.title, reason: `已关联 ${s.prs} 个 PR` });
-        else if (!trusted) skipped.push({ ref: s.ref, title: s.title, reason: `GitHub 导入，作者 ${s.author} 不在 trustedUsers` });
+        else if (!trusted && !policy.priority) skipped.push({ ref: s.ref, title: s.title, reason: `GitHub 导入，作者 ${s.author} 不在 trustedUsers` });
         else candidates.push(s);
       }
       if (d.items.length < PAGE) break;

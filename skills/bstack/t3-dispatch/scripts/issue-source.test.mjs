@@ -84,6 +84,31 @@ test("候选：按准入状态翻页取全；已关联 PR 与不可信的 GitHub
   assert.ok(!r.candidates.some((c) => c.ref === "INT-503"));
 });
 
+test("外部作者：用户优先标签覆盖作者限制，暂缓、PR 与准入状态仍生效", () => {
+  const external = (n, extra = {}) => issue(n, { source: "github", author: { login: "Stranger" }, ...extra });
+  const priority = [{ name: "bstack:priority" }];
+  const { api, byId } = fakeApi({ issues: [
+    external(1, { internal_meta: { labels: priority } }),
+    external(2, { github: { labels: priority } }),
+    external(3),
+    external(4, { internal_meta: { labels: [...priority, { name: "bstack:defer" }] } }),
+    external(5, { github: { labels: priority }, pull_request_summary: { total: 1 } }),
+    external(6, { internal_meta: { labels: priority, workflow_status: "in_progress" } }),
+    external(7, { github: { labels: [{ name: "bstack:other" }] } }),
+  ] });
+  const options = { repo: REPO, project: "p1", statuses: ["unset"], trustedUsers: [], excerpt: 0 };
+  const r = list(api, options);
+  assert.deepEqual(r.candidates.map((c) => c.id), ["id-1", "id-2"]);
+  assert.ok(r.candidates.every((c) => c.trusted === false), "标签授权不改变作者可信事实");
+  assert.match(r.skipped.find((s) => s.ref === "INT-3").reason, /trustedUsers/);
+  assert.equal(r.skipped.find((s) => s.ref === "INT-4").conflict, true);
+  assert.match(r.skipped.find((s) => s.ref === "INT-5").reason, /PR/);
+  assert.match(r.skipped.find((s) => s.ref === "INT-7").reason, /trustedUsers/);
+  assert.ok(!r.candidates.some((c) => c.id === "id-6"));
+  byId.get("id-1").internal_meta.labels = [];
+  assert.deepEqual(list(api, options).candidates.map((c) => c.id), ["id-2"], "移除标签后恢复作者限制");
+});
+
 test("认领：回读状态不在准入里、已关闭、已有 PR 都拒绝；成功后回读为 in_progress", () => {
   const { api, writes, byId } = fakeApi({
     issues: [issue(1), issue(2, { internal_meta: { workflow_status: "in_progress" } }), issue(3, { state: "closed" }), issue(4, { pull_requests: [{ url: "u" }] })],
