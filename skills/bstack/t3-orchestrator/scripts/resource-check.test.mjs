@@ -16,18 +16,20 @@ test("gc 输出只留汇总行与失败行", () => {
   assert.deepEqual(s.failed, ["failed         a/c  rm 失败"]);
 });
 
-test("判定：跑完仍留足保底、CPU 不满且内存不低才放行", () => {
+test("判定：跑完仍留足保底且内存不低才放行，CPU 繁忙仅作观测", () => {
   assert.deepEqual(verdictOf({ diskFreeGB: 60, needGB: 30, floorGB: 20, busyPct: 40, memPct: 30 }), { disk: "ok", load: "ok", memory: "ok", verdict: "go" });
   assert.deepEqual(verdictOf({ diskFreeGB: 45, needGB: 30, floorGB: 20, busyPct: 40, memPct: 30 }), { disk: "short", load: "ok", memory: "ok", verdict: "wait" });
-  assert.deepEqual(verdictOf({ diskFreeGB: 60, needGB: 0, floorGB: 20, busyPct: 95, memPct: 30 }), { disk: "ok", load: "busy", memory: "ok", verdict: "wait" });
+  assert.deepEqual(verdictOf({ diskFreeGB: 60, needGB: 0, floorGB: 20, busyPct: 95, memPct: 30 }), { disk: "ok", load: "busy", memory: "ok", verdict: "go" });
   assert.deepEqual(verdictOf({ diskFreeGB: 60, needGB: 0, floorGB: 20, busyPct: 40, memPct: 5 }), { disk: "ok", load: "ok", memory: "low", verdict: "wait" });
   assert.equal(verdictOf({ diskFreeGB: 60, needGB: 0, floorGB: 20, busyPct: 40 }).verdict, "go", "内存量不到时不拦");
 });
 
-test("判定：经调度入口排队时 CPU 繁忙交给队列，磁盘与内存照拦", () => {
-  assert.equal(verdictOf({ diskFreeGB: 60, needGB: 0, floorGB: 20, busyPct: 100, memPct: 30, queued: true }).verdict, "go");
-  assert.equal(verdictOf({ diskFreeGB: 60, needGB: 0, floorGB: 20, busyPct: 100, memPct: 5, queued: true }).verdict, "wait");
-  assert.equal(verdictOf({ diskFreeGB: 10, needGB: 0, floorGB: 20, busyPct: 0, memPct: 30, queued: true }).verdict, "wait");
+test("判定：旧 queued 参数兼容，CPU 满载时磁盘与内存仍决定放行", () => {
+  for (const queued of [false, true]) {
+    assert.equal(verdictOf({ diskFreeGB: 60, needGB: 0, floorGB: 20, busyPct: 100, memPct: 30, queued }).verdict, "go");
+    assert.equal(verdictOf({ diskFreeGB: 60, needGB: 0, floorGB: 20, busyPct: 100, memPct: 5, queued }).verdict, "wait");
+    assert.equal(verdictOf({ diskFreeGB: 10, needGB: 0, floorGB: 20, busyPct: 100, memPct: 30, queued }).verdict, "wait");
+  }
 });
 
 test("macOS memory_pressure：取系统空闲百分比，格式不认得时为 null", () => {

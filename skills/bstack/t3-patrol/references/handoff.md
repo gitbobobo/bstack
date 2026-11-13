@@ -44,7 +44,7 @@
 
 2. **查重**：在目标环境用 `t3_thread_search` 搜 PR 号和来源线程 id，已有线程接过这段工作就跳过新建。
 
-3. **看容量**：读快照里目标环境的 `environments[].capacity`（下称「容量」；配置项写作 `config.capacity.*`）。巡检只管名额，磁盘与负载由新线程在重验证前自己查（t3-orchestrator「资源不足时」）。占用名额的是：有活跃 run 或有子代理在跑的顶层线程（含「代码审查 / 视觉审查 · PR #N」线程，不含子代理线程本身和探测线程；父线程派出子代理后自己会 completed，等子代理唤醒，工作树仍在用），以及 PR 仍 open、最近一次 run 在 `config.capacity.occupyWindowHours` 内结束的线程——等审查的线程在两轮之间会暂时 completed，但工作树和编译资源还占着。PR 已合并或关闭（工作树已回收）、没有 PR 又没在跑的线程不占名额，所以来源线程本身通常不算。
+3. **看容量**：读快照里目标环境的 `environments[].capacity`（下称「容量」；配置项写作 `config.capacity.*`）。巡检只管名额，磁盘与内存由新线程在重验证前自己查（t3-orchestrator「资源不足时」）。占用名额的是：有活跃 run 或有子代理在跑的顶层线程（含「代码审查 / 视觉审查 · PR #N」线程，不含子代理线程本身和探测线程；父线程派出子代理后自己会 completed，等子代理唤醒，工作树仍在用），以及 PR 仍 open、最近一次 run 在 `config.capacity.occupyWindowHours` 内结束的线程——等审查的线程在两轮之间会暂时 completed，但工作树和编译资源还占着。PR 已合并或关闭（工作树已回收）、没有 PR 又没在跑的线程不占名额，所以来源线程本身通常不算。
 
    - **设备总数**：容量的 `used` / `max`，占用者在 `occupying`。上限取该设备在 `config.capacity.devices` 里的 `maxActiveThreads`；没写时是各池 `max` 之和（各池可以同时用满）；设备没配池时用 `config.capacity.maxActiveThreads`。
    - **仓库池**：在 `config.capacity.devices` 里配置过的设备还按仓库分池（容量的 `pools`，每个占用线程只进第一个匹配的池，审查线程不占池）。

@@ -1,18 +1,17 @@
 #!/usr/bin/env node
 // 资源检查：重验证（全量构建、门禁、E2E）开跑前，量本机工作树所在盘的剩余空间、CPU 繁忙度与可用内存，给出能不能跑。
-// 巡检只按名额派活，磁盘与负载由干活的线程在用到时自己看：它最清楚这一步要多少空间。
+// 巡检只按名额派活，磁盘与内存由干活的线程在用到时自己看：它最清楚这一步要多少空间。
 //
 // 用法：node resource-check.mjs [--need <GB>] [--floor <GB>] [--path <目录>] [--queued] [--reclaim] [--gc <t3-worktree-gc.mjs 路径>]
 //   --need   这一步预计新增的磁盘占用（构建产物等），缺省 0
 //   --floor  跑完后至少留给本机的剩余空间，缺省 20
 //   --path   要量的目录，缺省当前目录（工作树）；不存在时退到 T3 工作树根或主目录
-//   --queued 这一步经仓库的调度入口/编译槽排队：CPU 繁忙交给队列，不进判定（多线程常驻的机器上 CPU 几乎总是满的，
-//            按 CPU 等空闲会一直轮不到）
+//   --queued 兼容旧调用，保留输出标记；CPU 始终只作观测，并发由仓库调度入口/编译槽管理。
 //   --reclaim 先跑 t3-code 技能的 t3-worktree-gc.mjs --purge-build --apply：删已终结线程的孤儿工作树，
 //            保留下来的工作树只清可重建的构建产物；只回收别人留下的垃圾，不动在用工作树
 // 输出 { host, platform, path, diskFreeGB, diskTotalGB, needGB, floorGB, disk, cpus, cpuBusyPct, load, memAvailablePct, memory, queued, verdict, reclaim? }
 //   disk: ok | short（剩余 − need < floor）；load: ok | busy（1 秒采样 CPU 繁忙 ≥ 85%）；
-//   memory: ok | low（可用内存 < 10%）| unknown；verdict: go | wait
+//   memory: ok | low（可用内存 < 10%）| unknown；verdict: go | wait（只由磁盘与内存决定）
 // 退出码：0 可以跑；3 资源不足（verdict=wait）；1 回收失败；2 用法错误。
 
 import { spawnSync } from "node:child_process";
@@ -64,11 +63,11 @@ export function memAvailablePct() {
   return Math.round((freemem() / totalmem()) * 100);
 }
 
-export function verdictOf({ diskFreeGB, needGB, floorGB, busyPct, memPct = null, queued = false }) {
+export function verdictOf({ diskFreeGB, needGB, floorGB, busyPct, memPct = null }) {
   const disk = diskFreeGB - needGB >= floorGB ? "ok" : "short";
   const load = busyPct >= BUSY_PCT ? "busy" : "ok";
   const memory = memPct == null ? "unknown" : memPct < MEM_LOW_PCT ? "low" : "ok";
-  const go = disk === "ok" && memory !== "low" && (queued || load === "ok");
+  const go = disk === "ok" && memory !== "low";
   return { disk, load, memory, verdict: go ? "go" : "wait" };
 }
 
