@@ -56,7 +56,7 @@ PR 收尾：整合目标分支、合并、分流遗留，再关闭关联问题�
 
 ### test-audit
 
-扫描慢测、flaky、弱断言与冗余测试，按行为契约给出保留、删除或重写建议及 lint 防复发方案。[SKILL.md](skills/general/test-audit/SKILL.md) · [三仓库调研与设计依据](docs/test-audit-research.md)
+默认全仓找线索、分批核实慢测、flaky、弱断言与冗余测试，给出修改及 lint 建议，并保留续扫摘要。[SKILL.md](skills/general/test-audit/SKILL.md) · [三仓库调研与设计依据](docs/test-audit-research.md)
 
 ### create-ui-polish-skill
 
