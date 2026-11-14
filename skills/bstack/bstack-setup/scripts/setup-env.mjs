@@ -9,7 +9,6 @@
 //
 // 已有非空文件会先备份成 <path>.bak-<时间戳> 再替换；符号链接已指向真源则跳过。
 // 指向旧 setup-env 技能（本技能改名前）的链接直接改指真源，不备份。
-// Cursor 目标写入派生的 .mdc（包裹 alwaysApply frontmatter），不走符号链接。
 
 import { execFileSync } from "node:child_process";
 import {
@@ -58,21 +57,6 @@ const TARGETS = [
     cli: "claude",
   },
   {
-    // cursor-agent 扫描 ~/.cursor/rules 下的 .mdc；alwaysApply 前置元数据让它始终生效。
-    // 不能符号链接到 AGENTS.md——内容需要包裹 frontmatter，只能写派生文件。
-    harness: "cursor",
-    path: join(HOME, ".cursor", "rules", "global.mdc"),
-    cli: "cursor-agent",
-    transform: "mdc",
-  },
-  {
-    // Factory Droid 的个人指令层：docs.factory.ai 确认 ~/.factory/AGENTS.md 跨项目生效。
-    // （Droid 另会检查 ~/.agents/、~/.agent/ 个人目录，取 ~/.factory 为主。）
-    harness: "factory droid",
-    path: join(HOME, ".factory", "AGENTS.md"),
-    cli: "droid",
-  },
-  {
     // pi 的全局上下文文件：<agent-dir>/AGENTS.md，agent-dir 可被 PI_CODING_AGENT_DIR 覆盖。
     harness: "pi",
     path: join(PI_DIR, "AGENTS.md"),
@@ -84,9 +68,6 @@ const TARGETS = [
 const TOOLS = [
   { name: "cargo-nextest", hint: "cargo install cargo-nextest --locked" },
 ];
-
-const MDC_FRONT = "---\nalwaysApply: true\n---\n\n";
-const expectedFor = (t) => (t.transform === "mdc" ? MDC_FRONT + sourceText : sourceText);
 
 const checkOnly = process.argv.includes("--check");
 const useCopy = process.argv.includes("--copy") || IS_WIN;
@@ -134,12 +115,12 @@ function inspect(t) {
     } catch {
       // 悬空链接：旧技能卸载后常见，下面按目标路径判断。
     }
-    if (real === sourceReal && !t.transform) return { state: "linked" };
+    if (real === sourceReal) return { state: "linked" };
     if (LEGACY_SOURCE.test(target)) return { state: "legacy", detail: `旧 setup-env 链接 → ${target}` };
     return { state: "foreign", detail: real ? `符号链接指向 ${target}` : `悬空符号链接 → ${target}` };
   }
   const content = readFileSync(path, "utf8");
-  if (content === expectedFor(t)) return { state: "copy-current" };
+  if (content === sourceText) return { state: "copy-current" };
   return content.trim() === ""
     ? { state: "foreign-empty" }
     : { state: "foreign", detail: `已有 ${content.length} 字符的不同内容` };
@@ -156,8 +137,8 @@ function apply(t, state) {
   } else if (state === "legacy") {
     unlinkSync(path);
   }
-  if (t.transform || useCopy) {
-    writeFileSync(path, expectedFor(t));
+  if (useCopy) {
+    writeFileSync(path, sourceText);
     return `${note}已写入`;
   }
   symlinkSync(SOURCE, path);
@@ -183,7 +164,7 @@ for (const t of TARGETS) {
     // 应用后复查
     if (!action.includes("失败")) {
       const post = inspect(t).state;
-      if (!(t.transform || useCopy ? post === "copy-current" : post === "linked")) {
+      if (!(useCopy ? post === "copy-current" : post === "linked")) {
         action += "（复查未生效）";
         pending++;
       }

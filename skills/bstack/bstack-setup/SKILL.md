@@ -1,10 +1,8 @@
 ---
 name: bstack-setup
-description: bstack 的设备初始化与偏好配置入口：同步各 agent harness 的全局代理规则并做环境体检，按各技能 references/setup.md 询问偏好并写入 ~/.config/bstack/，可选用私有仓库在各设备间同步配置。新设备初始化、修改技能偏好、全局约定变更后重同步时使用。仅限用户主动调用。
+description: bstack 的设备初始化与偏好配置入口。新设备初始化、修改技能偏好、全局约定变更后重同步时使用。仅限用户主动调用。
 disable-model-invocation: true
 ---
-
-# bstack-setup
 
 新设备和偏好变更的唯一入口。本技能只负责发现、询问、写入和同步；每个技能问什么、写成什么结构、怎么验证，写在它自己的 `references/setup.md`。
 
@@ -48,7 +46,7 @@ version: 1
 
 ## 设备初始化
 
-把 `rules/AGENTS.md`（本技能目录下，唯一真源）链接到各 harness 的全局规则路径，让所有 CLI 代理在任何项目里都加载同一套约定；通用规则涵盖重命令遵守机器调度和单一最终验证负责人，具体编排流程留在对应技能。同步后仍以项目规则优先。同时报告各 harness CLI 与本机工具（如 cargo-nextest）是否可用——工具只报告不安装。cargo-nextest 不在 PATH 时再探测 CARGO_HOME 和默认 Cargo bin，区分「未安装」与「已安装但 PATH 不可见」；后者在实际代理启动环境补路径，再从新代理执行 `cargo nextest --version` 验证。装了 sccache 时，把它写进 `$CARGO_HOME/config.toml` 的 `[build] rustc-wrapper`，让多个工作树共享 Rust 编译缓存（已有别的 wrapper 或设置了 `RUSTC_WRAPPER` 时不覆盖；改写前先备份原文件）；没装只报告。
+把 `rules/AGENTS.md`（本技能目录下，唯一真源）链接到各 harness 的全局规则路径，让所有 CLI 代理在任何项目里都加载同一套约定；具体编排流程留在对应技能。同步后仍以项目规则优先。同时报告各 harness CLI 与本机工具（如 cargo-nextest）是否可用——工具只报告不安装。cargo-nextest 不在 PATH 时再探测 CARGO_HOME 和默认 Cargo bin，区分「未安装」与「已安装但 PATH 不可见」；后者在实际代理启动环境补路径，再从新代理执行 `cargo nextest --version` 验证。装了 sccache 时，把它写进 `$CARGO_HOME/config.toml` 的 `[build] rustc-wrapper`，让多个工作树共享 Rust 编译缓存（已有别的 wrapper 或设置了 `RUSTC_WRAPPER` 时不覆盖；改写前先备份原文件）；没装只报告。
 
 1. 体检：`node <技能目录>/scripts/setup-env.mjs --check`，逐项看状态：已链接 / 旧链接 / 副本一致 / 副本过期 / 有别的内容 / 缺失。
 2. 执行：`node <技能目录>/scripts/setup-env.mjs`。Windows 或符号链接权限不足时用 `--copy`。
@@ -66,25 +64,11 @@ version: 1
 | devin | `~/.config/devin/AGENTS.md` | `%APPDATA%\devin\AGENTS.md` |
 | codex | `~/.codex/AGENTS.md` | `~/.codex/AGENTS.md` |
 | claude / claudeAgent | `~/.claude/CLAUDE.md` | `~/.claude/CLAUDE.md` |
-| cursor | `~/.cursor/rules/global.mdc` | `~\.cursor\rules\global.mdc` |
-| factory droid | `~/.factory/AGENTS.md` | `~\.factory\AGENTS.md` |
 | pi | `~/.pi/agent/AGENTS.md` | `~\.pi\agent\AGENTS.md` |
 
 新增 harness 时改 `scripts/setup-env.mjs` 里的 `TARGETS`。pi 的目录可被 `PI_CODING_AGENT_DIR` 覆盖，脚本也照这个变量取路径。
 
 pi 备注：在 Windows 上，pi 只去 C 盘的 `Program Files` 找 Git Bash，找不到就用 PATH 上的 `System32\bash.exe`，也就是 WSL。Git 装在其他盘时，体检会报 `pi:shell` 待处理，并给出应写进 `<agent-dir>/settings.json` 的 `"shellPath"`；照提示写入后重跑体检确认。
-
-Factory Droid 备注：
-
-- 官方文档确认 `~/.factory/AGENTS.md` 是跨项目的个人指令层；Droid 还会检查 `~/.agents/`、`~/.agent/` 个人目录，本脚本取 `~/.factory` 为主落点。
-- 优先级语义：项目 `AGENTS.md` 优先于个人文件——个人层放与仓库无关的通用约定，不会覆盖项目规则。
-- 逐次调用另可用 `droid --append-system-prompt-file <path>` 追加提示词（仅当次进程生效，不是持久配置）。
-
-Cursor 备注：
-
-- cursor-agent 扫描 `~/.cursor/rules/` 的 `.mdc` 文件；脚本写入带 `alwaysApply: true` frontmatter 的派生文件（不能符号链接，内容需要包裹），改了 `rules/AGENTS.md` 后所有机器都要重跑脚本。
-- Cursor 设置 UI 里的 User Rules 存在账号上、由服务端下发（`getAllCursorRules`），是另一条官方路径，可跨设备同步但只能手动维护，和本文件制互不妨碍。
-- 已知上游怪癖：Agents Window 的 Settings 界面可能不列出 `~/.cursor/rules` 下的文件级规则（[论坛确认 bug](https://forum.cursor.com/t/how-do-i-configure-a-global-rules-file-that-gets-picked-up-by-agent-mode/157335)），不影响 agent 运行时加载。
 
 ### 边界
 
