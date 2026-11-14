@@ -58,6 +58,10 @@ PR 收尾：整合目标分支、合并、分流遗留，再关闭关联问题�
 
 默认全仓找线索、分批核实慢测、flaky、弱断言与冗余测试，给出修改及 lint 建议，并保留续扫摘要。[SKILL.md](skills/general/test-audit/SKILL.md) · [三仓库调研与设计依据](docs/test-audit-research.md)
 
+### harmful-prompt-audit
+
+按可扩充的模式库扫描仓库中对 agent 有害的提示词、规则与任务描述（首个模式：诱导创可贴修复的"最小改动"措辞），给出改写建议。[SKILL.md](skills/general/harmful-prompt-audit/SKILL.md)
+
 ### create-ui-polish-skill
 
 为仓库生成界面打磨专用技能：完整界面地图、按平台族划分的布局蓝图、截图工具与固定批量的评分循环。仅限用户主动调用。[SKILL.md](skills/general/create-ui-polish-skill/SKILL.md)
