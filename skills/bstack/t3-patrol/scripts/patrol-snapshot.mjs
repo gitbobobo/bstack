@@ -13,7 +13,8 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfig, loadEnvironments } from "./patrol-config.mjs";
-import { capacityOf, countsCapacity } from "./patrol-capacity.mjs";
+import { capacityOf, countsCapacity, isReviewBot } from "./patrol-capacity.mjs";
+export { isReviewBot } from "./patrol-capacity.mjs";
 import { call, connect, hasSession, NO_SESSION, pool } from "./t3-mcp.mjs";
 import { configure as configurePr, prLiveOf } from "./pr-live.mjs";
 import { loadState } from "./patrol-state.mjs";
@@ -54,8 +55,6 @@ const clipEnds = (s, n = CHARS) => {
   const head = Math.floor(n * 0.4);
   return `${t.slice(0, head)} …[略]… ${t.slice(t.length - (n - head))}`;
 };
-// Fast Ship 发起的审查线程：结论走 Fast Ship 接口提交，失败由 Fast Ship 重派，巡检不接手。
-export const isReviewBot = (t) => /^(?:代码|视觉)审查 · PR #\d+/.test(t.title ?? "");
 // 探测线程：额度探测（「0. 前提」）由巡检自己建、当轮 settle，不是待判任务（「资源探测」是旧版留下的同类线程），
 // 也不占名额；失败本身就是探测结果，不进 failedTopLevel。
 export const isProbe = (t) => /^(?:额度|资源)探测$/.test(String(t.title ?? "").trim());
@@ -214,10 +213,9 @@ function convergenceOf(health) {
   };
 }
 
-// 占用名额的线程：有活跃 run 或有子代理在跑的（含 Fast Ship 审查线程），或 PR 仍 open、最近 2 小时内跑过的（两轮审查之间
-// 线程会暂时 completed，但工作树和编译资源还占着）。PR 已合并/关闭、没有 PR 又没在跑的线程不占名额。
-// 不用 updatedAt：同步会批量刷新它。
-const holdsOpenPr = (t) => !LIVE.has(t.status) && !isProbe(t) && (t.pullRequests ?? []).some((p) => p.state === "open");
+// 占用名额的实现线程：有活跃 run/子代理，或 PR 仍 open 且最近窗口内跑过。
+// 巡检、探测与 Fast Ship 只读审查在活动/PR 判定前统一排除；不用会被同步刷新的 updatedAt。
+const holdsOpenPr = (t) => countsCapacity(t, SELF) && !LIVE.has(t.status) && (t.pullRequests ?? []).some((p) => p.state === "open");
 
 // 父线程把活交给子代理后，自己的 run 会 completed，等子代理完成时唤醒；工作树仍在被子代理改写、编译，按占用算。
 async function liveSubagentRoots(environmentId, top) {
@@ -267,7 +265,7 @@ async function occupancyOf(env, top, lastRunEndedOf, now, rootsP, waiting) {
   }
   const capacity = {
     ...capacityOf({
-      threads: occupying.map((t) => ({ title: clip(t.title, 40), projectId: t.projectId, reviewBot: isReviewBot(t) })),
+      threads: occupying,
       projects,
       device: DEVICE_OF.get(env.environmentId),
       cfg: CFG.capacity,
@@ -394,7 +392,7 @@ async function snapshotEnv(env) {
   // 把误杀的线程留在这份名单里，巡检每轮必须逐个过——静默消失比多算几条候选危险得多。
   const realIds = new Set(real.map((x) => x.id));
   const failedTopLevel = top
-    .filter((t) => ["failed", "interrupted", "cancelled"].includes(t.status) && !realIds.has(t.threadId) && !isProbe(t))
+    .filter((t) => ["failed", "interrupted", "cancelled"].includes(t.status) && !realIds.has(t.threadId) && !isProbe(t) && !isReviewBot(t))
     .map((t) => ({
       id: t.threadId,
       link: t.link,

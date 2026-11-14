@@ -1,0 +1,89 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { createServer } from "node:http";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+const exec = promisify(execFile);
+const REPO = "host/owner/heavy";
+
+test("完整/容量快照一致排除 Fast Ship 审查，保留实现父线程与失败清单", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "patrol-snapshot-test-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  writeFileSync(join(dir, "t3-patrol.json"), JSON.stringify({ capacity: { pools: { heavy: 5, general: 2 }, projects: [{ repo: REPO, pool: "heavy" }], minFreeDiskGB: 0 } }));
+  writeFileSync(join(dir, "environments.json"), JSON.stringify({ environments: { mini: { environmentId: "mini", device: "mini", os: "macos" } } }));
+  const now = new Date().toISOString();
+  const thread = (id, title, status, extra = {}) => ({ threadId: id, title, status, projectId: "p", itemCount: 2, providerInstanceId: "pi", model: "fixture", pullRequests: [], ...extra });
+  const top = [
+    ...["running", "starting", "waiting", "failed", "completed"].map((s, i) => thread(`impl${i}`, `INT-${i} 实现`, s)),
+    thread("review0", "代码审查 · PR #208", "running"),
+    thread("review1", "代码审查 · PR #228", "failed"),
+    thread("review2", "视觉审查 · PR #205", "completed"),
+    thread("self", "改过名的当前巡检", "running"),
+  ];
+  top.find((x) => x.threadId === "impl3").title = "视觉审查 · PR #228 修复";
+  top.find((x) => x.threadId === "impl4").title = "代码审查 · PR #208 重验证";
+  top.find((x) => x.threadId === "impl3").pullRequests = [{ state: "open", repository: "owner/heavy", number: 3 }];
+  for (const r of top.filter((x) => x.threadId.startsWith("review"))) r.pullRequests = [{ state: "open", repository: "owner/heavy", number: 10 }];
+  const children = [thread("child1", "实现子代理", "running", { parentThreadId: "impl4" }), thread("child2", "审查子代理", "running", { parentThreadId: "review2" })];
+  const reads = [];
+  const errors = [];
+  const server = createServer(async (req, res) => {
+    try {
+      let body = "";
+      for await (const chunk of req) body += chunk;
+      const rpc = JSON.parse(body);
+      let result = {};
+      if (rpc.method === "tools/call") {
+        const { name, arguments: a } = rpc.params;
+        let data;
+        if (name === "t3_environment_links") data = { environmentId: "mini", links: [] };
+        else if (name === "t3_thread_list") data = { threads: a.includeSubagents ? children : top, nextCursor: null };
+        else if (name === "t3_project_list") data = { projects: [{ id: "p", repositoryIdentity: { canonicalKey: REPO } }], nextCursor: null };
+        else if (name === "list_thread_pull_requests") data = { pullRequests: [] };
+        else if (name === "t3_thread_read") {
+          reads.push(a.threadId);
+          const tr = top.find((x) => x.threadId === a.threadId);
+          assert.ok(tr, `未知线程 ${a.threadId}`);
+          data = { thread: { ...tr, worktreePath: "/fixture/worktree" },
+            items: [{ position: 0, type: "user_message", text: "实现这个问题", updatedAt: now }, { position: 1, type: "assistant_message", text: "有实际实现进展", updatedAt: now }],
+            recentRuns: [{ ordinal: 1, status: tr.status, startedAt: now, completedAt: now }], hasMore: false };
+        } else throw new Error(`未模拟的工具 ${name}`);
+        result = { structuredContent: data };
+      }
+      res.setHeader("content-type", "application/json");
+      res.end(JSON.stringify({ jsonrpc: "2.0", id: rpc.id, result }));
+    } catch (e) {
+      errors.push(String(e));
+      res.statusCode = 500;
+      res.end(JSON.stringify({ error: { message: String(e) } }));
+    }
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => { server.closeAllConnections(); server.close(); });
+  const env = { PATH: process.env.PATH, HOME: dir, BSTACK_CONFIG_DIR: dir,
+    T3_MCP_URL: `http://127.0.0.1:${server.address().port}`, T3_MCP_BEARER_TOKEN: "fixture-only" };
+  const script = new URL("./patrol-snapshot.mjs", import.meta.url).pathname;
+  for (const mode of [["--capacity-only"], []]) {
+    reads.length = 0;
+    const { stdout, stderr } = await exec(process.execPath, [script, "--self", "self", ...mode], { env, timeout: 15000 });
+    const e = JSON.parse(stdout).environments[0];
+    assert.equal(e.error, undefined, stderr || e.error);
+    assert.equal(e.capacity.used, 5);
+    assert.equal(e.activeTopLevel, 5);
+    assert.equal(e.capacity.pools[0].used, 5);
+    assert.equal(e.capacity.freeByRepo[REPO], 0);
+    assert.ok(!e.occupying.some((s) => /^(代码|视觉)审查 · PR #\d+$/.test(s)));
+    assert.ok(e.occupying.includes("代码审查 · PR #208 重验证"), "带后缀的实现父线程等待子代理时仍占位");
+    assert.ok(e.occupying.includes("视觉审查 · PR #228 修复"), "带后缀的失败实现线程仍占位并进入恢复");
+    assert.ok(!reads.some((id) => id.startsWith("review")), "审查线程不为容量或失败恢复补读");
+    if (!mode.length) {
+      assert.deepEqual(e.failedThreads.map((x) => x.id), ["impl3"], "审查失败由 Fast Ship 处理，普通失败仍进恢复清单");
+      assert.equal(e.checks.candidates, 5);
+    }
+  }
+  assert.deepEqual(errors, []);
+});

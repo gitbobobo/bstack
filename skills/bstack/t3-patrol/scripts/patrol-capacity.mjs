@@ -50,9 +50,11 @@ export function repoMatches(pattern, identity) {
   return p.includes("/") ? keys.includes(p) : keys.some((k) => k.split("/").at(-1) === p);
 }
 export const poolOf = (identity, cfg) => (cfg.projects ?? []).find((p) => repoMatches(p.repo, identity))?.pool ?? "general";
-// 当前巡检靠身份排除；其他巡检按约定标题识别，额度/资源探测也不占池。
+// Fast Ship 只读审查只认完整专用标题；带修复/重验证等后缀的实现线程仍计数。
+export const isReviewBot = (t) => /^(?:代码|视觉)审查 · PR #\d+$/.test(String(t.title ?? "").trim());
+// 当前巡检靠身份排除；其他巡检按约定标题识别，额度/资源探测与 Fast Ship 审查也不占池。
 export const isPatrol = (t, self = null) => (self != null && (t.threadId ?? t.id) === self) || /巡检|t3-patrol/i.test(String(t.title ?? ""));
-export const countsCapacity = (t, self = null) => !isPatrol(t, self) && !/^(?:额度|资源)探测$/.test(String(t.title ?? "").trim());
+export const countsCapacity = (t, self = null) => !isPatrol(t, self) && !isReviewBot(t) && !/^(?:额度|资源)探测$/.test(String(t.title ?? "").trim());
 
 export function capacityOf({ threads, projects, device, cfg, diskFreeGB = null, waiting = [], self = null }) {
   const limits = { ...cfg.pools, ...device?.pools };

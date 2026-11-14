@@ -16,16 +16,46 @@ test("重型超额不挤占通用池；Musiver/TMA共享重型池；没有设备
   assert.equal(c.free, undefined);
   assert.deepEqual(c.pools.map((p) => [p.name, p.used, p.free]), [["heavy", 4, 0], ["general", 0, 2]]);
 });
-test("当前和历史巡检、探测都不计数，审查线程跟随项目归属", () => {
+test("当前和历史巡检、探测及 Fast Ship 审查均不占池", () => {
   const c = calc({ self: "self", threads: [...heavy,
     { title: "改过标题", threadId: "self", projectId: "l" },
     { title: "T3 巡检", projectId: "l" }, { title: "t3-patrol", projectId: "l" },
     { title: "额度探测", projectId: "l" },
-    { title: "代码审查 · PR #1", projectId: "l", reviewBot: true },
+    { title: "代码审查 · PR #1", projectId: "l" },
   ] });
-  assert.equal(c.used, 5);
-  assert.equal(c.freeByRepo[LIU], 1);
+  assert.equal(c.used, 4);
+  assert.equal(c.freeByRepo[LIU], 2);
   assert.equal(countsCapacity({ title: "T3 巡检" }), false);
+});
+test("审查运行、有工作树或等待子代理均不占池；普通实现和重验证线程仍计数", () => {
+  const reviews = [
+    { title: "代码审查 · PR #208", projectId: "m", status: "running", worktreePath: "/tmp/review" },
+    { title: "视觉审查 · PR #228", projectId: "t", status: "completed", hasLiveSubagents: true },
+    { title: " 视觉审查 · PR #205  ", projectId: "l" },
+  ];
+  const regular = [
+    { title: "INT-1 修复 Fast Ship 审查错误", projectId: "l" },
+    { title: "#208 审查修复与重验证", projectId: "m" },
+    { title: "代码审查 · PR #208 重验证", projectId: "m" },
+    { title: "视觉审查 · PR #228 修复", projectId: "m" },
+    { title: "已改名", projectId: "l", reviewBot: true },
+    { title: "审查 #653 R4", projectId: "m" },
+  ];
+  assert.ok(reviews.every((t) => !countsCapacity(t)));
+  assert.ok(regular.every((t) => countsCapacity(t)));
+  const c = calc({ threads: [...reviews, ...regular] });
+  assert.deepEqual(c.pools.map((p) => [p.name, p.used]), [["heavy", 4], ["general", 2]]);
+  assert.equal(c.used, regular.length);
+});
+test("回放 Mini 历史快照：五个实现与三条审查只算五个重型名额", () => {
+  const titles = ["代码审查 · PR #208", "#226 后台扫描-WebAndroid", "代码审查 · PR #228", "代码审查 · PR #205", "#210 发布列车-Android", "#228 收藏毫秒与顺序", "INT-1599 降级提示-Android", "INT-1695 播放会话-Android"];
+  const c = calc({ device: { device: "mac-mini", pools: { heavy: 5, general: 2 } }, threads: titles.map((title) => ({ title, projectId: "m" })) });
+  assert.equal(c.pools[0].used, 5);
+  assert.equal(c.pools[0].free, 0);
+  assert.equal(c.pools[0].occupying.length, 5);
+  assert.equal(c.freeByRepo[LIU], 2);
+  const released = calc({ device: { device: "mac-mini", pools: { heavy: 5 } }, threads: titles.slice(0, -1).map((title) => ({ title, projectId: "m" })) });
+  assert.equal(released.freeByRepo[MUS], 1, "审查不能吞掉实现线程释放的名额");
 });
 test("设备只覆盖两池名额；缺身份进入通用池，显式general可覆盖fork origin", () => {
   const c = calc({ device: { device: "mini", pools: { heavy: 5, general: 1 } }, threads: [...heavy, { title: "无身份", projectId: "?" }] });
