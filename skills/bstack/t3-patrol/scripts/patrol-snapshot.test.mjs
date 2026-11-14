@@ -23,6 +23,10 @@ test("完整/容量快照一致排除 Fast Ship 审查，保留实现父线程�
     thread("review1", "代码审查 · PR #228", "failed"),
     thread("review2", "视觉审查 · PR #205", "completed"),
     thread("self", "改过名的当前巡检", "running"),
+    thread("background", "INT-200 race后台验收", "completed"),
+    thread("discussion", "讨论备选方案", "completed"),
+    thread("unreadable", "绑定读取失败的验收", "completed"),
+    thread("merged", "已合并的交付", "completed", { pullRequests: [{ state: "merged", repository: "owner/heavy", number: 11 }] }),
   ];
   top.find((x) => x.threadId === "impl3").title = "视觉审查 · PR #228 修复";
   top.find((x) => x.threadId === "impl4").title = "代码审查 · PR #208 重验证";
@@ -46,9 +50,13 @@ test("完整/容量快照一致排除 Fast Ship 审查，保留实现父线程�
         else if (name === "list_thread_pull_requests") data = { pullRequests: [] };
         else if (name === "t3_thread_read") {
           reads.push(a.threadId);
+          if (a.threadId === "unreadable") {
+            res.end(JSON.stringify({ jsonrpc: "2.0", id: rpc.id, result: { isError: true, content: [{ text: "fixture 绑定读取失败" }] } }));
+            return;
+          }
           const tr = top.find((x) => x.threadId === a.threadId);
           assert.ok(tr, `未知线程 ${a.threadId}`);
-          data = { thread: { ...tr, worktreePath: "/fixture/worktree" },
+          data = { thread: { ...tr, worktreePath: tr.threadId === "discussion" ? null : "/fixture/worktree" },
             items: [{ position: 0, type: "user_message", text: "实现这个问题", updatedAt: now }, { position: 1, type: "assistant_message", text: "有实际实现进展", updatedAt: now }],
             recentRuns: [{ ordinal: 1, status: tr.status, startedAt: now, completedAt: now }], hasMore: false };
         } else throw new Error(`未模拟的工具 ${name}`);
@@ -72,9 +80,13 @@ test("完整/容量快照一致排除 Fast Ship 审查，保留实现父线程�
     const { stdout, stderr } = await exec(process.execPath, [script, "--self", "self", ...mode], { env, timeout: 15000 });
     const e = JSON.parse(stdout).environments[0];
     assert.equal(e.error, undefined, stderr || e.error);
-    assert.equal(e.capacity.used, 5);
-    assert.equal(e.activeTopLevel, 5);
-    assert.equal(e.capacity.pools[0].used, 5);
+    assert.equal(e.capacity.used, 7);
+    assert.equal(e.activeTopLevel, 7);
+    assert.equal(e.capacity.pools[0].used, 7);
+    assert.equal(e.capacity.unverifiedThreads[0].threadId, "unreadable", "读取失败不能悄悄释放名额");
+    assert.ok(e.occupying.includes("INT-200 race后台验收"), "无PR的后台验收在代理回合completed后仍占位");
+    assert.ok(!e.occupying.includes("讨论备选方案"));
+    assert.ok(!e.occupying.includes("已合并的交付"));
     assert.equal(e.capacity.freeByRepo[REPO], 0);
     assert.ok(!e.occupying.some((s) => /^(代码|视觉)审查 · PR #\d+$/.test(s)));
     assert.ok(e.occupying.includes("代码审查 · PR #208 重验证"), "带后缀的实现父线程等待子代理时仍占位");
@@ -82,7 +94,7 @@ test("完整/容量快照一致排除 Fast Ship 审查，保留实现父线程�
     assert.ok(!reads.some((id) => id.startsWith("review")), "审查线程不为容量或失败恢复补读");
     if (!mode.length) {
       assert.deepEqual(e.failedThreads.map((x) => x.id), ["impl3"], "审查失败由 Fast Ship 处理，普通失败仍进恢复清单");
-      assert.equal(e.checks.candidates, 5);
+      assert.equal(e.checks.candidates, 9);
     }
   }
   assert.deepEqual(errors, []);

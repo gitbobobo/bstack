@@ -111,12 +111,20 @@ function waitOf(status, lastMsg) {
   return text.startsWith(WAIT_MARK) ? { at: lastMsg.updatedAt, line: clip(text.split("\n")[0], 200) } : null;
 }
 
-// --capacity-only 不读尾部，只为停着的线程补读最后一条消息，认出等资源的线程。
-async function waitingOf(scope, t) {
-  if (LIVE.has(t.status) || isProbe(t) || isReviewBot(t)) return null;
-  const r = await call("t3_thread_read", { threadId: t.threadId, afterPosition: Math.max(0, (t.itemCount ?? 0) - 20), limit: 50, maxCharsPerItem: 400, ...scope }).catch(() => null);
-  const last = (r?.items ?? []).filter((i) => i.type === "user_message" || i.type === "assistant_message").at(-1);
-  return waitOf(t.status, last);
+// --capacity-only 复用一次停驻回读：等待资源、绑定工作树和最近 run 时间同源。
+async function idleStateOf(scope, t) {
+  if (LIVE.has(t.status) || !countsCapacity(t, SELF)) return {};
+  try {
+    const r = await call("t3_thread_read", { threadId: t.threadId, afterPosition: Math.max(0, (t.itemCount ?? 0) - 20), limit: 50, maxCharsPerItem: 400, ...scope });
+    const last = (r.items ?? []).filter((i) => i.type === "user_message" || i.type === "assistant_message").at(-1);
+    return {
+      hasWorktree: Boolean(r.thread.worktreePath),
+      lastRunEndedAt: (r.recentRuns ?? []).map((x) => x.completedAt ?? x.startedAt ?? x.requestedAt).filter(Boolean).sort().at(-1) ?? null,
+      waitingResources: waitOf(t.status, last),
+    };
+  } catch (e) {
+    return { error: String(e.message ?? e) };
+  }
 }
 
 async function tailOf(environmentId, t) {
@@ -246,13 +254,17 @@ async function liveSubagentRoots(environmentId, top) {
 
 // rootsP 是提前发起的 liveSubagentRoots：它要列全部活跃子代理，较慢，与候选取证并行。
 // waiting：本设备上在等资源的线程标题，非空时这台设备不建新线程。
-async function occupancyOf(env, top, lastRunEndedOf, now, rootsP, waiting) {
+async function occupancyOf(env, top, detailsOf, now, rootsP, waiting) {
   const roots = await rootsP;
   const occupying = top.filter((t) => {
     if (!countsCapacity(t, SELF)) return false;
     if (LIVE.has(t.status) || roots.has(t.threadId)) return true;
+    const details = detailsOf(t);
+    // 无 PR 的执行任务可能只把长验收放到后台；completed 只结束代理回合。
+    // 仍绑定工作树或读取不明时保守占位，交付核验后由 settle 释放。
+    if (!(t.pullRequests ?? []).length) return details?.hasWorktree !== false;
     if (!holdsOpenPr(t)) return false;
-    const ended = Date.parse(lastRunEndedOf(t) ?? "");
+    const ended = Date.parse(details?.lastRunEndedAt ?? "");
     return Number.isFinite(ended) && now - ended < CFG.capacity.occupyWindowHours * 3600 * 1000;
   });
   // 项目清单取不到时归属不可信，暂停本设备派活并报告。
@@ -263,6 +275,8 @@ async function occupancyOf(env, top, lastRunEndedOf, now, rootsP, waiting) {
   } catch (e) {
     projectsError = String(e.message ?? e);
   }
+  const unverifiedThreads = top.filter((t) => countsCapacity(t, SELF) && detailsOf(t)?.error)
+    .map((t) => ({ threadId: t.threadId, title: t.title, error: detailsOf(t).error }));
   const capacity = {
     ...capacityOf({
       threads: occupying,
@@ -272,26 +286,23 @@ async function occupancyOf(env, top, lastRunEndedOf, now, rootsP, waiting) {
       diskFreeGB: env.isLocal ? localDiskFreeGB() : null,
       waiting,
     }),
+    ...(unverifiedThreads.length ? { unverifiedThreads } : {}),
     ...(projectsError ? { projectsError, blocked: [projectsError], freeByRepo: {}, freeOther: 0 } : {}),
   };
   return { occupying, capacity, projects };
 }
 
-// --capacity-only：只算容量，供派活使用。只给 PR 仍 open 的已停线程读一次 run 记录、给停着的线程读最后一条消息，不读尾部与 PR 实况。
+// --capacity-only：只算容量，供派活使用。停驻线程一次回读绑定、run 与资源标记，不读活动与 PR 实况。
 // 另给项目清单（按仓库找 projectId）与未 settle 顶层线程的标题（按问题编号查重）。
 async function capacityEnv(env) {
   const now = Date.now();
   const scope = env.isLocal ? {} : { environmentId: env.environmentId };
   const top = (await listAll(env.isLocal ? null : env.environmentId)).filter((t) => !isSubagent(t));
   const rootsP = liveSubagentRoots(env.isLocal ? null : env.environmentId, top);
-  const ended = new Map();
-  await pool(top.filter(holdsOpenPr), CONC, async (t) => {
-    const r = await call("t3_thread_read", { threadId: t.threadId, limit: 1, maxCharsPerItem: 1, ...scope }).catch(() => null);
-    ended.set(t.threadId, (r?.recentRuns ?? []).map((x) => x.completedAt ?? x.startedAt ?? x.requestedAt).filter(Boolean).sort().at(-1) ?? null);
-  });
-  const waits = await pool(top, CONC, (t) => waitingOf(scope, t));
-  const waiting = top.filter((t, i) => waits[i] && countsCapacity(t, SELF)).map((t) => clip(t.title, 40));
-  const { occupying, capacity, projects } = await occupancyOf(env, top, (t) => ended.get(t.threadId), now, rootsP, waiting);
+  const states = await pool(top, CONC, (t) => idleStateOf(scope, t));
+  const byId = new Map(top.map((t, i) => [t.threadId, states[i]]));
+  const waiting = top.filter((t, i) => states[i].waitingResources && countsCapacity(t, SELF)).map((t) => clip(t.title, 40));
+  const { occupying, capacity, projects } = await occupancyOf(env, top, (t) => byId.get(t.threadId), now, rootsP, waiting);
   return {
     environmentId: env.environmentId,
     label: env.label,
@@ -376,7 +387,7 @@ async function snapshotEnv(env) {
   });
   const byId = new Map(enriched.map((x) => [x.id, x]));
   const waiting = enriched.filter((x) => x.waitingResources && countsCapacity(x, SELF)).map((x) => clip(x.title, 40));
-  const { occupying, capacity } = await occupancyOf(env, top, (t) => byId.get(t.threadId)?.lastRunEndedAt, now, rootsP, waiting);
+  const { occupying, capacity } = await occupancyOf(env, top, (t) => byId.get(t.threadId), now, rootsP, waiting);
   const prevUsed = STATE.lastRound?.occupancy?.[env.environmentId];
   const deviceFreed = Number.isInteger(prevUsed) && capacity.used < prevUsed;
   const active = occupying.length;

@@ -32,7 +32,7 @@
   - `needsRenameThreads`：标题是原文堆砌、超宽或缺 open PR 号（`reasons`），带 `prs`/`task`/`tail` 作为命名依据。
   - `convergenceAuditThreads`：PR 开着超过 `convergenceAudit.openHours` 或审查超过 `convergenceAudit.reviewRounds` 轮，且 24 小时内仍有 P0–P2（`prs` 带时长/轮次/条数，直接当审计题头）。
 - **计数** `checks`：候选、有事、静默与各清单条数。汇报「例行复核」只引用这里的数字。
-- **容量** `environments[].capacity`：重型/通用两池占用、项目池归属 `poolByRepo`、按仓库的可建数 `freeByRepo`、`blocked`（本机磁盘低于保底，或设备上有线程在等资源；非空时可建数全为 0），以及 `activeTopLevel` 与 `occupying`，完整快照与 `--capacity-only` 共用 [handoff.md](handoff.md) 第 3 步的计数与审查排除规则。`disk.freeGB` 只有本机有值，远程磁盘由在那里干活的线程自己查。
+- **容量** `environments[].capacity`：绑定读取失败见 `unverifiedThreads`，该类无 PR 任务保守占位；重型/通用两池占用、项目池归属 `poolByRepo`、按仓库的可建数 `freeByRepo`、`blocked`（本机磁盘低于保底，或设备上有线程在等资源；非空时可建数全为 0），以及 `activeTopLevel` 与 `occupying`，完整快照与 `--capacity-only` 共用 [handoff.md](handoff.md) 第 3 步的计数与审查排除规则。`disk.freeGB` 只有本机有值，远程磁盘由在那里干活的线程自己查。
 
 ## 分诊规则
 
@@ -42,7 +42,7 @@
 
 `patrol-evidence.mjs` 一条命令取多条线程与 PR，字段见脚本头注释。线程读的是 activity 视图（略去 reasoning），尾部条数用 `--items`，读某条消息之后的活动用 `--after <position>`。
 
-**文件输入**：`--from <JSON>` 可重复，与 `--thread`、`--pr` 合并；按 environmentId＋threadId 去重。接受完整快照、`patrol-evidence` 输出、`issue-source ledger` 输出及本版 `patrol-batch` 输出（合并 watch/calls 的目标 threadId/environmentId，无需从 label 反推）；brief 摘要会报错，改用原始完整快照。`--select all` 为默认；`hot` 取快照有事候选，`failed` 取输入中已标 failed/interrupted/cancelled 或带 error 待核的条目，仅用于取证选集，不代表授权恢复。
+**文件输入**：`--from <JSON>` 可重复，与 `--thread`、`--pr` 合并；按 environmentId＋threadId 去重。接受完整快照、`patrol-evidence` 输出、`issue-source ledger` 输出、本版 `patrol-batch` 输出（合并 watch/calls 的目标定位）与 `dispatch-launch` 结果数组；派活数组只回读有 threadId 的项，无线程的 error/duplicate 在原派出结果对账。brief 摘要会报错，改用原始完整快照。`--select all` 为默认；`hot` 取快照有事候选，`failed` 取输入中已标 failed/interrupted/cancelled 或带 error 待核的条目，仅用于取证选集，不代表授权恢复。
 
 ```bash
 # 台账没有实时状态：先回读，再从结果判定失败，沿用恢复分支

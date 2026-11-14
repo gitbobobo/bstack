@@ -44,7 +44,7 @@
 
 2. **查重**：在目标环境用 `t3_thread_search` 搜 PR 号和来源线程 id，已有线程接过这段工作就跳过新建。
 
-3. **看容量**：读快照里目标环境的 `environments[].capacity`（下称「容量」；配置项写作 `config.capacity.*`）。巡检只管名额，磁盘与内存由新线程在重验证前自己查（t3-orchestrator「资源不足时」）。先排除巡检、探测与 Fast Ship 只读审查线程（完整专用标题「代码审查 · PR #N」「视觉审查 · PR #N」，忽略首尾空白）；它们即使有活跃 run、工作树或审查子代理也不占两池名额，识别共用 `patrol-capacity.mjs`。审查线程改名后若无法确认身份，保守计数并列证据缺口，不靠未提供的标记认定身份。其余顶层线程在有活跃 run/子代理，或 PR 仍 open 且最近一次 run 在 `config.capacity.occupyWindowHours` 内结束时占名额——实现父线程等待子代理或审查时可能暂时 completed，工作树仍在使用。普通实现、审查意见修复与重验证线程照常计数，不能仅凭标题含「审查」或项目名为 Fast Ship 排除。PR 已合并或关闭（工作树已回收）、没有 PR 又没在跑的线程不占名额，所以来源线程本身通常不算。
+3. **看容量**：读快照里目标环境的 `environments[].capacity`（下称「容量」；配置项写作 `config.capacity.*`）。巡检只管名额，磁盘与内存由新线程在重验证前自己查（t3-orchestrator「资源不足时」）。先排除巡检、探测与 Fast Ship 只读审查线程（完整专用标题「代码审查 · PR #N」「视觉审查 · PR #N」，忽略首尾空白）；它们即使有活跃 run、工作树或审查子代理也不占两池名额，识别共用 `patrol-capacity.mjs`。审查线程改名后若无法确认身份，保守计数并列证据缺口，不靠未提供的标记认定身份。其余顶层线程在有活跃 run/子代理，或 PR 仍 open 且最近一次 run 在 `config.capacity.occupyWindowHours` 内结束时占名额——实现父线程等待子代理或审查时可能暂时 completed，工作树仍在使用。普通实现、审查意见修复与重验证线程照常计数，不能仅凭标题含「审查」或项目名为 Fast Ship 排除。**无 PR 的绑定执行任务保守占位到 settle**：代理回合 completed 可能只是把长验收放到后台，工作树仍绑定就继续计数；绑定读取失败也保守计数，并在 `capacity.unverifiedThreads` 留缺口。无工作树且无活跃 run/子代理的讨论不占位。PR 已合并或关闭且无活跃 run/子代理的按既有口径释放；其他任务完成后按主流程核交付、settle，再取容量。
 
    - **任务池**：每台设备只有重型 `heavy` 与通用 `general` 两个独立池。项目归属取 `config.capacity.projects`，未列项目与无仓库身份的项目归通用；用户在添加项目时指定。两池默认名额取 `capacity.pools`，设备覆盖取 `capacity.devices[].pools`。参与计数的线程才跟随项目归属。设备不设总上限，重型池超额也不占通用名额。
    - **两道闸**：容量带 `blocked` 时这台设备一律不建——本机磁盘（快照实测 `disk.freeGB`）低于 `config.capacity.minFreeDiskGB`，或设备上有线程停在 `【等待资源】`。
@@ -55,7 +55,7 @@
 4. **新建线程**（前提：第 3 步写出了目标环境的容量占用与目标仓库的可建数，且可建数大于 0）：
 
    - `t3_thread_launch` 带上目标环境的 `environmentId`；
-   - `projectId` 取目标环境里同一仓库的项目（`t3_thread_list` 找同仓库的近期线程，用它的 `projectId`）；
+   - `projectId` 按 [派出绑定身份](../../t3-dispatch/SKILL.md#3-派出) 从目标环境的项目清单核实，确认 canonicalKey 后再建线；
    - `modelSelection` 按 [故障恢复「模型优先级」](recovery.md#模型优先级) 判定，从本轮 modelLadder 取 instanceId/model/options；按 t3_thread_launch 当前参数格式转换 options，不在此另存模型参数；
    - `workspaceStrategy` 取 `{type:"worktree", baseRef:<仓库默认分支>, startFromOrigin:true}`；
    - 标题按 [naming.md](naming.md) 的格式，用该项目以往标题的语言和写法；

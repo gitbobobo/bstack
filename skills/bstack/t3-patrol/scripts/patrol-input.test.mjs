@@ -27,6 +27,8 @@ test("文件输入覆盖快照、取证、台账、batch，按环境去重并保
   assert.deepEqual(threadInputs({ watch, calls: [{ ...watch[0], result: {} }, { threadId: "sent", environmentId: "e" }] }).map((t) => t.id), ["watched", "sent"]);
   assert.throws(() => threadInputs({ threads: [{}] }), /缺有效/);
   assert.throws(() => threadInputs({}), /输入须为/);
+  assert.deepEqual(threadInputs([{ threadId: "launched", environmentId: "remote", status: "running" }, { title: "未建线", error: "认领失败" }]).map((t) => t.id), ["launched"]);
+  assert.throws(() => threadInputs([{}]), /threadId/);
   assert.throws(() => threadInputs({ environments: [{ hot: [], quiet: [] }] }, "hot"), /brief/);
   assert.equal(threadInputs({ threads: [{ threadId: "unknown", error: "unreachable" }] }, "failed")[0].error, "unreachable");
 });

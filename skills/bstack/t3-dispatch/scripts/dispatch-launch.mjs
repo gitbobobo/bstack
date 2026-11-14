@@ -8,7 +8,7 @@
 // modelSelection 可省略；额度换档时按技能规则填本轮模型，仅覆盖本次派出，不写配置。
 //   ids 第一个是主问题（提示词按它渲染），其余是合并进同一线程的重复问题，一并认领、记账。
 // 逐条执行，一条做完再做下一条：
-//   0. 查重：按主问题编号在各可达环境该仓库的项目里 t3_thread_search，标题或任务书命中未结线程就跳过整条
+//   0. 按实时项目清单校验目标环境/projectId 的 canonicalKey，再查重：按主问题编号在各可达环境该仓库的项目里 t3_thread_search，标题或任务书命中未结线程就跳过整条
 //      （挑选可能越出 dispatch-plan 的备选表，表外问题没查过重）；
 //   1. 认领 ids（主问题认领失败就跳过整条；附带问题失败只记下）；
 //   2. 推荐理由写临时文件，按主问题渲染提示词；
@@ -65,8 +65,18 @@ async function scopesOf(repo) {
   const envs = [null, ...(links.links ?? []).filter((x) => x.status === "reachable").map((x) => x.environmentId)];
   const scopes = [];
   for (const environmentId of envs) {
-    const r = await call("t3_project_list", { limit: 100, ...(environmentId ? { environmentId } : {}) }).catch(() => null);
-    for (const p of r?.projects ?? []) if (p.repositoryIdentity?.canonicalKey?.toLowerCase() === repo) scopes.push({ ...(environmentId ? { environmentId } : {}), projectId: p.id });
+    const seen = new Set();
+    let cursor = 0;
+    for (;;) {
+      if (seen.has(cursor)) throw new Error(`项目清单分页游标重复：${environmentId ?? links.environmentId}/${cursor}，未缓存目录`);
+      seen.add(cursor);
+      const r = await call("t3_project_list", { limit: 100, cursor, ...(environmentId ? { environmentId } : {}) }).catch((e) => {
+        throw new Error(`项目清单读取失败：${environmentId ?? links.environmentId}，${e.message}；未缓存目录`);
+      });
+      for (const p of r.projects ?? []) if (p.repositoryIdentity?.canonicalKey?.toLowerCase() === repo) scopes.push({ environmentId: environmentId ?? links.environmentId, projectId: p.id });
+      if (r.nextCursor == null) break;
+      cursor = r.nextCursor;
+    }
   }
   scopeCache.set(repo, scopes);
   return scopes;
@@ -99,6 +109,10 @@ async function launchOne(l, config, dir) {
     }
   };
   try {
+    const scopes = await scopesOf(l.repo.toLowerCase());
+    if (!scopes.some((s) => s.environmentId === l.environmentId && s.projectId === l.projectId)) {
+      return { ...out, error: `目标项目身份未确认：${l.environmentId}/${l.projectId} 不属于仓库 ${l.repo}，或项目清单不可达；未认领、未建线` };
+    }
     const ref = run("show", { repo: l.repo, id: l.ids[0] }).ref;
     const dup = ref && (await openThreadFor(ref, l.repo.toLowerCase()));
     if (dup) return { ...out, duplicate: { title: dup.title, link: dup.link }, error: `${ref} 已有未结线程「${dup.title}」，跳过` };
@@ -172,7 +186,7 @@ if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToP
     const errors = validatePlan(plan, config);
     if (errors.length) throw new Error(errors.join("\n"));
     if (args.includes("--dry-run")) {
-      console.log(JSON.stringify({ ok: true, launches: plan.launches.length }, null, 1));
+      console.log(JSON.stringify({ formatValid: true, projectBinding: "not-checked", launches: plan.launches.length }, null, 1));
       process.exit(0);
     }
     const launchConfig = launchConfigFor(plan, config);

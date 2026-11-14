@@ -5,7 +5,7 @@
 // 用法：
 //   node patrol-evidence.mjs --thread <threadId>[@<environmentId>] ... [--items 30] [--chars 1500] [--after <position>] [--queue]
 //   node patrol-evidence.mjs --pr <owner/repo#N>[@<PR URL>] ...
-//   node patrol-evidence.mjs --from <快照|取证|台账|batch结果.json> [--select all|hot|failed]
+//   node patrol-evidence.mjs --from <快照|取证|台账|batch结果|dispatch-launch结果.json> [--select all|hot|failed]
 // 两种可以混用、各自重复。本机线程省略 @environmentId。
 // 线程输出：thread（状态、工作树、分支、活跃 run、待答请求）、recentRuns（含 runId，用于发后回读对应 run）、
 //   task（首条用户消息原文）、activity（尾部条目，略去 reasoning；--after 从指定 position 往后读，用于读某条消息之后的活动）。
@@ -28,7 +28,14 @@ const clip = (s, n) => {
 export function threadInputs(data, select = "all") {
   if (!["all", "hot", "failed"].includes(select)) throw new Error("select 须为 all / hot / failed");
   let rows;
-  if (Array.isArray(data.environments)) {
+  if (Array.isArray(data)) {
+    // dispatch-launch 的失败/重复项可能尚无线程，留在原结果里对账；只回读已建线项。
+    rows = data.filter((t) => {
+      if (t?.threadId) return true;
+      if (t?.error || t?.duplicate) return false;
+      throw new Error("派活结果条目缺有效 threadId，也没有 error/duplicate");
+    });
+  } else if (Array.isArray(data.environments)) {
     if (data.environments.some((e) => !Array.isArray(e.candidates) && ("hot" in e || "quiet" in e))) throw new Error("brief 摘要不含完整线程定位，请使用原始 patrol-snapshot.json");
     rows = data.environments.flatMap((e) => [
       ...(e.candidates ?? []).map((t) => ({ ...t, environmentId: e.environmentId })),
@@ -39,7 +46,7 @@ export function threadInputs(data, select = "all") {
   } else if (Array.isArray(data.active)) rows = data.active;
   else if (Array.isArray(data.calls) || Array.isArray(data.watch)) {
     rows = [...(data.watch ?? []), ...(data.calls ?? [])].filter((c) => c.threadId).map((c) => ({ ...c.result, threadId: c.threadId, environmentId: c.environmentId }));
-  } else throw new Error("输入须为快照、取证、台账或含线程定位的 batch 结果");
+  } else throw new Error("输入须为快照、取证、台账、batch 结果或 dispatch-launch 结果数组");
   const unique = new Map();
   for (const t of rows) {
     const id = t.threadId ?? t.id;

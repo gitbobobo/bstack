@@ -117,7 +117,7 @@ node <技能目录>/scripts/patrol-evidence.mjs --from /tmp/t3-patrol-snapshot.j
 ### D. 独立体检（全部候选，含静默）
 
 - needsWatchThreads：`node <技能目录>/scripts/patrol-batch.mjs --watch /tmp/t3-patrol-snapshot.json` 一次代挂全部并回读 `watching`；PR 已合并/关闭的脚本记 `skipped`。
-- needsRenameThreads：按 [命名格式](references/naming.md) 改名，静止、已交付线程也处理；自身误入清单先纠正 self 取值并重跑快照。
+- needsRenameThreads：按 [命名格式与 PR 归属](references/naming.md) 核实后改名或保留，静止、已交付线程也处理；自身误入清单先纠正 self 取值并重跑快照。
 - 本轮观察到新建或转出的 issue：回读标题与正文检查编码；乱码按原文修复并再次回读。
 
 **完成标准**：所有有事候选和失败条目都有判定、证据及一个主动作（含不打扰、证据不足、跳过）；每个持续超时项都有本轮进展证据、定向核验或明确阻塞；静默候选都记了「不打扰（静默，未复核健康）」；体检清单每条有结果。
