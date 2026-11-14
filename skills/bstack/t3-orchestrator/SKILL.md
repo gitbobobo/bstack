@@ -23,7 +23,7 @@ harness 四个（用户定，2026-11-04）：`pi` 经 cliproxyapi 调 glm/deepse
 
 ## 选目标由脚本裁决
 
-**选哪个 harness、哪个模型，一律跑 `route.mjs`，不查文档、不自己挑。** 固定输入固定输出：任务类型和已试入口进去，`PICK` 出来就是 `delegate_task` 的 `target`（`options` 已按规则注入好）。硬性规则全部编码在 `scripts/route-data.mjs`（默认值，用户配置可覆盖偏好部分）与 `route.mjs`——脚本能拦的别靠记忆；`route.mjs table` 看当前生效数据。
+**选哪个 harness、哪个模型，一律跑 `route.mjs`，不查文档、不自己挑。** 固定输入固定输出：任务类型和已试入口进去，`PICK` 出来就是 `delegate_task` 的 `target`（`options` 已按规则注入好）。请求报未知选项或非法取值时，先按[参数兼容](references/failures.md#参数兼容)校准本轮请求，不直接换模型或改持久路由。硬性规则全部编码在 `scripts/route-data.mjs`（默认值，用户配置可覆盖偏好部分）与 `route.mjs`——脚本能拦的别靠记忆；`route.mjs table` 看当前生效数据。
 
 ```bash
 # 选目标：--task 分类进去，pick/alternatives/skipped 出来
@@ -61,7 +61,7 @@ node <技能目录>/scripts/route-playground.mjs [--caps-file ...]
 
 `delegate_task` 参数：
 
-- `target`：用 route.mjs 输出的 `providerInstanceId`、`model`、`options`，不自行增减选项。
+- `target`：用 route.mjs 输出的 `providerInstanceId`、`model`、`options`；仅「参数兼容」分支允许按原始拒参证据校准当轮 options。
 - `role`：按任务填 `implementation`、`review`、`research`、`design`、`test` 之一。
 - `mode`：`async`，靠完成事件唤醒（机制见 `t3-code`「监听与唤醒」）。派完处理剩余独立工作后结束本轮。追加修复和复审也新建 `delegate_task`，不用子线程的 `t3_thread_send` 代替委派。
 - 保存每轮的 `taskId`（`task_status` / `task_cancel`）、`childThreadId`（只用于读原始证据）、`clientRequestId`（每轮不同，同轮工具重试沿用原值，换路增加尝试序号）。

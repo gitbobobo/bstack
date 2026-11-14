@@ -5,12 +5,27 @@
 | 类型 | 典型原文 | 处理 |
 |---|---|---|
 | 临时过载、连接失败、限流或额度 | `at capacity`、`server_is_overloaded`、`503`、`stream disconnected`、`Reconnecting... 5/5`、`runtime stream failed`、`Aborted`、`429`、`usage limit`、`quota`、`credits` | 确认旧尝试退出后换路。pi 入口报这类错误说明 cliproxyapi 已经试过它能用的渠道；同一轮里 pi 上不同模型都报连接类错误，按 cliproxyapi 整体故障处理，`--exclude-provider pi` |
+| 参数兼容 | `Unknown option`、`unsupported option`、`rejected options`、`Invalid value ... option`，通常伴随 `invalid_request` | 先走下节「参数兼容」，不按额度失败或模型不可用处理 |
 | 配置或环境 | `provider_unavailable`、`model_unavailable`、`Invalid value ... model`、`is not enabled`、`auth`、`Provider session failed to open`、`does not exist` | 不在原目标重试；重新调 `orchestrator_capabilities` 落盘，换入口 |
 | 启动即失败 | 开始后 1 分钟内失败，期间没有任何工具调用，原文不属于上面几类（例如 `Provider turn failed`） | 按配置或环境处理 |
 | 权限被拒 | `Permission denied for this tool`、`was denied because this agent is running in the background` | 不在原目标重试，改用 `delegate_task` 重派；已是 `delegate_task` 的，取消后用 `runtimeMode:"full-access"` 重派同一任务，不向用户要授权 |
 | 卡在人工授权 | 子线程尾部是 `approval_request`，或 `task_status` 长期 `working` 而无新产物 | 既不是失败也不是合法等待：`task_cancel` 后用 `runtimeMode:"full-access"` 重派。不要让用户去点授权，也不要在汇报里写成「等你授权」——这是默认模式撞上 shell 命令限制，不是需求没授权 |
 | 任务没做好 | 状态是 completed，但结果不达标 | 不算 harness 故障，走验收流程 |
 | 长时间无新消息 | activity 很久没有新内容 | `status=working` 不算活着——请求流挂死时状态停 working、零事件。查子线程 provider 日志文件 mtime/大小是否增长、实际编译进程、锁持有者和排队状态；仍在编译或合法排队就继续等待。确认无实际进展再取消，退出确认后才换路 |
+
+## 参数兼容
+
+未知选项可能只是目标环境的能力目录或会话短暂失步，先刷新再判断；单次拒参不证明全局默认失效。思考强度须显式指定，不能以省略参数、依赖提供商默认来换取启动成功。
+
+1. 保存目标 `environmentId`、provider、完整 model ID、实传 options、错误原文及时间，区分请求被拒（无 taskId/runId）与已建任务后失败。有已建任务时先按「续跑」核旧尝试，确认无活跃写者。
+2. 刷新**目标环境**的 `orchestrator_capabilities`；按该模型核键名和取值。保留原始模型选项描述符，不能把裁剪丢失的 options 当成“不支持”。已有本轮目录与实际拒参冲突时允许刷新，不沿用旧快照证明参数有效。
+3. 保持同实例、同模型、同任务与已选思考强度。刷新后目录恢复原选项就沿用原参数；只有目标目录明确给出等价映射时才调整键/值，同时保留权限与安全约束。目录仍只支持 `mode`、无法表达原思考强度，或目录与请求持续冲突时，记录能力不完整/不一致，不能删掉档位试跑；按既有换路规则寻找能表达要求的入口，任务点名限制无法满足则报阻塞。
+4. 用 `route.mjs check --provider <id> --model <完整ID> --options '<保留思考强度的JSON>' --caps-file <刷新后的目标环境目录>` 校验，再作一次同目标重试；仅等价参数映射是「不自行增减 options」的例外。委派使用新的 `delegate_task` 与 clientRequestId；已有执行线程则校准该线程的 modelSelection 后续跑，不重建线程。仍被拒或出现其他故障时重新归因，再按原换路/补救上限处理。
+5. 按对应 task/run 回读启动与实际活动，只有验证成功才在本轮后续同环境、同 provider/model 请求中复用调整。报告区分“请求被拒”“纠参已启动”“执行待验证”，参数错误不记 quotaFailure。
+
+持久配置与 route-data 保持只读，跨轮仍以生效配置为起点。建议维护时写清默认文件或用户配置路径、目标环境、错误与已验证的临时参数；只在某个目标拒参时建议校准该目标，不据此全局删除 `thought_level` 等参数。
+
+**完成标准**：有原始拒参、刷新后的目标目录、保留思考强度的实传参数及对应 task/run 验证，或有不可兼容的具体约束与恢复条件；没有把兼容错误误记成额度耗尽，也没有修改用户持久偏好。
 
 ## 续跑
 

@@ -93,6 +93,20 @@ test("check --caps-file: 选项取值按目录校验", () => {
   ok(["--provider", "pi", "--model", "cliproxyapi/glm-5.3-flash", "--options", '{"thinking":"high"}', "--caps-file", CAPS_FILE]);
 });
 
+test("check: Devin 暂缺档位时拒绝，刷新完整目录后保留原思考强度通过", () => {
+  // 回放 2026-11-14 12:19Z 的 Unknown option thought_level; supported options: mode。
+  const f = fixture((caps) => {
+    const devin = caps.providers.find((p) => p.providerInstanceId === "acpRegistry_devin");
+    const model = devin.models.find((m) => m.id === "swe-2-high");
+    model.options = [{ id: "mode", type: "select", options: [{ id: "bypass" }] }];
+  });
+  try {
+    const base = ["--provider", "acpRegistry_devin", "--model", "swe-2-high", "--role", "implementation"];
+    fail([...base, "--options", '{"thought_level":"medium","mode":"bypass"}', ...f.base], "无选项 thought_level");
+    ok([...base, "--options", '{"thought_level":"medium","mode":"bypass"}', "--caps-file", CAPS_FILE]);
+  } finally { f.cleanup(); }
+});
+
 // ============ route-data 不变量 ============
 
 test("route-data: 首选入口（用户定 2026-11-04）：swe-2 只走 devin，opus 从 devin/droid 选，其余首选 pi", () => {
