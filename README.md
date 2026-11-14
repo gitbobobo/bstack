@@ -34,11 +34,11 @@ T3 Code 多 harness 编排：按固定规则选 harness 与模型，派活验收
 
 ### t3-patrol
 
-定时巡检各 T3 环境的未结线程，分诊取证、故障恢复、交接收尾，按独立的重型/通用任务池派活（巡检自身不占位）。[SKILL.md](skills/bstack/t3-patrol/SKILL.md)
+定时巡检各 T3 环境的未结线程，分诊取证、故障恢复、交接收尾，按独立的重型/通用任务池派活（巡检、探测及 Fast Ship 只读审查不占位）。[SKILL.md](skills/bstack/t3-patrol/SKILL.md)
 
 ### t3-dispatch
 
-从问题来源挑问题，按各设备空位在 T3 环境建工作树线程派活。[SKILL.md](skills/bstack/t3-dispatch/SKILL.md)
+按项目并行挑题、持久化未派候选并跨轮复核，主代理按设备共享池统一建工作树线程派活。[SKILL.md](skills/bstack/t3-dispatch/SKILL.md)
 
 ## 通用技能
 

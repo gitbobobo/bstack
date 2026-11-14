@@ -3,12 +3,14 @@
 // 取代「把全部候选导成文本逐段读」——那一步在首次接入新仓库时独占了一轮巡检的大半时间。
 //
 // 用法：node dispatch-plan.mjs --capacity <patrol-snapshot.mjs --capacity-only 的输出> [--per-slot 3] [--excerpt 200] [--detail 800]
-// 输出 { slots, repos: [{ repo, slots, devices, shortlist, excluded, more }], skipped }：
+// 输出 { slots, repos: [{ repo, slots, devices, reviewed, shortlist, excluded, poolMissing, more }], skipped }：
 //   slots       本轮最多还能派几个（perRun、perDay 余量与各仓库空位之和取小；perDay 为 0 不限）；为 0 时不列候选
 //   devices     该仓库有空位的设备（alias、environmentId、projectId、free）
 //   shortlist   粗排后的前 max(5, 空位×per-slot) 条：ref、id、title、labels、excerpt、category（粗分类）、
 //               rank（越小越优先）、needsInfo（正文像在等补信息）、priority（用户优先）、attempts
-//   excluded    已有未结线程或台账在派的问题（附依据）；more 是排在表外的候选数
+//   reviewed    与本轮准入列表匹配、版本与有效期未变的 ready 旧依据；源码、依赖与容量仍须发前复核
+//   poolMissing 池中存在但当前准入列表缺失的条目，待核原因，不自动删除
+//   excluded    已有未结线程或台账在派的问题（附依据）；more 是排在 shortlist 表外、未进入 reviewed 的候选数
 // --detail：表内每条再读一次详情，附 body（前 N 字）与 consensus（共识摘要），挑选时不必逐条 show；0 关闭。
 // 粗排只是排序提示：按标题与标签的关键词归类（崩溃/丢数据 → 门禁/构建/发版 → 安全 → 功能错误 → 性能 → 体验 → 重构），
 // 用户优先标签先于粗排；同类按「高 / 中 / 低」标记。挑选仍按 SKILL.md 第 2 步逐条判断。
@@ -22,6 +24,7 @@ import { loadEnvironments } from "../../t3-patrol/scripts/patrol-config.mjs";
 import { call, connect, hasSession, pool } from "../../t3-patrol/scripts/t3-mcp.mjs";
 
 import { labelPolicy } from "./dispatch-labels.mjs";
+import { cachedReview, readPool } from "./candidate-pool.mjs";
 
 const CATEGORIES = [
   ["无法使用/丢数据", /崩溃|闪退|无法启动|启动失败|白屏|卡死|丢失|误删|数据损坏|无法播放|crash|panic/i],
@@ -48,7 +51,7 @@ export function rankOf(c) {
 
 const refRe = (ref) => new RegExp(`(^|[^\\w-])${String(ref).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w])`, "i");
 
-export function buildPlan({ capacity, config, environments, ledger, listOf, perSlot = 3 }) {
+export function buildPlan({ capacity, config, environments, ledger, listOf, perSlot = 3, candidatePool = {}, now = Date.now() }) {
   const summary = ledgerSummary(ledger);
   // perDay 为 0 表示不设每日上限，并发只由各设备名额约束。
   const dayLeft = config.limits.perDay > 0 ? Math.max(0, config.limits.perDay - summary.launched) : Infinity;
@@ -79,17 +82,27 @@ export function buildPlan({ capacity, config, environments, ledger, listOf, perS
     if (!r.slots) continue;
     const listed = listOf(r.repo);
     const cands = [];
+    const saved = new Map((candidatePool[r.repo] ?? []).map((e) => [e.id, e]));
+    r.poolMissing = [...saved.values()].filter((e) => !listed.candidates.some((c) => c.id === e.id)).map(({ id, ref }) => ({ id, ref }));
     for (const c of listed.candidates) {
       const thread = openThreads.find((t) => refRe(c.ref).test(t.title ?? ""));
       if (thread) r.excluded.push({ ref: c.ref, title: c.title, reason: `已有未结线程「${thread.title}」`, link: thread.link });
       else if (activeIds.has(c.id)) r.excluded.push({ ref: c.ref, title: c.title, reason: "台账里已派出、线程未了结" });
       else if (labelPolicy(c.labels).deferred) r.excluded.push({ ref: c.ref, title: c.title, reason: "bstack:defer 暂缓自动派活" });
-      else cands.push({ ...c, ...rankOf(c), priority: labelPolicy(c.labels).priority });
+      else {
+        const entry = saved.get(c.id);
+        const review = entry ? cachedReview(entry, c, now) : null;
+        if (review && !r.devices.some((d) => entry.devices.includes(d.alias))) review.reuseEvidence = false;
+        cands.push({ ...c, ...rankOf(c), priority: labelPolicy(c.labels).priority, ...(review ? { cachedReview: review } : {}) });
+      }
     }
     cands.sort((a, b) => Number(b.priority) - Number(a.priority) || a.needsInfo - b.needsInfo || a.rank - b.rank || String(b.updatedAt).localeCompare(String(a.updatedAt)));
     const n = Math.max(5, r.slots * perSlot);
-    r.shortlist = cands.slice(0, n).map(({ id, ref, title, labels, excerpt, category, rank, needsInfo, priority, attempts }) => ({ id, ref, title, labels, excerpt, category, rank, needsInfo, priority, ...(attempts ? { attempts } : {}) }));
-    r.more = Math.max(0, cands.length - n);
+    // 旧依据单列，新候选仍按原优先级粗排；主代理合并裁决，缓存不等于可直接派出。
+    r.reviewed = cands.filter((c) => c.cachedReview?.reuseEvidence);
+    const unreviewed = cands.filter((c) => !c.cachedReview?.reuseEvidence);
+    r.shortlist = unreviewed.slice(0, n).map(({ id, ref, title, labels, excerpt, category, rank, needsInfo, priority, attempts, updatedAt, cachedReview }) => ({ id, ref, title, labels, excerpt, category, rank, needsInfo, priority, updatedAt, ...(attempts ? { attempts } : {}), ...(cachedReview ? { cachedReview } : {}) }));
+    r.more = Math.max(0, unreviewed.length - n);
     r.sourceSkipped = listed.skipped.length;
     r.labelConflicts = listed.skipped.filter((s) => s.conflict);
     r.deferred = listed.skipped.filter((s) => /bstack:defer/.test(s.reason ?? "")).length;
@@ -101,12 +114,13 @@ export function buildPlan({ capacity, config, environments, ledger, listOf, perS
 async function searchDupes(plan, capacity) {
   const envs = capacity.environments ?? [];
   for (const r of plan.repos) {
-    if (!r.shortlist.length) continue;
+    const candidates = [...(r.reviewed ?? []), ...r.shortlist];
+    if (!candidates.length) continue;
     const scopes = envs.flatMap((e) => {
       const p = (e.projects ?? []).find((x) => x.canonicalKey?.toLowerCase() === r.repo);
       return p && !e.error ? [{ environmentId: e.environmentId, projectId: p.id }] : [];
     });
-    const hits = await pool(r.shortlist, 4, async (c) => {
+    const hits = await pool(candidates, 4, async (c) => {
       for (const s of scopes) {
         const res = await call("t3_thread_search", { ...s, query: c.ref, limit: 5 }).catch(() => null);
         // 只认标题或用户消息（任务书）里的命中：代理在别的线程里顺口提到这个编号（如登记成后续）不算在做它。
@@ -115,12 +129,15 @@ async function searchDupes(plan, capacity) {
       }
       return null;
     });
-    const keep = [];
-    r.shortlist.forEach((c, i) => {
-      if (hits[i]) r.excluded.push({ ref: c.ref, title: c.title, reason: `搜到未结线程「${hits[i].title}」`, link: hits[i].link });
-      else keep.push(c);
+    const duplicates = new Set();
+    candidates.forEach((c, i) => {
+      if (hits[i]) {
+        duplicates.add(c.id);
+        r.excluded.push({ ref: c.ref, title: c.title, reason: `搜到未结线程「${hits[i].title}」`, link: hits[i].link });
+      }
     });
-    r.shortlist = keep;
+    r.shortlist = r.shortlist.filter((c) => !duplicates.has(c.id));
+    r.reviewed = (r.reviewed ?? []).filter((c) => !duplicates.has(c.id));
   }
 }
 
@@ -142,6 +159,10 @@ if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToP
     const detail = Number(opt("detail", 800));
     // 带详情时列表不再逐条取摘要（同一批详情会读两遍），needsInfo 改按详情正文判。
     const excerpt = detail > 0 ? 0 : Number(opt("excerpt", 200));
+    let candidatePool = {};
+    let poolWarning;
+    try { candidatePool = readPool().state.repos; }
+    catch (e) { poolWarning = `候选池读取失败，保留原文件，本轮按新候选筛选：${e.message}`; }
     const plan = buildPlan({
       capacity,
       config,
@@ -149,12 +170,14 @@ if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToP
       ledger: readLedger(),
       listOf: (repo) => run("list", { repo, excerpt }),
       perSlot: Number(opt("per-slot", 3)),
+      candidatePool,
     });
     if (plan.slots > 0 && detail > 0) {
       for (const r of plan.repos) {
         for (const c of r.shortlist) {
           try {
             const d = run("show", { repo: r.repo, id: c.id });
+            c.updatedAt = d.updatedAt;
             const body = String(d.body ?? "").trim();
             c.body = body.length > detail ? `${body.slice(0, detail)}…` : body;
             if (d.consensus) c.consensus = typeof d.consensus === "string" ? d.consensus.slice(0, detail) : JSON.stringify(d.consensus).slice(0, detail);
@@ -171,6 +194,7 @@ if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToP
       await connect("t3-dispatch-plan");
       await searchDupes(plan, capacity);
     } else if (plan.slots > 0) plan.warnings = ["没有 T3 MCP 会话，只按标题与台账查重；挑中的问题派出前按 SKILL.md 第 4 步手工搜一次"];
+    if (poolWarning) (plan.warnings ??= []).push(poolWarning);
     console.log(JSON.stringify(plan, null, 1));
   } catch (e) {
     console.error(e.message);

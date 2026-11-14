@@ -150,7 +150,7 @@ node <技能目录>/scripts/patrol-evidence.mjs --thread <threadId>@<environment
    - `~/.config/bstack/PAUSE` 存在；
    - 本轮模型阶梯已降到 `fallback` 档：额度紧张时只做恢复。
 2. 交接优先：重读 `patrol-state.mjs` 的 `pendingHandoffs`，合并本轮新增项，按 [待交接队列](references/handoff.md#待交接队列) 先用动作后空位重试。每个待交接项都有本轮结果后，才把剩余空位交给新问题；交接优先的阻挡范围按该文「派活隔离」落实到容量池。
-3. 按 t3-dispatch 技能执行，属于巡检调用：`dry-run` 走到它的第 2 步只出计划，`auto` 全程执行。它第 1 步的 `--capacity-only` 快照就是本轮动作之后的空位，整轮只跑这一次。派活模型按 [t3-dispatch「派活模型」](../t3-dispatch/SKILL.md#派活模型) 选择，传入本轮已核实的额度失败证据与可用档位；恢复、交接和新问题共用这些证据。
+3. 按 t3-dispatch 技能执行，属于巡检调用：`dry-run` 走到它的第 2 步只出计划，`auto` 全程执行。它第 1 步的 `--capacity-only` 快照就是本轮动作之后的空位，同一动作状态只取一次，后续 settle 改变占用才刷新。挑题按[项目挑选与跨轮候选池](../t3-dispatch/references/candidates.md)复用旧依据、并行补筛项目；本线程仍唯一负责交接优先级、共享池裁决、认领建线程及状态写入，逐线程巡检处置不下放。派活模型按 [t3-dispatch「派活模型」](../t3-dispatch/SKILL.md#派活模型) 选择，传入本轮已核实的额度失败证据与可用档位；恢复、交接和新问题共用这些证据。
 4. 本轮新派出的线程不再回到第 1–4 步判定，下一轮按候选正常巡检。
 
 **完成标准**：全部待交接项已逐条复核并记录仍阻塞、已建待接手或有证据销账；每个设备的重型/通用任务池都有派活结果，余位按 [t3-dispatch 第 2 步停止条件](../t3-dispatch/SKILL.md#2-挑选) 核对并报告覆盖范围与缺口；`auto` 下每条派活都有认领结果、线程 link 和回读结论，失败的已归还；`dry-run` 的计划已列出。
@@ -175,4 +175,4 @@ node <技能目录>/scripts/patrol-state.mjs commit --snapshot /tmp/t3-patrol-sn
 
 本轮出现过额度失败（无论是否已换档恢复）就带 `--quota-failure`。
 
-**完成标准**：命令输出了本轮的 `snapshotAt` 与档位；重读状态确认待交接队列与本轮新增、保留、销账结果一致。
+**完成标准**：命令输出了本轮的 `snapshotAt` 与档位；重读状态确认待交接队列与本轮新增、保留、销账结果一致。参与挑题的本轮结果已按 t3-dispatch 的候选池规则另行记账并回读，不能靠对话记忆续接；仅判定不派的轮次无需展开新候选。

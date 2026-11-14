@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { buildPlan, rankOf } from "./dispatch-plan.mjs";
+import { validateCandidate } from "./candidate-pool.mjs";
 import { validatePlan, launchConfigFor } from "./dispatch-launch.mjs";
 
 const MUS = "fj.frp.musiver.cn/fjbobo/musiver";
@@ -19,6 +20,13 @@ const env = (id, free, extra = {}) => ({
   ...extra,
 });
 const cand = (ref, title, extra = {}) => ({ id: `id-${ref}`, ref, title, labels: [], excerpt: "", updatedAt: "2026-11-01", ...extra });
+const NOW = Date.parse("2026-11-02T00:00:00Z");
+const saved = (c, extra = {}) => validateCandidate({
+  id: c.id, ref: c.ref, title: c.title, state: "ready", deferredBy: "capacity",
+  scope: "独立交付范围", reason: "仅缺空位", nextCheck: "确认来源、源码与设备分工未变",
+  issueUpdatedAt: c.updatedAt, checkedAt: new Date(NOW).toISOString(),
+  source: { head: "abc", paths: ["src"] }, devices: ["pc"], evidenceRefs: ["issue:1"], ...extra,
+});
 
 test("粗排：崩溃先于构建先于体验，同类按高中低；未分类居中", () => {
   assert.equal(rankOf(cand("A", "播放页崩溃")).category, "无法使用/丢数据");
@@ -79,6 +87,49 @@ test("perDay 余量封顶本轮可派数", () => {
   assert.equal(plan.slots, 1);
   const unlimited = buildPlan({ capacity: { environments: [env("e-pc", [4, 0])] }, config: { ...config, limits: { ...config.limits, perDay: 0 } }, environments, ledger, listOf: () => ({ candidates: [], skipped: [] }) });
   assert.equal(unlimited.slots, 4, "perDay 为 0 不限，只受名额与 perRun 约束");
+});
+
+test("旧候选依据单列，新高优先问题仍进入初筛；保留版本供跨轮复核", () => {
+  const old = cand("INT-1", "播放失败");
+  const urgent = cand("INT-2", "启动崩溃", { labels: ["bstack:priority"] });
+  const p = buildPlan({ capacity: { environments: [env("e-pc", [1, 0])] }, config, environments, ledger: [],
+    candidatePool: { [MUS]: [saved(old)] }, now: NOW,
+    listOf: () => ({ candidates: [old, urgent], skipped: [] }),
+  });
+  assert.equal(p.repos[0].reviewed[0].id, old.id);
+  assert.equal(p.repos[0].reviewed[0].cachedReview.reuseEvidence, true);
+  assert.deepEqual(p.repos[0].shortlist.map((c) => c.id), [urgent.id]);
+  assert.equal(p.repos[0].shortlist[0].updatedAt, urgent.updatedAt);
+  assert.equal(p.slots, 1, "缓存不增加容量");
+});
+
+test("变化、过期、阻塞、证据不足或设备不匹配的缓存回到初筛", () => {
+  const old = cand("INT-1", "播放失败");
+  for (const extra of [
+    { issueUpdatedAt: "2026-10-01" }, { checkedAt: "2026-10-01" },
+    { state: "blocked", deferredBy: "dependency" }, { state: "pending", deferredBy: "evidence" },
+    { devices: ["mini"] },
+  ]) {
+    const p = buildPlan({ capacity: { environments: [env("e-pc", [1, 0])] }, config, environments, ledger: [],
+      candidatePool: { [MUS]: [saved(old, extra)] }, now: NOW,
+      listOf: () => ({ candidates: [old], skipped: [] }),
+    });
+    assert.equal(p.repos[0].reviewed.length, 0);
+    assert.equal(p.repos[0].shortlist[0].cachedReview.reuseEvidence, false);
+  }
+});
+
+test("缓存不能绕过实时准入、未结线程、台账和暂缓标签", () => {
+  const cs = [1, 2, 3, 4, 5].map((i) => cand(`INT-${i}`, "播放失败"));
+  cs[2].labels = ["bstack:defer"];
+  const p = buildPlan({ capacity: { environments: [env("e-pc", [1, 0], { openThreads: [{ title: "INT-1 已在做" }] })] }, config, environments,
+    ledger: [{ event: "launched", at: new Date(NOW).toISOString(), repo: MUS, id: cs[1].id }],
+    candidatePool: { [MUS]: cs.map((c) => saved(c)) }, now: NOW,
+    listOf: () => ({ candidates: cs.slice(0, 4), skipped: [] }),
+  });
+  assert.deepEqual(p.repos[0].reviewed.map((c) => c.ref), ["INT-4"]);
+  assert.equal(p.repos[0].excluded.length, 3);
+  assert.deepEqual(p.repos[0].poolMissing, [{ id: cs[4].id, ref: "INT-5" }]);
 });
 
 test("计划校验", () => {
