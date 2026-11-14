@@ -1,0 +1,82 @@
+# 界面地图格式
+
+界面地图由 `config.json` 和 `screens/<id>.json` 组成，读写都用 `scripts/ui-map.mjs`。只有 `record` 和 `config` 不覆盖的字段才手改。
+
+## config.json
+
+```json
+{
+  "threshold": 9,
+  "batchSize": 3,
+  "platforms": [
+    "macos", "windows", "linux", "web", "harmony-pc",
+    "ios", "android-phone", "harmony-phone",
+    "ipados", "android-tablet", "harmony-tablet",
+    "tvos", "android-tv",
+    "watchos", "wearos", "harmony-watch"
+  ],
+  "themes": ["light", "dark", "transparent"],
+  "families": {
+    "desktop": ["macos", "windows", "linux", "web", "harmony-pc"],
+    "phone": ["ios", "android-phone", "harmony-phone"],
+    "tablet": ["ipados", "android-tablet", "harmony-tablet"],
+    "tv": ["tvos", "android-tv"],
+    "watch": ["watchos", "wearos", "harmony-watch"]
+  },
+  "registry": { "file": "path/to/pages.json", "list": "pages", "id": "id", "name": "name" }
+}
+```
+
+- `threshold`：达标分数，一格低于它就是「未达标」。用户的偏好，用户改口时运行 `ui-map.mjs config threshold <值>`。
+- `batchSize`：`next` 每批挑多少个界面，修改方式同上。
+- `platforms`：平台和形态维度，iPhone 和 iPad 这类形态不同的设备分开写。取仓库已有的平台命名。
+- `themes`：应用支持的全部主题。
+- `families`：平台族，把布局应当相近的平台归为一族，每个平台恰好属于一族。蓝图按族写布局，`next` 按族列出参照平台，`status` / `next` / `invalidate` 可用 `--family` 筛选。
+- `registry`：可选。仓库已有页面注册表（截图契约、路由表导出的 JSON）时填写，地图以它为页面来源，`check` 提示未登记的界面，`sync-registry` 补占位文件。`list` 是指向数组的点分路径，`id` 和 `name` 是数组元素里的字段名。
+
+## screens/&lt;id&gt;.json
+
+```json
+{
+  "id": "server-config",
+  "name": "服务器配置",
+  "priority": 1,
+  "blueprint": "server-flow",
+  "unsupported": { "tvos": "电视端不提供手动配置", "watchos": "手表端只能从手机同步服务器" },
+  "sources": {
+    "*": ["core/src/server/config"],
+    "android-phone": ["clients/kotlin/ui/server/ServerConfigurationScreen.kt"],
+    "ios": ["clients/swift/Features/Server/ServerConfigView.swift"]
+  },
+  "states": [
+    { "id": "default", "name": "空白表单" },
+    { "id": "error", "name": "必填校验失败" },
+    { "id": "quickconnect", "name": "QuickConnect 模式", "gaps": { "web": "截图工具缺少 QuickConnect 注入" } }
+  ],
+  "scores": [
+    { "platform": "android-phone", "theme": "light", "state": "default", "score": 8.4,
+      "commit": "<完整 SHA>", "date": "2026-11-14", "deductions": ["提交按钮与表单左边线不齐 -0.3"] }
+  ]
+}
+```
+
+- 文件名必须是 `<id>.json`。`id` 与注册表一致，没有注册表时取路由名或组件名。
+- `priority`：1 核心路径（首启、主页、播放这类每个用户都会看到的界面），2 常用，3 低频。`next` 同档时先挑数字小的。
+- `blueprint`：所属蓝图 `blueprints/<名字>.md`。一组界面共用一张蓝图，例如欢迎、服务器列表、服务器配置共用 `server-flow`。蓝图改动不会自动让分数过期，需要时用 `invalidate` 指定范围。
+- `platforms` / `themes`：可选，省略时取 `config.json` 的全集。只在界面真的少于全集时填写。
+- `unsupported`：界面在某个平台上不存在，写明原因。
+- `sources`：判断评分是否过期的依据。`*` 是各平台共用的路径（共享组件、主题 token、核心层视图模型），其余按平台写。写文件或目录，目录覆盖其下全部文件。宁可多写共享样式目录，也要让改动这个界面的提交命中它。
+- `states`：界面所有可见状态，至少有 `default`。`gaps` 记录某平台暂时截不到这个状态的原因；补好截图入口后删掉对应条目。
+- `scores`：每个 平台 × 主题 × 状态 一格，只保留最后一次。由 `record` 写入，`commit` 是评分时的 HEAD，`deductions` 是评审员给的主要扣分点。`invalidated` 由 `invalidate` 写入，记录被标为过期的原因和日期；重新 `record` 这一格时清除。
+
+## 格子状态
+
+| 状态 | 含义 | `next` 顺序 |
+|---|---|---|
+| `unscored` | 从没评过分 | 1 |
+| `gap` | 截不到这个状态 | 1，先补截图入口 |
+| `low` | 分数低于阈值 | 2 |
+| `stale` | 评分提交之后 `sources` 有改动（含未提交改动），或被 `invalidate` 标记 | 3 |
+| `ok` | 达标且未过期 | 不挑 |
+
+一个界面按它最差的格子归档，同档再按 `priority`、最低分排序。

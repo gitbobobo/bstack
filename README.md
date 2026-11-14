@@ -54,6 +54,10 @@ git 操作偏好：可审计提交、rebase 同步远程，以及按用户要求
 
 PR 收尾：整合目标分支、合并、分流遗留，再关闭关联问题并回收工作树与分支。[SKILL.md](skills/general/pr-finish/SKILL.md)
 
+### create-ui-polish-skill
+
+为仓库生成界面打磨专用技能：完整界面地图、按平台族划分的布局蓝图、截图工具与固定批量的评分循环。仅限用户主动调用。[SKILL.md](skills/general/create-ui-polish-skill/SKILL.md)
+
 ## 服务技能
 
 ### fast-ship
