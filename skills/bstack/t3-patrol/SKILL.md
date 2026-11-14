@@ -25,7 +25,8 @@ description: 代表用户巡检、定案各 T3 环境未结线程。仅定时任
 - 人工验收可按既有巡检授权由审查与自动化证据替代；报告明确写「按巡检授权豁免人工/实体设备验收」及替代证据，实体设备未测仍记未测。其他次数、截图、台账、PR 等硬条件逐条核对。
 - 技术决策由实现线程负责，依据原任务与方向顾问意见，优先长期更干净、职责清楚且有验证证据的方案。巡检只引用账本位置、请求咨询或执行。只剩非 blocker 时按 [技术收敛](references/convergence.md)「预算收口」推它收尾；仍有 blocker 的复审失败、预算耗尽或顾问分歧转入那里的根因处理。这些现象本身不构成用户决策。
 - 巡检产出限于消息、监听、命名、交接和线程状态。排障与资源检查是目标线程的活：巡检取证到「能判定动作」为止，查明故障原因、量磁盘与负载、回收空间都交给目标线程自己做。例外：第 5 步按 t3-dispatch 的档位派活。技能与任务提示词只读，规则缺口写入建议。用户另行授权的维护按指定对象实施，用只读查询及差异验证结果。
-- 工具输出仅保留判定字段；凭据在进程内读取使用，输出认证结果，不打印配置全文或把密钥写进命令文本。写请求保留真实退出码；非 ASCII 请求体先写 UTF-8 无 BOM 文件再引用。
+- **数据驱动**：筛选与回读使用现有脚本的文件输入；动作、候选补丁和报告直接写 JSON/Markdown。入口与文件格式见 [补读](references/snapshot.md#补读)，候选格式见 [持久化未派项](../t3-dispatch/references/candidates.md#3-持久化未派项)。入口确有缺口时按取证预算用 MCP 补所需事实，在建议中记录缺口。
+- 工具输出仅保留判定字段；凭据在进程内读取使用，输出认证结果，不打印配置全文或把密钥写进命令文本。依赖命令分次运行或用 `&&` 串联，前项失败即停，保留真实退出码与已生效结果；非 ASCII 请求体先写 UTF-8 无 BOM 文件再引用。
 
 ## 1. 快照与分诊
 
@@ -50,10 +51,10 @@ node <技能目录>/scripts/patrol-snapshot.mjs --self <thread.threadId> --brief
 先用快照已有的字段判；判不了的，把本轮所有要补读的线程与 PR 合成**一条**命令：
 
 ```bash
-node <技能目录>/scripts/patrol-evidence.mjs --thread <threadId>@<environmentId> ... --pr <owner/repo#N>@<PR URL> ... > /tmp/t3-patrol-evidence.json
+node <技能目录>/scripts/patrol-evidence.mjs --from /tmp/t3-patrol-snapshot.json --select hot --pr <owner/repo#N>@<PR URL> ... > /tmp/t3-patrol-evidence.json
 ```
 
-线程给原任务全文、最近 run（含 `runId`）与尾部活动；PR 给描述、最近一次 review 正文与行内意见、最近评论。用法见脚本头注释。
+快照已有足够依据时，用重复的 `--thread <threadId>@<environmentId>` 只补判不了的线程；`--from ... --select hot` 用于整批有事线程都需补读时。线程给原任务全文、最近 run（含 `runId`）与尾部活动；PR 给描述、最近一次 review 正文与行内意见、最近评论。文件输入与空集处理见 [补读](references/snapshot.md#补读)。
 
 - **PR 事实以快照 `prHealth` 为准**：`head`/`headAt` 是当前 HEAD，`headReview` 是这个 HEAD 上的最新 review，`checks` 是这个 HEAD 上各检查的最新状态（审查服务常把结论写成检查，如「代码审查 success / pending」）。据此判：
   - **审查在途**：HEAD 上有 `pending` 的审查类检查，或 `headAt` 之后还没有任何结论且未超 `thresholds.reviewWaitMinutes`。监听在位、线程自述「复审中」不构成在途。
@@ -126,7 +127,7 @@ node <技能目录>/scripts/patrol-evidence.mjs --thread <threadId>@<environment
 1. **发送前刷新**：目标线程在快照之后又有新 run 或新消息时（`patrol-evidence` 可见），按新状态重判，跳过过时提醒。
 2. **幂等**：比较本次拟动作与该线程里上一条 `【巡检】` 消息及之后的进展。相同请求且无新事实不重发，但持续超时仍须判定并报告：无新增进展本身不能销账。未启动查恢复，已接收却未执行查具体执行缺口，方案已被反例证伪走技术收敛。刚发请求不满 `thresholds.resendCooldownMinutes` 且无失败证据，记等待执行。
 3. 发前核档，按 recovery 处理不可用模型；发 `【巡检】` 前缀消息，带目标 environmentId、mode:auto。本轮的消息、改名、settle、interrupt 写成一个 calls 文件，用 `node <技能目录>/scripts/patrol-batch.mjs --calls <文件>` 一次执行。文件是 UTF-8 JSON 数组，每项 `{"label":"M10 #28","tool":"t3_thread_send","args":{"environmentId":"…","threadId":"…","mode":"auto","message":"【巡检】…"}}`；改名用 `t3_thread_update`（`action:"rename"`、`title`），settle 用 `t3_thread_organize`（`action:"settle"`），回读用 `t3_thread_read`（`limit:1`）。保存 messageId、runId、delivery 和预期可观察结果。
-4. 全部发完后，用一条 `patrol-evidence` 批量回读（`--after` 取消息所在 position，或看 `recentRuns` 里对应 `runId`）。starting/queued 尚未启动时可再等一次，每次不超过 60 秒，累计约 2 分钟；仍排队记未启动及卡点。不要用不相关的最新 run 替代对应 run。
+4. 全部发完后，用一条 `patrol-evidence --from <patrol-batch 结果.json>` 批量回读（`--after` 取消息所在 position，或看 `recentRuns` 里对应 `runId`）。starting/queued 尚未启动时可再等一次，每次不超过 60 秒，累计约 2 分钟；仍排队记未启动及卡点。不要用不相关的最新 run 替代对应 run。
 5. run failed 按 recovery 归因后当轮补救一次，再验证；再次失败记录阻塞与恢复条件。已 running/completed 仅证实启动/结束，读到预期动作证据才能写执行。completed 却又在提问时重新判分支，不写任务完成。
 
 | 报告用语 | 必需证据 |

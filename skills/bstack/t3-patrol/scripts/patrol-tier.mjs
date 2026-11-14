@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 // 巡检失败恢复：按快照里的 modelLadder 批量换档、发送 M4、等待后回读 run。
-// 用法：node patrol-tier.mjs --snapshot /tmp/t3-patrol-snapshot.json --to fallback [--dry-run] [--skip <id|link|title>]
+// 用法：node patrol-tier.mjs --snapshot /tmp/t3-patrol-snapshot.json --to fallback [--evidence <取证.json>] [--dry-run] [--skip <id|link|title>]
 // 依赖 T3 注入的 MCP 会话（与 patrol-snapshot.mjs 相同）。
 
 import { readFileSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
+import { threadInputs } from "./patrol-evidence.mjs";
 
 const args = process.argv.slice(2);
 const opt = (name, dflt) => {
@@ -14,10 +15,11 @@ const opt = (name, dflt) => {
 const has = (name) => args.includes(`--${name}`);
 const SNAPSHOT = opt("snapshot", "/tmp/t3-patrol-snapshot.json");
 const TO = opt("to", "fallback");
+const EVIDENCE = opt("evidence", null);
 const DRY_RUN = has("dry-run");
 const INCLUDE_CANCELLED = has("include-cancelled");
 const SKIP = new Set(args.flatMap((x, i) => (x === "--skip" && args[i + 1] ? args[i + 1].split(",") : [])).map((x) => x.trim()).filter(Boolean));
-const DELAY_MS = Number(opt("delay-ms", 120000));
+const DELAY_MS = Number(opt("delay-ms", 0));
 
 // T3 把 MCP 会话注入 harness 进程环境：ACP 类（droid、devin）给 T3_ACP_MCP_*（authorization 已带 Bearer 前缀），
 // pi 给 T3_MCP_URL / T3_MCP_BEARER_TOKEN（裸 token）。Codex 的会话只写进自身 MCP 配置，shell 里拿不到，缺席时退出码 2。
@@ -71,21 +73,30 @@ function tierOf(ladder, to) {
 }
 
 function recoveryPoint(t) {
-  const pr = (t.prs ?? []).map((x) => String(x).match(/#(\d+)/)?.[1]).find(Boolean);
+  const pr = (t.prs ?? t.pullRequests ?? []).map((x) => String(x).match(/(?:#|\/pulls?\/|^)(\d+)(?=\D|$)/)?.[1]).find(Boolean);
   if (pr) return `处理 PR #${pr} 的最新状态`;
   const task = clip(t.task || t.title, 36);
-  return task ? `继续：${task}` : "继续你被中断的工作";
+  return task || "你被中断的工作";
 }
 
 async function main() {
+  if (has("evidence") && (!EVIDENCE || EVIDENCE.startsWith("--"))) throw new Error("--evidence 缺少文件路径");
   const snap = JSON.parse(readFileSync(SNAPSHOT, "utf8"));
   const ladder = snap.modelLadder ?? [];
   const tier = tierOf(ladder, TO);
   if (!tier) throw new Error(`找不到目标档位：${TO}`);
   const jobs = [];
   const skipped = [];
-  for (const env of snap.environments ?? []) {
+  const unresolved = [];
+  const sources = EVIDENCE
+    ? [{ failedThreads: threadInputs(JSON.parse(readFileSync(EVIDENCE, "utf8")), "failed") }]
+    : snap.environments ?? [];
+  for (const env of sources) {
     for (const t of env.failedThreads ?? []) {
+      if (t.error) {
+        unresolved.push({ environmentId: t.environmentId ?? env.environmentId, threadId: t.id, error: t.error });
+        continue;
+      }
       if (!["failed", "interrupted", "cancelled"].includes(t.status)) continue;
       const job = { environmentId: env.environmentId, label: env.label, ...t };
       if (SKIP.has(t.id) || SKIP.has(t.link) || SKIP.has(t.title)) {
@@ -100,8 +111,9 @@ async function main() {
     }
   }
   const plan = jobs.map((t) => ({ environmentId: t.environmentId, threadId: t.id, title: t.title, status: t.status, from: t.model, to: `${tier.instanceId}/${tier.model}` }));
-  if (DRY_RUN) {
-    console.log(JSON.stringify({ to: tier.name ?? `${tier.instanceId}/${tier.model}`, count: plan.length, skipped: skipped.map((t) => ({ threadId: t.id, title: t.title, status: t.status, reason: t.reason ?? "skip" })), plan }, null, 2));
+  if (DRY_RUN || !jobs.length) {
+    console.log(JSON.stringify({ to: tier.name ?? `${tier.instanceId}/${tier.model}`, count: plan.length, skipped: skipped.map((t) => ({ threadId: t.id, title: t.title, status: t.status, reason: t.reason ?? "skip" })), unresolved, ...(DRY_RUN ? { plan } : { sent: [], errors: [] }) }, null, 2));
+    if (unresolved.length) process.exitCode = 1;
     return;
   }
   if (!URL_ || !AUTH) {
@@ -111,25 +123,40 @@ async function main() {
 
   await rpc("initialize", { protocolVersion: "2025-03-26", capabilities: {}, clientInfo: { name: "t3-patrol", version: "1" } });
   const sent = [];
+  const errors = [];
   for (const t of jobs) {
-    const modelSelection = { instanceId: tier.instanceId, model: tier.model, options: tier.options };
-    await call("t3_thread_configure", { environmentId: t.environmentId, threadId: t.id, modelSelection });
-    const message = `【巡检】已切换模型到 ${tier.name ?? `${tier.instanceId}/${tier.model}`}，继续：${recoveryPoint(t)}`;
-    const r = await call("t3_thread_send", { environmentId: t.environmentId, threadId: t.id, message, mode: "auto" });
-    sent.push({ environmentId: t.environmentId, threadId: t.id, title: t.title, runId: r.runId, status: r.status, delivery: r.delivery });
+    const scope = { ...(t.environmentId ? { environmentId: t.environmentId } : {}), threadId: t.id };
+    let stage = "refresh";
+    try {
+      const before = await call("t3_thread_read", { ...scope, limit: 1, maxCharsPerItem: 10 });
+      if (before.thread.activeRunId || !["failed", "interrupted", ...(INCLUDE_CANCELLED ? ["cancelled"] : [])].includes(before.thread.status)) {
+        skipped.push({ ...scope, reason: "状态已变化，保留并重新判定", status: before.thread.status });
+        continue;
+      }
+      stage = "configure";
+      const modelSelection = { instanceId: tier.instanceId, model: tier.model, options: tier.options };
+      await call("t3_thread_configure", { ...scope, modelSelection });
+      stage = "send";
+      const message = `【巡检】已切换模型到 ${tier.name ?? `${tier.instanceId}/${tier.model}`}，继续：${recoveryPoint(t)}`;
+      const r = await call("t3_thread_send", { ...scope, message, mode: "auto" });
+      sent.push({ ...scope, title: t.title, runId: r.runId, status: r.status, delivery: r.delivery });
+    } catch (e) {
+      errors.push({ ...scope, stage, configured: stage === "send", error: String(e.message ?? e) });
+    }
   }
 
   if (DELAY_MS > 0 && sent.length) await sleep(DELAY_MS);
   for (const t of sent) {
     try {
-      const r = await call("t3_thread_read", { environmentId: t.environmentId, threadId: t.threadId, limit: 1, maxCharsPerItem: 10 });
-      const latest = (r.recentRuns ?? []).find((x) => x.runId === t.runId) ?? r.recentRuns?.[0];
+      const r = await call("t3_thread_read", { ...(t.environmentId ? { environmentId: t.environmentId } : {}), threadId: t.threadId, limit: 1, maxCharsPerItem: 10 });
+      const latest = (r.recentRuns ?? []).find((x) => x.runId === t.runId);
       t.verify = latest ? `${latest.status}@${latest.completedAt ?? latest.startedAt ?? latest.requestedAt}` : "no-run";
     } catch (e) {
       t.verify = `read-failed:${e.message}`;
     }
   }
-  console.log(JSON.stringify({ to: tier.name ?? `${tier.instanceId}/${tier.model}`, count: sent.length, sent }, null, 2));
+  console.log(JSON.stringify({ to: tier.name ?? `${tier.instanceId}/${tier.model}`, count: sent.length, skipped, sent, errors, unresolved }, null, 2));
+  if (errors.length || unresolved.length) process.exitCode = 1;
 }
 
 if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) {

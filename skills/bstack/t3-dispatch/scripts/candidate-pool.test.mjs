@@ -63,6 +63,25 @@ test("池损坏不静默覆盖；必需依据与状态一致性校验", (t) => {
   assert.doesNotThrow(() => validateCandidate(entry("a", { state: "pending", deferredBy: "evidence", issueUpdatedAt: null })));
 });
 
+test("未知源码显式为 null，仅未就绪条目可落盘和离线预检", (t) => {
+  const env = fixture(t);
+  const pending = entry("unknown", { state: "pending", deferredBy: "evidence", source: null, nextCheck: "定位实现路径并核最新目标 HEAD" });
+  const blocked = entry("blocked", { state: "blocked", deferredBy: "dependency", source: null });
+  assert.throws(() => validateCandidate(entry("bad", { source: null })), /ready 须带/);
+  const patch = { upsert: [pending, blocked], remove: [] };
+  const file = join(env.BSTACK_CONFIG_DIR, "suggestions.json");
+  writeFileSync(file, JSON.stringify(patch));
+  const script = new URL("./candidate-pool.mjs", import.meta.url).pathname;
+  const call = () => spawnSync(process.execPath, [script, "validate", "--file", file], { env, encoding: "utf8" });
+  assert.equal(call().status, 0);
+  assert.equal(existsSync(poolPath(env)), false, "预检不创建共享池");
+  const saved = applyPatch({ repo: REPO, env, patch: { ...patch, revision: readPool(env).revision } });
+  assert.equal(saved.state.repos[REPO][0].source, null);
+  assert.equal(cachedReview(pending, { updatedAt: pending.issueUpdatedAt }, NOW).reuseEvidence, false);
+  writeFileSync(file, JSON.stringify({ upsert: [entry("bad", { source: null })], remove: [] }));
+  assert.equal(call().status, 1);
+});
+
 test("问题变化、未知版本、过期或未来核查不可跳过全文筛选；就绪仍待源码复核", () => {
   const issue = { updatedAt: entry().issueUpdatedAt };
   assert.equal(cachedReview(entry(), issue, NOW).reuseEvidence, true);
@@ -126,6 +145,11 @@ console.log(JSON.stringify({code:0,data}));`);
   assert.equal(result.status, 0, result.stderr);
   assert.equal(JSON.parse(result.stdout).repos[0].reviewed.length, 0);
   assert.ok(readFileSync(trace, "utf8").includes('/api/issues/a'), "版本变化后恢复详情读取");
+  applyPatch({ repo: REPO, env: base, patch: { revision: readPool(base).revision, upsert: [entry("a", { state: "pending", deferredBy: "evidence", source: null })], remove: [] } });
+  result = call();
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).repos[0].shortlist.find((c) => c.id === "a").cachedReview.entry.source, null);
+  assert.equal(JSON.parse(result.stdout).repos[0].reviewed.length, 0, "未知源码不能提升为复用就绪项");
   writeFileSync(poolPath(base), "broken");
   result = call();
   assert.equal(result.status, 0, result.stderr);

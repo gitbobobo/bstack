@@ -53,15 +53,16 @@ async function runCalls(file) {
   if (!Array.isArray(list)) throw new Error("calls 文件须是数组");
   const out = [];
   for (const [i, c] of list.entries()) {
-    const label = c.label ?? `#${i}`;
-    if (typeof c.tool !== "string" || typeof c.args !== "object") {
+    const label = c?.label ?? `#${i}`;
+    if (!c || typeof c.tool !== "string" || !c.args || typeof c.args !== "object" || Array.isArray(c.args)) {
       out.push({ label, ok: false, error: "缺 tool 或 args" });
       continue;
     }
+    const scope = c.args.threadId ? { threadId: c.args.threadId, environmentId: c.args.environmentId } : {};
     try {
-      out.push({ label, tool: c.tool, ok: true, result: brief(await call(c.tool, c.args)) });
+      out.push({ label, tool: c.tool, ...scope, ok: true, result: brief(await call(c.tool, c.args)) });
     } catch (e) {
-      out.push({ label, tool: c.tool, ok: false, error: String(e.message ?? e) });
+      out.push({ label, tool: c.tool, ...scope, ok: false, error: String(e.message ?? e) });
     }
   }
   return out;

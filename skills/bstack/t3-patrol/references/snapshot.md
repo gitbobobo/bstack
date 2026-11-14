@@ -42,6 +42,17 @@
 
 `patrol-evidence.mjs` 一条命令取多条线程与 PR，字段见脚本头注释。线程读的是 activity 视图（略去 reasoning），尾部条数用 `--items`，读某条消息之后的活动用 `--after <position>`。
 
+**文件输入**：`--from <JSON>` 可重复，与 `--thread`、`--pr` 合并；按 environmentId＋threadId 去重。接受完整快照、`patrol-evidence` 输出、`issue-source ledger` 输出及本版 `patrol-batch` 输出（合并 watch/calls 的目标 threadId/environmentId，无需从 label 反推）；brief 摘要会报错，改用原始完整快照。`--select all` 为默认；`hot` 取快照有事候选，`failed` 取输入中已标 failed/interrupted/cancelled 或带 error 待核的条目，仅用于取证选集，不代表授权恢复。
+
+```bash
+# 台账没有实时状态：先回读，再从结果判定失败，沿用恢复分支
+node <技能目录>/scripts/patrol-evidence.mjs --from <台账.json> > /tmp/patrol-ledger-evidence.json
+# 动作后只回读动作涉及的线程
+node <技能目录>/scripts/patrol-evidence.mjs --from <batch结果.json> > /tmp/patrol-action-evidence.json
+```
+
+快照之后发现的新失败直接将取证结果交给 [故障恢复](recovery.md#模型优先级) 的 `--evidence`，本轮原快照保持不变。空选集返回空数组并成功退出；条目取证失败保留其 `error`，退出码非零，按已成功结果继续判定并报告缺口。结果可直接阅读；判定、动作文件和汇报按主流程产出，不另写转换程序。
+
 ## 核不到 PR 实况
 
 `prs` 标 `(health-unavailable)` 表示 gh 与 Forgejo 两条通道都失败。这时不判「不打扰」：在脚本内部用 `git credential fill` 获取宿主凭据，仅输出认证成功与否，再按 Forgejo API（`GET /api/v1/repos/{owner}/{repo}/pulls/{n}`、`/reviews`、`/issues/{n}/comments`、`/commits/{sha}/statuses`）手工核一次；仍核不到就写进「阻塞」，带 PR URL、报错与恢复条件。

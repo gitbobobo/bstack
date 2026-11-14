@@ -5,6 +5,7 @@
 // 用法：
 //   node patrol-evidence.mjs --thread <threadId>[@<environmentId>] ... [--items 30] [--chars 1500] [--after <position>] [--queue]
 //   node patrol-evidence.mjs --pr <owner/repo#N>[@<PR URL>] ...
+//   node patrol-evidence.mjs --from <快照|取证|台账|batch结果.json> [--select all|hot|failed]
 // 两种可以混用、各自重复。本机线程省略 @environmentId。
 // 线程输出：thread（状态、工作树、分支、活跃 run、待答请求）、recentRuns（含 runId，用于发后回读对应 run）、
 //   task（首条用户消息原文）、activity（尾部条目，略去 reasoning；--after 从指定 position 往后读，用于读某条消息之后的活动）。
@@ -12,7 +13,7 @@
 //   供故障恢复「队列恢复」逐条判定；取消仍由巡检用 t3_queue 逐项执行。
 // PR 输出：快照里的判定字段，加 detail（PR 描述、最近一次 review 正文与行内意见、最近评论）。
 
-import { realpathSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { loadConfig } from "./patrol-config.mjs";
 import { call, connect, hasSession, NO_SESSION, pool } from "./t3-mcp.mjs";
@@ -23,17 +24,55 @@ const clip = (s, n) => {
   return t.length > n ? `${t.slice(0, n)}…[截断，共 ${t.length} 字]` : t;
 };
 
-function parseArgs(argv) {
-  const out = { threads: [], prs: [], items: 30, chars: 1500, after: null, queue: false };
+// 输入只携带定位与已观察状态；选择不等于授权，恢复前仍须重判。
+export function threadInputs(data, select = "all") {
+  if (!["all", "hot", "failed"].includes(select)) throw new Error("select 须为 all / hot / failed");
+  let rows;
+  if (Array.isArray(data.environments)) {
+    if (data.environments.some((e) => !Array.isArray(e.candidates) && ("hot" in e || "quiet" in e))) throw new Error("brief 摘要不含完整线程定位，请使用原始 patrol-snapshot.json");
+    rows = data.environments.flatMap((e) => [
+      ...(e.candidates ?? []).map((t) => ({ ...t, environmentId: e.environmentId })),
+      ...(e.failedThreads ?? []).map((t) => ({ ...t, environmentId: e.environmentId })),
+    ]);
+  } else if (Array.isArray(data.threads)) {
+    rows = data.threads.map((t) => ({ ...t, ...t.thread, id: t.threadId }));
+  } else if (Array.isArray(data.active)) rows = data.active;
+  else if (Array.isArray(data.calls) || Array.isArray(data.watch)) {
+    rows = [...(data.watch ?? []), ...(data.calls ?? [])].filter((c) => c.threadId).map((c) => ({ ...c.result, threadId: c.threadId, environmentId: c.environmentId }));
+  } else throw new Error("输入须为快照、取证、台账或含线程定位的 batch 结果");
+  const unique = new Map();
+  for (const t of rows) {
+    const id = t.threadId ?? t.id;
+    if (typeof id !== "string" || !id || (t.environmentId != null && (typeof t.environmentId !== "string" || !t.environmentId))) throw new Error("输入条目缺有效 threadId/environmentId");
+    if (select === "hot" && t.triage !== "hot") continue;
+    if (select === "failed" && !t.error && !["failed", "interrupted", "cancelled"].includes(t.status)) continue;
+    const key = JSON.stringify([t.environmentId ?? null, id]);
+    unique.set(key, { ...t, id, threadId: id });
+  }
+  return [...unique.values()];
+}
+
+export function parseArgs(argv) {
+  const out = { threads: [], prs: [], from: [], select: "all", items: 30, chars: 1500, after: null, queue: false };
   for (let i = 0; i < argv.length; i++) {
     const [k, v] = [argv[i], argv[i + 1]];
-    if (k === "--thread") out.threads.push(v), i++;
+    if (["--thread", "--pr", "--from", "--select", "--items", "--chars", "--after"].includes(k) && (!v || v.startsWith("--"))) throw new Error(`${k} 缺少值`);
+    if (k === "--from") out.from.push(v), i++;
+    else if (k === "--select") out.select = v, i++;
+    else if (k === "--thread") out.threads.push(v), i++;
     else if (k === "--pr") out.prs.push(v), i++;
     else if (k === "--items") (out.items = Number(v)), i++;
     else if (k === "--chars") (out.chars = Number(v)), i++;
     else if (k === "--after") (out.after = Number(v)), i++;
     else if (k === "--queue") out.queue = true;
+    else throw new Error(`未知参数：${k}`);
   }
+  for (const file of out.from) {
+    for (const t of threadInputs(JSON.parse(readFileSync(file, "utf8")), out.select)) out.threads.push(`${t.id}${t.environmentId ? `@${t.environmentId}` : ""}`);
+  }
+  out.threads = [...new Set(out.threads)];
+  if (!["all", "hot", "failed"].includes(out.select)) throw new Error("select 须为 all / hot / failed");
+  if (![out.items, out.chars].every((n) => Number.isInteger(n) && n > 0) || (out.after != null && (!Number.isInteger(out.after) || out.after < 0))) throw new Error("items/chars 须为正整数，after 须为非负整数");
   return out;
 }
 
@@ -119,8 +158,8 @@ async function prEvidence(spec, { chars }) {
 
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
-  if (!opts.threads.length && !opts.prs.length) {
-    console.error("用法：node patrol-evidence.mjs --thread <threadId>[@<environmentId>] ... --pr <owner/repo#N>[@<PR URL>] ...");
+  if (!opts.threads.length && !opts.prs.length && !opts.from.length) {
+    console.error("用法：node patrol-evidence.mjs [--from <JSON> --select all|hot|failed] [--thread <threadId>[@<environmentId>]] [--pr <owner/repo#N>[@<PR URL>]] ...");
     process.exit(2);
   }
   configurePr({ convergenceAudit: loadConfig().config.convergenceAudit });
@@ -135,6 +174,7 @@ async function main() {
   }
   out.prs = await pool(opts.prs, 3, (s) => prEvidence(s, opts));
   console.log(JSON.stringify(out, null, 1));
+  if ([...out.threads, ...out.prs].some((r) => r.error)) process.exitCode = 1;
 }
 
 if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) {

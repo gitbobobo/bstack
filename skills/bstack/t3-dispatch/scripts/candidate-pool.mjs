@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // 跨轮候选依据，不是认领台账。主代理单写；项目子代理只产出独立补丁文件。
-// list [--repo <key>]：只读；apply --repo <key> --file <patch.json>：带版本校验的原子更新。
+// list [--repo <key>]：只读；validate --file <patch.json>：离线预检（revision 可省）；apply --repo <key> --file <patch.json>：带版本校验的原子更新。
 // patch: { revision: <list 返回的 revision>, upsert: [...], remove: [id...] }
 // 每仓库最多 12 条；核查超过 7 天需重核。过期不自动删除，避免丢失阻塞与待核断点。
 import { createHash } from "node:crypto";
@@ -31,7 +31,9 @@ export function validateCandidate(e) {
   if (!date(e.checkedAt)) throw new Error("checkedAt 须为日期");
   if (e.issueUpdatedAt !== null && !date(e.issueUpdatedAt)) throw new Error("issueUpdatedAt 须为日期或 null（未知时强制重核）");
   for (const k of ["devices", "evidenceRefs"]) if (!Array.isArray(e[k]) || !e[k].length || !e[k].every(text)) throw new Error(`${k} 须为非空字符串数组`);
-  if (!object(e.source) || !text(e.source.head) || !Array.isArray(e.source.paths) || !e.source.paths.length || !e.source.paths.every(text)) throw new Error("source 须带 head 与相关 paths");
+  if (e.source === null) {
+    if (e.state === "ready") throw new Error("ready 须带已核源码依据；source 未知时保留 pending 或 blocked，并在 nextCheck 写补证查询");
+  } else if (!object(e.source) || !text(e.source.head) || !Array.isArray(e.source.paths) || !e.source.paths.length || !e.source.paths.every(text)) throw new Error("source 须带 head 与相关 paths；未核源码用 null");
   return e;
 }
 
@@ -61,15 +63,21 @@ export function cachedReview(entry, issue, now = Date.now()) {
   return { entry, issueUnchanged, expired, reuseEvidence: entry.state === "ready" && issueUnchanged && !expired };
 }
 
-export function applyPatch({ repo, patch, env = process.env }) {
-  repo = repoKey(repo);
-  if (!object(patch) || !text(patch.revision) || !Array.isArray(patch.upsert) || !Array.isArray(patch.remove) || !patch.remove.every(text)) throw new Error("补丁须带 revision、upsert 数组及 remove ID 数组");
+export function validatePatch(patch, { requireRevision = true } = {}) {
+  if (!object(patch) || (requireRevision && !text(patch.revision)) || !Array.isArray(patch.upsert) || !Array.isArray(patch.remove) || !patch.remove.every(text)) throw new Error("补丁须带 revision（apply 时）、upsert 数组及 remove ID 数组");
   const ids = new Set(patch.remove);
   for (const e of patch.upsert) {
     validateCandidate(e);
     if (ids.has(e.id)) throw new Error(`补丁重复或冲突 ID：${e.id}`);
     ids.add(e.id);
   }
+  if (new Set(patch.remove).size !== patch.remove.length) throw new Error("remove 含重复 ID");
+  return patch;
+}
+
+export function applyPatch({ repo, patch, env = process.env }) {
+  repo = repoKey(repo);
+  validatePatch(patch);
   const file = poolPath(env);
   mkdirSync(dirname(file), { recursive: true });
   const lock = `${file}.lock`;
@@ -110,9 +118,12 @@ if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToP
     if (cmd === "list") {
       result = readPool();
       if (opts.repo) { const repo = repoKey(opts.repo); result.state.repos = { [repo]: result.state.repos[repo] ?? [] }; }
+    } else if (cmd === "validate" && opts.file) {
+      const patch = validatePatch(JSON.parse(readFileSync(opts.file, "utf8")), { requireRevision: false });
+      result = { valid: true, upsert: patch.upsert.length, remove: patch.remove.length };
     } else if (cmd === "apply" && opts.repo && opts.file) {
       result = applyPatch({ repo: opts.repo, patch: JSON.parse(readFileSync(opts.file, "utf8")) });
-    } else throw new Error("用法：candidate-pool.mjs list [--repo <key>] | apply --repo <key> --file <patch.json>");
+    } else throw new Error("用法：candidate-pool.mjs list [--repo <key>] | validate --file <patch.json> | apply --repo <key> --file <patch.json>");
     console.log(JSON.stringify({ file: poolPath(), maxPerRepo: MAX_PER_REPO, maxAgeHours: MAX_AGE_MS / 3600000, ...result }, null, 1));
   } catch (e) { console.error(e.message); process.exitCode = 1; }
 }
