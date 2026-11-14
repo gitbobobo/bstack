@@ -13,7 +13,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfig, loadEnvironments } from "./patrol-config.mjs";
-import { capacityOf } from "./patrol-capacity.mjs";
+import { capacityOf, countsCapacity } from "./patrol-capacity.mjs";
 import { call, connect, hasSession, NO_SESSION, pool } from "./t3-mcp.mjs";
 import { configure as configurePr, prLiveOf } from "./pr-live.mjs";
 import { loadState } from "./patrol-state.mjs";
@@ -251,13 +251,13 @@ async function liveSubagentRoots(environmentId, top) {
 async function occupancyOf(env, top, lastRunEndedOf, now, rootsP, waiting) {
   const roots = await rootsP;
   const occupying = top.filter((t) => {
-    if (isProbe(t)) return false;
+    if (!countsCapacity(t, SELF)) return false;
     if (LIVE.has(t.status) || roots.has(t.threadId)) return true;
     if (!holdsOpenPr(t)) return false;
     const ended = Date.parse(lastRunEndedOf(t) ?? "");
     return Number.isFinite(ended) && now - ended < CFG.capacity.occupyWindowHours * 3600 * 1000;
   });
-  // 池按仓库身份归类；项目清单取不到时只给设备总数，并标 projectsError，免得把全部线程当成「*」池。
+  // 项目清单取不到时归属不可信，暂停本设备派活并报告。
   let projects = new Map();
   let projectsError = null;
   try {
@@ -274,7 +274,7 @@ async function occupancyOf(env, top, lastRunEndedOf, now, rootsP, waiting) {
       diskFreeGB: env.isLocal ? localDiskFreeGB() : null,
       waiting,
     }),
-    ...(projectsError ? { projectsError } : {}),
+    ...(projectsError ? { projectsError, blocked: [projectsError], freeByRepo: {}, freeOther: 0 } : {}),
   };
   return { occupying, capacity, projects };
 }
@@ -292,7 +292,7 @@ async function capacityEnv(env) {
     ended.set(t.threadId, (r?.recentRuns ?? []).map((x) => x.completedAt ?? x.startedAt ?? x.requestedAt).filter(Boolean).sort().at(-1) ?? null);
   });
   const waits = await pool(top, CONC, (t) => waitingOf(scope, t));
-  const waiting = top.filter((_, i) => waits[i]).map((t) => clip(t.title, 40));
+  const waiting = top.filter((t, i) => waits[i] && countsCapacity(t, SELF)).map((t) => clip(t.title, 40));
   const { occupying, capacity, projects } = await occupancyOf(env, top, (t) => ended.get(t.threadId), now, rootsP, waiting);
   return {
     environmentId: env.environmentId,
@@ -377,7 +377,7 @@ async function snapshotEnv(env) {
       }
   });
   const byId = new Map(enriched.map((x) => [x.id, x]));
-  const waiting = enriched.filter((x) => x.waitingResources).map((x) => clip(x.title, 40));
+  const waiting = enriched.filter((x) => x.waitingResources && countsCapacity(x, SELF)).map((x) => clip(x.title, 40));
   const { occupying, capacity } = await occupancyOf(env, top, (t) => byId.get(t.threadId)?.lastRunEndedAt, now, rootsP, waiting);
   const prevUsed = STATE.lastRound?.occupancy?.[env.environmentId];
   const deviceFreed = Number.isInteger(prevUsed) && capacity.used < prevUsed;

@@ -1,96 +1,53 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { capacityOf, repoMatches, validateDevices } from "./patrol-capacity.mjs";
+import { capacityOf, countsCapacity, validateDevices, validateProjects, validatePools } from "./patrol-capacity.mjs";
+const MUS = "fj.frp.musiver.cn/fjbobo/musiver", TMA = "fj.frp.musiver.cn/fjbobo/tma", LIU = "fj.frp.musiver.cn/fjbobo/liuyin";
+const projects = new Map([["m", { canonicalKey: MUS }], ["t", { canonicalKey: TMA }], ["l", { canonicalKey: LIU }]]);
+const cfg = { pools: { heavy: 3, general: 2 }, projects: [{ repo: MUS, pool: "heavy" }, { repo: TMA, pool: "heavy" }], minFreeDiskGB: 20 };
+const heavy = Array.from({ length: 4 }, (_, i) => ({ title: `重型${i}`, projectId: i % 2 ? "t" : "m" }));
+const calc = (args = {}) => capacityOf({ threads: heavy, projects, cfg, ...args });
 
-const CFG = { maxActiveThreads: 5, minFreeDiskGB: 20 };
-const id = (canonicalKey, origin) => ({ canonicalKey, ...(origin ? { origin: { canonicalKey: origin } } : {}) });
-const projects = new Map([
-  ["p-musiver", id("fj.frp.musiver.cn/fjbobo/musiver")],
-  ["p-doc", id("github.com/liuyincs/musiver")],
-  ["p-tma", id("fj.frp.musiver.cn/fjbobo/tma")],
-  ["p-skills", id("github.com/gitbobobo/skills")],
-  ["p-t3", id("github.com/pingdotgg/t3code", "github.com/gitbobobo/t3code")],
-  ["p-none", null],
-]);
-const MUSIVER = "fj.frp.musiver.cn/fjbobo/musiver";
-
-test("仓库匹配：完整 key 精确比对，仓库名比对最后一段，含 fork 的 origin", () => {
-  assert.ok(repoMatches("musiver", projects.get("p-musiver")));
-  assert.ok(repoMatches("musiver", projects.get("p-doc")));
-  assert.ok(repoMatches("FJ.frp.musiver.cn/fjbobo/musiver", projects.get("p-musiver")));
-  assert.ok(!repoMatches(MUSIVER, projects.get("p-doc")));
-  assert.ok(repoMatches("github.com/gitbobobo/t3code", projects.get("p-t3")));
-  assert.ok(!repoMatches("musiver", null));
+test("重型超额不挤占通用池；Musiver/TMA共享重型池；没有设备总上限", () => {
+  const c = calc();
+  assert.equal(c.freeByRepo[MUS], 0);
+  assert.equal(c.freeByRepo[TMA], 0);
+  assert.equal(c.freeByRepo[LIU], 2);
+  assert.equal(c.max, undefined);
+  assert.equal(c.free, undefined);
+  assert.deepEqual(c.pools.map((p) => [p.name, p.used, p.free]), [["heavy", 4, 0], ["general", 0, 2]]);
 });
-
-test("设备总上限缺省为各池之和，两个池可以同时用满；审查线程只计设备总数", () => {
-  const device = { device: "pc", pools: [{ repos: [MUSIVER], max: 5 }, { repos: "*", max: 4 }] };
-  const threads = [
-    ...["a", "b", "c", "d"].map((title) => ({ title, projectId: "p-musiver" })),
-    { title: "代码审查 · PR #1", projectId: "p-musiver", reviewBot: true },
-  ];
-  const c = capacityOf({ threads, projects, device, cfg: CFG });
-  assert.equal(c.max, 9);
-  assert.equal(c.free, 4);
-  assert.deepEqual(c.pools.map((p) => [p.used, p.free]), [[4, 1], [0, 4]]);
-  assert.equal(c.freeByRepo[MUSIVER], 1);
-  assert.equal(c.freeByRepo["github.com/gitbobobo/skills"], 4);
-  assert.equal(c.freeOther, 4);
-  assert.equal(capacityOf({ threads, projects, device: { ...device, maxActiveThreads: 6 }, cfg: CFG }).freeByRepo["github.com/gitbobobo/skills"], 1);
-  const bare = capacityOf({ threads: [], projects, device: undefined, cfg: CFG });
-  assert.deepEqual([bare.device, bare.max, bare.pools, bare.freeOther], [null, 5, [], 5]);
+test("当前和历史巡检、探测都不计数，审查线程跟随项目归属", () => {
+  const c = calc({ self: "self", threads: [...heavy,
+    { title: "改过标题", threadId: "self", projectId: "l" },
+    { title: "T3 巡检", projectId: "l" }, { title: "t3-patrol", projectId: "l" },
+    { title: "额度探测", projectId: "l" },
+    { title: "代码审查 · PR #1", projectId: "l", reviewBot: true },
+  ] });
+  assert.equal(c.used, 5);
+  assert.equal(c.freeByRepo[LIU], 1);
+  assert.equal(countsCapacity({ title: "T3 巡检" }), false);
 });
-
-test("交接等 Musiver 池 4/4 时，Mac mini 的独立 TMA 池仍有 2 个派活名额", () => {
-  const device = { device: "mac-mini", pools: [{ repos: [MUSIVER], max: 4 }, { repos: ["tma"], max: 2 }] };
-  const threads = Array.from({ length: 4 }, (_, i) => ({ title: `Musiver #${i}`, projectId: "p-musiver" }));
-  const c = capacityOf({ threads, projects, device, cfg: CFG });
-  assert.equal(c.freeByRepo[MUSIVER], 0);
-  assert.equal(c.freeByRepo["fj.frp.musiver.cn/fjbobo/tma"], 2);
-  assert.equal(c.blocked, undefined);
-  // 同一场景若碰到设备总上限，才会连带阻挡独立池。
-  const full = capacityOf({ threads, projects, device: { ...device, maxActiveThreads: 4 }, cfg: CFG });
-  assert.equal(full.freeByRepo["fj.frp.musiver.cn/fjbobo/tma"], 0);
+test("设备只覆盖两池名额；缺身份进入通用池，显式general可覆盖fork origin", () => {
+  const c = calc({ device: { device: "mini", pools: { heavy: 5, general: 1 } }, threads: [...heavy, { title: "无身份", projectId: "?" }] });
+  assert.equal(c.freeByRepo[MUS], 1);
+  assert.equal(c.freeOther, 0);
+  assert.equal(c.poolByRepo[LIU], "general");
+  const fork = new Map([["f", { canonicalKey: LIU, origin: { canonicalKey: MUS } }]]);
+  assert.equal(calc({ projects: fork, cfg: { ...cfg, projects: [{ repo: LIU, pool: "general" }, ...cfg.projects] } }).poolByRepo[LIU], "general");
 });
-
-test("每个线程只进第一个匹配的池；没有池匹配的只占设备名额", () => {
-  const device = { device: "mac-mini", maxActiveThreads: 6, pools: [{ repos: [MUSIVER], max: 2 }, { repos: ["tma", "musiver"], max: 2 }] };
-  const threads = ["p-musiver", "p-musiver", "p-doc", "p-skills"].map((projectId, i) => ({ title: `t${i}`, projectId }));
-  const c = capacityOf({ threads, projects, device, cfg: CFG });
-  assert.deepEqual(c.pools.map((p) => p.occupying), [["t0", "t1"], ["t2"]]);
-  assert.equal(c.freeByRepo[MUSIVER], 0);
-  assert.equal(c.freeByRepo["fj.frp.musiver.cn/fjbobo/tma"], 1);
-  assert.equal(c.freeByRepo["github.com/gitbobobo/skills"], 2);
+test("磁盘/等待资源仍闸住两池", () => {
+  for (const args of [{ diskFreeGB: 19 }, { waiting: ["构建"] }]) {
+    const c = calc(args);
+    assert.equal(c.freeByRepo[LIU], 0);
+    assert.equal(c.freeOther, 0);
+    assert.equal(c.blocked.length, 1);
+  }
+  assert.equal(calc({ diskFreeGB: 21 }).freeByRepo[LIU], 2);
 });
-
-test("两道闸：本机磁盘低于保底或设备上有线程等资源时一律不建，名额照常计", () => {
-  const device = { device: "pc", pools: [{ repos: [MUSIVER], max: 5 }, { repos: "*", max: 4 }] };
-  const threads = [{ title: "a", projectId: "p-musiver" }];
-  const ok = capacityOf({ threads, projects, device, cfg: CFG, diskFreeGB: 21 });
-  assert.equal(ok.freeByRepo[MUSIVER], 4);
-  assert.equal(ok.blocked, undefined);
-  const low = capacityOf({ threads, projects, device, cfg: CFG, diskFreeGB: 19 });
-  assert.deepEqual([low.freeByRepo[MUSIVER], low.freeOther, low.free], [0, 0, 8]);
-  assert.match(low.blocked[0], /低于保底/);
-  const remote = capacityOf({ threads, projects, device, cfg: CFG });
-  assert.deepEqual([remote.disk.freeGB, remote.freeByRepo[MUSIVER]], [null, 4]);
-  const waiting = capacityOf({ threads, projects, device, cfg: CFG, waiting: ["#20 构建"] });
-  assert.equal(waiting.freeByRepo["github.com/gitbobobo/skills"], 0);
-  assert.match(waiting.blocked[0], /#20 构建/);
-});
-
-test("设备配置校验：坏条目丢弃并报警告", () => {
-  const warnings = [];
-  const out = validateDevices([
-    { device: "pc", pools: [{ repos: ["musiver"], max: 5, footprintGB: 30 }, { repos: [], max: 1 }, { repos: "*", max: -1 }] },
-    { device: "pc", pools: [] },
-    { pools: [] },
-    { device: "linux", maxActiveThreads: 1.5 },
-    { device: "mbp", maxActiveThreads: 3 },
-  ], warnings);
-  assert.deepEqual(out, [
-    { device: "pc", pools: [{ repos: ["musiver"], max: 5 }] },
-    { device: "mbp", maxActiveThreads: 3, pools: [] },
-  ]);
-  assert.equal(warnings.length, 6);
+test("校验拒绝旧池数组、设备总上限、重复项目与非法名额", () => {
+  const w = [];
+  assert.deepEqual(validateDevices([{ device: "pc", pools: { heavy: 4, general: 2 } }, { device: "old", pools: [] }, { device: "pc" }, { device: "x", maxActiveThreads: 1 }], w), [{ device: "pc", pools: { heavy: 4, general: 2 } }, { device: "x", pools: {} }]);
+  assert.equal(w.length, 3);
+  assert.deepEqual(validateProjects([{ repo: MUS, pool: "heavy" }, { repo: MUS, pool: "general" }, { repo: "tma", pool: "heavy" }], w), [{ repo: MUS, pool: "heavy" }]);
+  assert.deepEqual(validatePools({ heavy: -1, general: 0, other: 1 }, cfg.pools, w), { heavy: 3, general: 0 });
 });

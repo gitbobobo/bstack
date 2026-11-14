@@ -68,27 +68,9 @@ GitHub 与 Forgejo 合为一个托管平台适配器，底层分别走 `gh` 与 
 
 ## 容量池
 
-配置在 `t3-patrol.json` 的 `capacity.devices`（数组，整组替换），设备以 `environments.json` 的别名标识：
+每台设备只有重型与通用两个独立任务池。项目归属由用户在添加时指定；配置、占用与交接优先规则统一见 [交接容量](../skills/bstack/t3-patrol/references/handoff.md)，初始化见 [巡检初始化](../skills/bstack/t3-patrol/references/setup.md)。计算入口为 `t3-patrol/scripts/patrol-capacity.mjs`。
 
-```json
-{
-  "capacity": {
-    "devices": [
-      { "device": "pc",       "pools": [{ "repos": ["musiver"], "max": 5, "footprintGB": 30 }, { "repos": "*", "max": 4 }] },
-      { "device": "mac-mini", "pools": [{ "repos": ["musiver"], "max": 4 }, { "repos": ["tma"], "max": 2 }, { "repos": "*", "max": 4 }] },
-      { "device": "linux",    "pools": [{ "repos": ["musiver"], "max": 1 }, { "repos": "*", "max": 4 }] },
-      { "device": "mbp",      "pools": [{ "repos": ["musiver", "tma", "stream-music"], "max": 3 }, { "repos": "*", "max": 4 }] }
-    ]
-  }
-}
-```
-
-- 仓库以 T3 项目的 `repositoryIdentity.canonicalKey` 标识（各环境 `projectId` 不同）。`repos` 写完整 key 精确比对；只写仓库名时比对 key 的最后一段，会同时命中不同宿主上的同名仓库（如 `liuyincs/musiver`）。
-- 每个线程只落入第一个匹配的池；`"*"` 是上面未列出的仓库。「其他仓库 4 个」按每台设备各 4 个理解。
-- 设备总上限缺省为各池 `max` 之和，重型池和轻型池可以同时用满（PC 最多 9 个）；设备条目写 `maxActiveThreads` 可再压低。没配池的设备用 `capacity.maxActiveThreads`（5）。
-- 占用沿用 `t3-patrol/references/handoff.md` 的定义：活跃 run 的顶层线程，加上 PR 仍 open、最近 2 小时内跑过的线程。审查线程（「代码审查 · PR #N」）只计入设备总数，不占仓库池。
-- 快照每个环境输出 `capacity`：设备总数、各池占用、磁盘 `disk`、按仓库的可建数 `freeByRepo`。计算在 `t3-patrol/scripts/patrol-capacity.mjs`。
-- 容量只约束巡检；用户手动开的线程照样占名额，但不受阻拦。空位先给等待中的交接，再给新问题。
+配置迁移：Musiver、TMA 归重型，其余归通用；同设备原重型仓库池名额合并。设备总上限移除，巡检线程排除计数。容量约束自动新建，用户手动线程照常计入所属池。
 
 ### 磁盘
 

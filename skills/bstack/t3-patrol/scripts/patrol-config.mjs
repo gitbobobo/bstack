@@ -10,7 +10,7 @@ import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { validateDevices } from "./patrol-capacity.mjs";
+import { validateDevices, validatePools, validateProjects } from "./patrol-capacity.mjs";
 
 const SKILL_DIR = dirname(dirname(fileURLToPath(import.meta.url)));
 export const DEFAULTS_PATH = join(SKILL_DIR, "references", "config.defaults.json");
@@ -61,7 +61,12 @@ export function loadConfig({ env = process.env, defaultsPath = DEFAULTS_PATH } =
     warnings.push("modelLadder：每档须带字符串 instanceId 与 model，且至少一档；沿用默认阶梯");
     config.modelLadder = defaults.modelLadder;
   }
-  config.capacity = { ...config.capacity, devices: validateDevices(config.capacity.devices, warnings) };
+  config.capacity = {
+    ...config.capacity,
+    pools: validatePools(config.capacity.pools, defaults.capacity.pools, warnings),
+    projects: validateProjects(config.capacity.projects, warnings),
+    devices: validateDevices(config.capacity.devices, warnings),
+  };
   return { source: file, warnings, errors: [], config };
 }
 

@@ -30,9 +30,9 @@ test("没有配置文件时完全等于默认值", () => {
 });
 
 test("嵌套对象逐键覆盖，未写的键保留默认值", () => {
-  withConfig({ version: 1, capacity: { maxActiveThreads: 3 }, thresholds: { queuedMinutes: 45 } }, (env) => {
+  withConfig({ version: 1, capacity: { pools: { heavy: 4 } }, thresholds: { queuedMinutes: 45 } }, (env) => {
     const r = loadConfig({ env });
-    assert.equal(r.config.capacity.maxActiveThreads, 3);
+    assert.equal(r.config.capacity.pools.heavy, 4);
     assert.equal(r.config.capacity.minFreeDiskGB, DEFAULTS.capacity.minFreeDiskGB);
     assert.equal(r.config.thresholds.queuedMinutes, 45);
     assert.equal(r.config.thresholds.silenceMinutes, DEFAULTS.thresholds.silenceMinutes);
@@ -66,8 +66,8 @@ test("模型阶梯整体替换；残缺的阶梯回落默认", () => {
 });
 
 test("带 BOM 的文件照常解析", () => {
-  withConfig("\uFEFF" + JSON.stringify({ capacity: { maxActiveThreads: 4 } }), (env) => {
-    assert.equal(loadConfig({ env }).config.capacity.maxActiveThreads, 4);
+  withConfig("\uFEFF" + JSON.stringify({ capacity: { pools: { general: 4 } } }), (env) => {
+    assert.equal(loadConfig({ env }).config.capacity.pools.general, 4);
   });
 });
 
@@ -114,13 +114,13 @@ test("environments.json：坏条目与重复 environmentId 丢弃并报警告；
 });
 
 test("容量池：设备条目逐条校验，坏条目丢弃", () => {
-  withConfig({ capacity: { devices: [{ device: "pc", pools: [{ repos: ["musiver"], max: 5 }, { repos: "*", max: 4 }] }, { device: "x", pools: [{ repos: [], max: 1 }] }, 3] } }, (env) => {
+  withConfig({ capacity: { devices: [{ device: "pc", pools: { heavy: 5, general: 4 } }, { device: "x", pools: { heavy: -1 } }, 3] } }, (env) => {
     const r = loadConfig({ env });
     assert.deepEqual(r.config.capacity.devices, [
-      { device: "pc", pools: [{ repos: ["musiver"], max: 5 }, { repos: "*", max: 4 }] },
-      { device: "x", pools: [] },
+      { device: "pc", pools: { heavy: 5, general: 4 } },
+      { device: "x", pools: {} },
     ]);
     assert.equal(r.warnings.length, 2);
-    assert.equal(r.config.capacity.maxActiveThreads, DEFAULTS.capacity.maxActiveThreads);
+    assert.deepEqual(r.config.capacity.pools, DEFAULTS.capacity.pools);
   });
 });

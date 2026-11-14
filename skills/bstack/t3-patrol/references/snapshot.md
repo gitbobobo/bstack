@@ -32,7 +32,7 @@
   - `needsRenameThreads`：标题是原文堆砌、超宽或缺 open PR 号（`reasons`），带 `prs`/`task`/`tail` 作为命名依据。
   - `convergenceAuditThreads`：PR 开着超过 `convergenceAudit.openHours` 或审查超过 `convergenceAudit.reviewRounds` 轮，且 24 小时内仍有 P0–P2（`prs` 带时长/轮次/条数，直接当审计题头）。
 - **计数** `checks`：候选、有事、静默与各清单条数。汇报「例行复核」只引用这里的数字。
-- **容量** `environments[].capacity`：设备总数、仓库池、按仓库的可建数 `freeByRepo`、`blocked`（本机磁盘低于保底，或设备上有线程在等资源；非空时可建数全为 0），以及 `activeTopLevel` 与 `occupying`，用法见 [handoff.md](handoff.md) 第 3 步。`disk.freeGB` 只有本机有值，远程磁盘由在那里干活的线程自己查。
+- **容量** `environments[].capacity`：重型/通用两池占用、项目池归属 `poolByRepo`、按仓库的可建数 `freeByRepo`、`blocked`（本机磁盘低于保底，或设备上有线程在等资源；非空时可建数全为 0），以及 `activeTopLevel` 与 `occupying`，用法见 [handoff.md](handoff.md) 第 3 步。`disk.freeGB` 只有本机有值，远程磁盘由在那里干活的线程自己查。
 
 ## 分诊规则
 

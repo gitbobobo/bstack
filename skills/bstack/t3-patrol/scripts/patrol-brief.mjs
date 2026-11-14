@@ -27,7 +27,7 @@ export function briefOf(snap) {
       checks: e.checks,
       capacity: {
         used: cap.used,
-        max: cap.max,
+        pools: cap.pools,
         free: Object.fromEntries(Object.entries(cap.freeByRepo ?? {}).filter(([, n]) => n > 0)),
         ...(cap.blocked ? { blocked: cap.blocked } : {}),
         ...(cap.disk?.freeGB != null ? { diskFreeGB: cap.disk.freeGB } : {}),

@@ -9,13 +9,13 @@ version: 1
 
 ## 0. 前提
 
-- `environments.json` 已由 t3-patrol 初始化写好；设备容量池也在 t3-patrol 的配置里，这里不重复问。
+- `environments.json` 已由 t3-patrol 初始化写好；设备两池名额在 t3-patrol 的配置里，沿用已有值。
 - fast-ship 技能能读到 `~/.config/fast-ship/config.yaml`（缺失时按 fast-ship 技能「首次使用」配置）。
 
 ## 1. 可派活仓库
 
 1. 跑 `node <t3-patrol 技能目录>/scripts/patrol-snapshot.mjs --capacity-only`，列出各环境 `projects` 的 `canonicalKey`，请用户选可派活的仓库。
-2. 每个仓库问：
+2. 每个仓库先确认重型 `heavy` / 通用 `general` 归属，写入 `t3-patrol.json` 的 `capacity.projects`（完整 `repo` 与 `pool`）；已配置的沿用，新增项目由用户指定。容量规则与配置示例见 [巡检初始化](../../t3-patrol/references/setup.md#3-询问偏好)。再问：
    - `source`：问题来源，目前只有 `fast-ship`。
    - `statuses`：准入的工作流状态，默认 `unset`（未设置）与 `todo`（待处理）。
    - `devices`：只派到哪些设备（environments.json 别名）；不写就是所有有该仓库项目的设备。

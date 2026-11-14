@@ -43,14 +43,17 @@ node <t3-patrol 技能目录>/scripts/patrol-snapshot.mjs --self <当前线程 t
 先展示默认值，再按组问，用户说「默认」就跳过该组：
 
 - **模型阶梯** `modelLadder`：巡检代回话时依次尝试的 harness 与模型，最后一档标 `fallback`。用户的 harness 或模型不同才需要改，整组替换。
-- **名额** `capacity`：每台设备默认的最大活跃线程数、占用窗口小时数、本机最低剩余磁盘 `minFreeDiskGB`（只闸本机；远程磁盘由实现线程在重验证前自查）。
-- **容量池** `capacity.devices`：按设备别名分仓库限额，整组替换。先列出各环境的项目 `canonicalKey`（`t3_project_list`），再逐台问：
+- **任务池** `capacity`：按 [交接容量](handoff.md) 的两池规则，先列 `t3_project_list` 的项目，请用户指定每个项目归重型还是通用；归属跨设备共用，以完整 `canonicalKey` 写入 `projects`。再问各设备两池名额，未覆盖的沿用 `pools` 默认值。新增项目同样先问归属；未配置项目归通用。
 
   ```json
-  { "device": "pc", "pools": [{ "repos": ["fj.frp.musiver.cn/fjbobo/musiver"], "max": 5 }, { "repos": "*", "max": 4 }] }
+  {
+    "pools": { "heavy": 3, "general": 2 },
+    "projects": [{ "repo": "fj.frp.musiver.cn/fjbobo/musiver", "pool": "heavy" }],
+    "devices": [{ "device": "pc", "pools": { "heavy": 4, "general": 2 } }]
+  }
   ```
 
-  `repos` 写完整 `canonicalKey` 最稳；只写仓库名会命中不同宿主上的同名仓库。线程只进第一个匹配的池，`"*"` 收其余仓库，审查线程不占池。设备总上限 `maxActiveThreads` 缺省为各池 `max` 之和，即各池可以同时用满；只有用户想再压低总数时才写。
+  另问占用窗口 `occupyWindowHours` 与本机最低剩余磁盘 `minFreeDiskGB`；资源闸沿用交接容量规则。完成标准：每个项目的归属已确认，每台设备的两池名额已确认。
 - **阈值** `thresholds`：排队、沉默、审查等待、重发冷却等分钟数。多数用户沿用默认。
 - **分诊** `triage.fullEveryHours`：隔多少小时做一次全量巡检（其余轮次只深查有变化的线程）；`triage.resourceWakeHours`：停在「等待资源」的线程最多等几小时就叫醒它重查。多数用户沿用默认。
 - **久审审计** `convergenceAudit`：PR 打开小时数、审查轮数。

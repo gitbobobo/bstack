@@ -13,7 +13,7 @@ test("摘要：有事候选留判定字段并截断尾部，静默一行，体�
         alias: "pc",
         environmentId: "e",
         checks: { candidates: 2 },
-        capacity: { used: 1, max: 5, freeByRepo: { a: 0, b: 2 }, disk: { freeGB: null } },
+        capacity: { used: 1, pools: [{ name: "heavy", max: 3, used: 1, free: 2 }], freeByRepo: { a: 0, b: 2 }, disk: { freeGB: null } },
         candidates: [
           { id: "t1", link: "<l1>", title: "#1 x", status: "completed", triage: "hot", triageReasons: ["上轮后有新活动"], tail: ["x".repeat(900)], pendingRequestCount: 0, model: "m", prHealth: [{ pr: "#1", host: "h", checks: [{ name: "代码审查", state: "pending", at: "2026-11-08T10:00:00Z" }] }] },
           { id: "t2", link: "<l2>", title: "#2 y", status: "running", triage: "quiet", triageReasons: ["在跑，信号正常"] },
@@ -26,7 +26,7 @@ test("摘要：有事候选留判定字段并截断尾部，静默一行，体�
   };
   const b = briefOf(snap);
   const e = b.environments[0];
-  assert.deepEqual(e.capacity, { used: 1, max: 5, free: { b: 2 } });
+  assert.deepEqual(e.capacity, { used: 1, pools: snap.environments[0].capacity.pools, free: { b: 2 } });
   assert.equal(e.hot.length, 1);
   assert.equal(e.hot[0].model, undefined);
   assert.equal(e.hot[0].pendingRequestCount, undefined);
