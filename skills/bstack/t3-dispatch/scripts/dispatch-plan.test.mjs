@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildPlan, rankOf } from "./dispatch-plan.mjs";
+import { buildPlan, rankOf, selectionOf } from "./dispatch-plan.mjs";
 import { validateCandidate } from "./candidate-pool.mjs";
 import { validatePlan, launchConfigFor } from "./dispatch-launch.mjs";
 
@@ -130,6 +130,38 @@ test("缓存不能绕过实时准入、未结线程、台账和暂缓标签", ()
   assert.deepEqual(p.repos[0].reviewed.map((c) => c.ref), ["INT-4"]);
   assert.equal(p.repos[0].excluded.length, 3);
   assert.deepEqual(p.repos[0].poolMissing, [{ id: cs[4].id, ref: "INT-5" }]);
+});
+
+test("挑题前分工：多个待筛项目都委派，单项目大批也委派，小批与仅复用留主代理", () => {
+  const repo = (name, count, slots = 1, reused = 0) => ({ repo: name, slots, devices: [{ alias: "pc" }],
+    shortlist: Array.from({ length: Math.min(5, count) }, (_, i) => ({ id: `${name}-${i}` })), more: Math.max(0, count - 5),
+    reviewed: Array.from({ length: reused }, (_, i) => ({ id: `${name}-old-${i}` })),
+  });
+  const choose = (repos, slots = 3) => selectionOf({ slots, repos }, "snapshot-before-selection");
+  const multi = choose([repo(MUS, 6), repo(TMA, 5)]);
+  assert.equal(multi.capacityAt, "snapshot-before-selection");
+  assert.ok(multi.assignments.every((a) => a.mode === "delegate" && a.reason === "multiple_repos"));
+  const large = choose([repo(MUS, 8)]).assignments[0];
+  assert.equal(large.mode, "delegate");
+  assert.equal(large.pendingCount, 8, "表外待筛项也决定工作量");
+  assert.equal(choose([repo(MUS, 4)]).assignments[0].mode, "lead");
+  assert.equal(choose([repo(MUS, 5)]).assignments[0].mode, "delegate", "批量阈值边界");
+  const reused = choose([repo(MUS, 0, 1, 3)]).assignments[0];
+  assert.equal(reused.reason, "reuse_evidence");
+  assert.equal(reused.mode, "lead");
+  assert.equal(choose([repo(MUS, 8, 0)]).assignments[0].mode, "skip");
+  assert.equal(choose([repo(MUS, 8)], 0).assignments[0].mode, "skip");
+  assert.equal(choose([repo(MUS, 0)]).assignments[0].reason, "no_candidates");
+});
+
+test("第182轮计划回放：读取计划即给出逐项目委派，不能等串行填满后再判", () => {
+  const first = buildPlan({ capacity: { generatedAt: "2026-11-14T16:47:00Z", environments: [env("e-mini", [1, 1])] },
+    config, environments, ledger: [], listOf: () => ({ candidates: [cand("INT-1", "修复功能错误")], skipped: [] }) });
+  assert.equal(first.selection.capacityAt, "2026-11-14T16:47:00Z");
+  assert.ok(first.selection.assignments.every((a) => a.mode === "delegate"));
+  const after = buildPlan({ capacity: { environments: [env("e-mini", [0, 0])] }, config, environments, ledger: [], listOf: () => { throw new Error("池满不读来源"); } });
+  assert.ok(after.selection.assignments.every((a) => a.mode === "skip"));
+  assert.ok(first.selection.assignments.every((a) => a.mode === "delegate"), "后续计划不覆盖前段分工事实");
 });
 
 test("计划校验", () => {

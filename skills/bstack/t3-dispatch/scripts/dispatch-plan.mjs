@@ -2,8 +2,10 @@
 // 派活备选：从空位反推，只为有空位的仓库列候选，查重、粗排后给一张精简表，模型只在表里挑。
 // 取代「把全部候选导成文本逐段读」——那一步在首次接入新仓库时独占了一轮巡检的大半时间。
 //
-// 用法：node dispatch-plan.mjs --capacity <patrol-snapshot.mjs --capacity-only 的输出> [--per-slot 3] [--excerpt 200] [--detail 800]
-// 输出 { slots, repos: [{ repo, slots, devices, reviewed, shortlist, excluded, poolMissing, more }], skipped }：
+// 用法：node dispatch-plan.mjs --capacity <capacity-only 快照> [--per-slot 3] [--excerpt 0] [--detail 0]
+// 默认只取元数据，先分工再由负责人取详情；--detail N 仅用于已决定主代理处理的小批。
+// 输出 { slots, selection, repos: [{ repo, slots, devices, reviewed, shortlist, excluded, poolMissing, more }], skipped }：
+//   selection   当前容量时点的逐项目挑题分工（delegate / lead / skip）；由模型执行委派，不代表已启动
 //   slots       本轮最多还能派几个（perRun、perDay 余量与各仓库空位之和取小；perDay 为 0 不限）；为 0 时不列候选
 //   devices     该仓库有空位的设备（alias、environmentId、projectId、free）
 //   shortlist   粗排后的前 max(5, 空位×per-slot) 条：ref、id、title、labels、excerpt、category（粗分类）、
@@ -11,7 +13,7 @@
 //   reviewed    与本轮准入列表匹配、版本与有效期未变的 ready 旧依据；源码、依赖与容量仍须发前复核
 //   poolMissing 池中存在但当前准入列表缺失的条目，待核原因，不自动删除
 //   excluded    已有未结线程或台账在派的问题（附依据）；more 是排在 shortlist 表外、未进入 reviewed 的候选数
-// --detail：表内每条再读一次详情，附 body（前 N 字）与 consensus（共识摘要），挑选时不必逐条 show；0 关闭。
+// --detail：仅为 lead 项目的表内候选补 body（前 N 字）与 consensus；delegate 项目交指定负责人取证，默认 0 关闭。
 // 粗排只是排序提示：按标题与标签的关键词归类（崩溃/丢数据 → 门禁/构建/发版 → 安全 → 功能错误 → 性能 → 体验 → 重构），
 // 用户优先标签先于粗排；同类按「高 / 中 / 低」标记。挑选仍按 SKILL.md 第 2 步逐条判断。
 // 有 T3 MCP 会话时，再对表内问题在各设备该仓库的项目里 t3_thread_search 查重；没有会话只按标题与台账查重。
@@ -51,6 +53,28 @@ export function rankOf(c) {
 
 const refRe = (ref) => new RegExp(`(^|[^\\w-])${String(ref).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w])`, "i");
 
+export const SELECTION_BATCH = 5;
+
+// 固定在候选深读之前分工，工作量含表外待筛项；不把共享池上限当成子代理独占名额。
+export function selectionOf(plan, capacityAt = null) {
+  const workload = (plan.repos ?? []).map((r) => ({
+    repo: r.repo, slots: r.slots, devices: (r.devices ?? []).map((d) => d.alias),
+    pendingCount: (r.shortlist ?? []).length + (r.more ?? 0),
+    reusedCount: (r.reviewed ?? []).length,
+  }));
+  const screening = workload.filter((r) => plan.slots > 0 && r.slots > 0 && r.pendingCount > 0);
+  return {
+    capacityAt, batchThreshold: SELECTION_BATCH,
+    assignments: workload.map((r) => {
+      if (!(plan.slots > 0 && r.slots > 0)) return { ...r, mode: "skip", reason: "no_slots" };
+      if (!r.pendingCount) return { ...r, mode: r.reusedCount ? "lead" : "skip", reason: r.reusedCount ? "reuse_evidence" : "no_candidates" };
+      if (screening.length > 1) return { ...r, mode: "delegate", reason: "multiple_repos" };
+      if (r.pendingCount >= SELECTION_BATCH) return { ...r, mode: "delegate", reason: "large_batch" };
+      return { ...r, mode: "lead", reason: "small_batch" };
+    }),
+  };
+}
+
 export function buildPlan({ capacity, config, environments, ledger, listOf, perSlot = 3, candidatePool = {}, now = Date.now() }) {
   const summary = ledgerSummary(ledger);
   // perDay 为 0 表示不设每日上限，并发只由各设备名额约束。
@@ -77,7 +101,10 @@ export function buildPlan({ capacity, config, environments, ledger, listOf, perS
     repos.push({ repo: r.repo, slots, devices, shortlist: [], excluded: [], more: 0 });
   }
   const slots = Math.min(budget, repos.reduce((s, r) => s + r.slots, 0));
-  if (slots === 0) return { slots, budget, launchedToday: summary.launched, repos: repos.map(({ shortlist, excluded, more, ...r }) => r), skipped };
+  if (slots === 0) {
+    const plan = { slots, budget, launchedToday: summary.launched, repos: repos.map(({ shortlist, excluded, more, ...r }) => r), skipped };
+    return { ...plan, selection: selectionOf(plan, capacity.generatedAt ?? null) };
+  }
   for (const r of repos) {
     if (!r.slots) continue;
     const listed = listOf(r.repo);
@@ -107,7 +134,8 @@ export function buildPlan({ capacity, config, environments, ledger, listOf, perS
     r.labelConflicts = listed.skipped.filter((s) => s.conflict);
     r.deferred = listed.skipped.filter((s) => /bstack:defer/.test(s.reason ?? "")).length;
   }
-  return { slots, budget, launchedToday: summary.launched, repos, skipped };
+  const plan = { slots, budget, launchedToday: summary.launched, repos, skipped };
+  return { ...plan, selection: selectionOf(plan, capacity.generatedAt ?? null) };
 }
 
 // 表内问题再按编号在各设备该仓库的项目里搜一次：标题不含编号的线程靠标题查重会漏。
@@ -149,16 +177,16 @@ if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToP
   };
   const file = opt("capacity");
   if (!file) {
-    console.error("用法：node dispatch-plan.mjs --capacity <capacity-only 快照> [--per-slot 3] [--excerpt 200]");
+    console.error("用法：node dispatch-plan.mjs --capacity <capacity-only 快照> [--per-slot 3] [--excerpt 0] [--detail 0]");
     process.exit(2);
   }
   try {
     const { config, errors } = loadConfig();
     if (errors.length) throw new Error(errors.join("；"));
     const capacity = JSON.parse(readFileSync(file, "utf8"));
-    const detail = Number(opt("detail", 800));
+    const detail = Number(opt("detail", 0));
     // 带详情时列表不再逐条取摘要（同一批详情会读两遍），needsInfo 改按详情正文判。
-    const excerpt = detail > 0 ? 0 : Number(opt("excerpt", 200));
+    const excerpt = detail > 0 ? 0 : Number(opt("excerpt", 0));
     let candidatePool = {};
     let poolWarning;
     try { candidatePool = readPool().state.repos; }
@@ -172,8 +200,14 @@ if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToP
       perSlot: Number(opt("per-slot", 3)),
       candidatePool,
     });
+    if (plan.slots > 0 && hasSession()) {
+      await connect("t3-dispatch-plan");
+      await searchDupes(plan, capacity);
+    } else if (plan.slots > 0) plan.warnings = ["没有 T3 MCP 会话，只按标题与台账查重；派出前按 SKILL.md 第 3 步手工搜一次"];
+    plan.selection = selectionOf(plan, capacity.generatedAt ?? null);
     if (plan.slots > 0 && detail > 0) {
       for (const r of plan.repos) {
+        if (plan.selection.assignments.find((a) => a.repo === r.repo)?.mode !== "lead") continue;
         for (const c of r.shortlist) {
           try {
             const d = run("show", { repo: r.repo, id: c.id });
@@ -190,10 +224,6 @@ if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToP
         r.shortlist.sort((a, b) => Number(b.priority) - Number(a.priority) || a.needsInfo - b.needsInfo);
       }
     }
-    if (plan.slots > 0 && hasSession()) {
-      await connect("t3-dispatch-plan");
-      await searchDupes(plan, capacity);
-    } else if (plan.slots > 0) plan.warnings = ["没有 T3 MCP 会话，只按标题与台账查重；挑中的问题派出前按 SKILL.md 第 4 步手工搜一次"];
     if (poolWarning) (plan.warnings ??= []).push(poolWarning);
     console.log(JSON.stringify(plan, null, 1));
   } catch (e) {

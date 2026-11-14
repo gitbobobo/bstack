@@ -38,7 +38,7 @@ T3 Code 多 harness 编排：按固定规则选 harness 与模型，派活验收
 
 ### t3-dispatch
 
-按项目并行挑题、持久化未派候选并跨轮复核，主代理按设备共享池统一建工作树线程派活。[SKILL.md](skills/bstack/t3-dispatch/SKILL.md)
+挑题前按项目确定委派分工、持久化未派候选并跨轮复核，主代理按设备共享池统一建工作树线程派活。[SKILL.md](skills/bstack/t3-dispatch/SKILL.md)
 
 ## 通用技能
 
