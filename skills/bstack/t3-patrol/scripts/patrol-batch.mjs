@@ -6,7 +6,8 @@
 //   node patrol-batch.mjs --calls <文件>      按文件逐条执行任意 MCP 调用（发消息、改名、settle、interrupt……）
 // 两者可同时给。calls 文件（UTF-8 JSON，消息正文写在里面，不进命令行）：
 //   [ { "label": "M10 #28", "tool": "t3_thread_send", "args": { "environmentId": "…", "threadId": "…", "mode": "auto", "message": "【巡检】…" } }, … ]
-// 输出 { watch: [{ threadId, environmentId, url, result|skipped|error, watching }], calls: [{ label, tool, ok, result|error }] }；
+//   要求对方收尾后结束的调用加 "releases": true（与 tool 同级），结果原样带出，供 patrol-snapshot --expect-release-from 登记预计释放。
+// 输出 { watch: [{ threadId, environmentId, url, result|skipped|error, watching }], calls: [{ label, tool, ok, releases?, result|error }] }；
 // result 只留判定字段（messageId、runId、threadId、status、title 等），有失败时退出码 1。
 // 只负责执行与即时返回值；预期动作有没有发生（目标线程是否接手）仍用 patrol-evidence.mjs 回读对应 run。
 
@@ -59,6 +60,13 @@ async function runCalls(file) {
       continue;
     }
     const scope = c.args.threadId ? { threadId: c.args.threadId, environmentId: c.args.environmentId } : {};
+    if (c.releases) {
+      if (!c.args.threadId) {
+        out.push({ label, tool: c.tool, ok: false, error: "releases 需要 args.threadId" });
+        continue;
+      }
+      scope.releases = true;
+    }
     try {
       out.push({ label, tool: c.tool, ...scope, ok: true, result: brief(await call(c.tool, c.args)) });
     } catch (e) {

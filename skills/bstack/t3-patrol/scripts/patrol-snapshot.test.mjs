@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -106,5 +106,24 @@ test("完整/容量快照一致排除 Fast Ship 审查，保留实现父线程�
   assert.equal(c.projectedFreeByRepo[REPO], 1, "7 占 5 位，三个预计释放后余 1");
   assert.deepEqual(c.releasing.map((x) => x.threadId).sort(), ["background", "impl0", "impl2"]);
   assert.deepEqual(snap.expectReleaseUnmatched.map((x) => x.threadId).sort(), ["ghost", "impl1"], "别的环境或不占位的线程要报出来核对");
+
+  mkdirSync(join(dir, "state"));
+  writeFileSync(join(dir, "state", "t3-patrol.json"), JSON.stringify({ pendingHandoffs: [
+    { sourceEnvironmentId: "mini", sourceThreadId: "impl2", launchedThreadLink: "<t3-thread://x>" },
+    { sourceEnvironmentId: "mini", sourceThreadId: "impl1" },
+  ] }));
+  const batch = join(dir, "batch.json");
+  writeFileSync(batch, JSON.stringify({ calls: [
+    { label: "收尾指令（无模板）", tool: "t3_thread_send", threadId: "impl0", environmentId: "mini", releases: true, ok: true },
+    { label: "M9 未标", tool: "t3_thread_send", threadId: "background", environmentId: "mini", ok: true },
+    { label: "M10 发送失败", tool: "t3_thread_send", threadId: "impl4", environmentId: "mini", releases: true, ok: false },
+    { label: "改名", tool: "t3_thread_update", threadId: "impl3", environmentId: "mini", ok: true },
+  ] }));
+  const { stdout: out2 } = await exec(process.execPath, [script, "--self", "self", "--capacity-only", "--expect-release-from", batch], { env, timeout: 15000 });
+  const snap2 = JSON.parse(out2);
+  const c2 = snap2.environments[0].capacity;
+  assert.deepEqual(c2.releasing.map((x) => x.threadId).sort(), ["impl0", "impl2"], "带 releases 的成功调用与已建线交接来源记为预计释放");
+  assert.deepEqual(snap2.expectReleaseUnflagged.map((x) => x.threadId), ["background"], "发过消息、仍占位却没标 releases 的要报出来");
+  assert.equal(snap2.expectReleaseUnmatched, undefined);
   assert.deepEqual(errors, []);
 });

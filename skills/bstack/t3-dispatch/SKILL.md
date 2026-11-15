@@ -31,7 +31,7 @@ description: 从问题来源挑问题，在各 T3 环境建工作树线程派活
 
 ## 1. 空位与备选
 
-1. `node <t3-patrol 技能目录>/scripts/patrol-snapshot.mjs --capacity-only > /tmp/t3-dispatch-capacity.json`；巡检调用时改用 t3-patrol 第 5 步带 `--expect-release` 的容量切点快照，不另取。每个环境带 `capacity`、`projects`（项目 id 与 `canonicalKey`）和 `openThreads`（未 settle 的顶层线程标题）。退出码 2 表示当前 harness 拿不到 T3 MCP 会话（如 Codex）：改走 [手工派活](references/manual.md)。
+1. `node <t3-patrol 技能目录>/scripts/patrol-snapshot.mjs --capacity-only > /tmp/t3-dispatch-capacity.json`；巡检调用时改用 t3-patrol 第 5 步含预计释放的容量切点快照，不另取。每个环境带 `capacity`、`projects`（项目 id 与 `canonicalKey`）和 `openThreads`（未 settle 的顶层线程标题）。退出码 2 表示当前 harness 拿不到 T3 MCP 会话（如 Codex）：改走 [手工派活](references/manual.md)。
 2. `node <技能目录>/scripts/dispatch-plan.mjs --capacity /tmp/t3-dispatch-capacity.json --brief-dir /tmp/t3-dispatch-briefs > /tmp/t3-dispatch-plan.json`。它按 [t3-patrol handoff.md 第 3 步](../t3-patrol/references/handoff.md) 的口径算各仓库目标设备的可建数，以 `limits.perRun` 与 `limits.perDay` 余量封顶，只为有空位的仓库取实时准入列表，排除在派台账与暂缓标签；线程标题仅作线索，搜索命中经回读确认未结后列入 `excluded`，执行范围由负责人按[查重](references/duplicates.md)复核。旧候选依据进 `reviewed`；其余按[派活标签](references/labels.md)与技术粗排取首批 `shortlist`。默认只读元数据并输出逐项目分工 `selection`，避免主代理在委派前串行取完详情；正文与共识由指定负责人按需补读。字段见脚本头注释。
 3. `projectedSlots` 为 0（没有预计名额时等于 `slots`）：到此为止，按第 4 步报告空位，`skipped` 里是各设备卡住的原因（名额、闸）。
 
