@@ -13,6 +13,7 @@
 //   6. 带 disable-model-invocation: true 的技能，README 小节写明「仅限用户主动调用」（单向：反过来不强制）
 //   7. skills/**/*.test.mjs 全部通过（node --test）
 //   8. 技能脚本的主入口判断经 realpathSync 解析 argv[1]（技能常经符号链接安装，否则静默不执行）
+//   9. 通用技能的正文、引用文档和脚本不得引用 bstack 技能或配置
 
 import { readdirSync, readFileSync, existsSync, statSync } from "node:fs";
 import { spawnSync } from "node:child_process";
@@ -120,6 +121,18 @@ for (const p of walkFiles(skillsDir, (e) => /\.m?js$/.test(e))) {
   const lines = readFileSync(p, "utf8").split("\n");
   const i = lines.findIndex((l) => MAIN_GUARD.test(l));
   if (i >= 0) fail(`${relative(ROOT, p).split(sep).join("/")}:${i + 1}：主入口判断须写成 \`import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href\`（realpathSync 来自 node:fs），否则经符号链接调用时静默不执行`);
+}
+
+// 9. 单向依赖：从目录发现体系技能名，覆盖正文、disclosed reference 与脚本。
+const bstackNames = [...walk(join(skillsDir, "bstack"))].map((dir) => dir.split(sep).at(-1));
+const escapedNames = bstackNames.map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+const bstackReference = new RegExp(`(?:^|[^a-z0-9_-])(?:${escapedNames.join("|")})(?=$|[^a-z0-9_-])`, "i");
+const bstackPath = /(?:skills|\.config)[\\/]+bstack\b/i;
+for (const p of walkFiles(join(skillsDir, "general"), (e) => /\.(?:md|m?js|cjs|ts|json|py|sh|ya?ml|txt)$/.test(e))) {
+  const lines = readFileSync(p, "utf8").split("\n");
+  lines.forEach((line, i) => {
+    if (bstackReference.test(line) || bstackPath.test(line)) fail(`${relative(ROOT, p).split(sep).join("/")}:${i + 1}：通用技能不得依赖或引用 bstack 技能或配置`);
+  });
 }
 
 if (fails.length) {

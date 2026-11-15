@@ -38,7 +38,7 @@ T3 Code 多 harness 编排：按固定规则选 harness 与模型，派活验收
 
 ### t3-dispatch
 
-挑题前按项目分工并核最新基线，查重回读线程状态与执行范围、保留历史共识为上下文，派出前核目标仓库身份，再按设备共享池建工作树线程。[SKILL.md](skills/bstack/t3-dispatch/SKILL.md)
+挑题前按项目分工并核最新基线，架构改进按结构收益自动派活，查重回读线程状态与执行范围，派出前核目标仓库身份，再按设备共享池建工作树线程。[SKILL.md](skills/bstack/t3-dispatch/SKILL.md)
 
 ## 通用技能
 
@@ -48,7 +48,7 @@ git 操作偏好：可审计提交、rebase 同步远程，以及按用户要求
 
 ### pr-review-loop
 
-审查建议的改动准入、开 PR、按预算收敛审查与测试失败分诊。[SKILL.md](skills/general/pr-review-loop/SKILL.md)
+判断审查意见在当前 PR 的处理范围、开 PR、按预算收敛审查与测试失败分诊，独立任务的派活另行评估。[SKILL.md](skills/general/pr-review-loop/SKILL.md)
 
 ### pr-finish
 
@@ -128,4 +128,4 @@ PR 收尾：整合目标分支、合并、分流遗留，再关闭关联问题�
 
 ### check
 
-仓库一致性检查，改动技能或 README 后运行：`node scripts/check.mjs`。[scripts/check.mjs](scripts/check.mjs)
+仓库一致性检查，含通用技能不得反向引用 bstack 的依赖边界；改动技能或 README 后运行：`node scripts/check.mjs`。[scripts/check.mjs](scripts/check.mjs)
