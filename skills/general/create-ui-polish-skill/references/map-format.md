@@ -1,6 +1,6 @@
 # 界面地图格式
 
-界面地图由 `config.json` 和 `screens/<id>.json` 组成，读写都用 `scripts/ui-map.mjs`。只有 `record` 和 `config` 不覆盖的字段才手改。
+界面地图由 `config.json` 和 `screens/<id>.json` 组成，读写都用 `scripts/ui-map.mjs`。只有 `record` 和 `config` 不覆盖的字段才手改。每一轮截图的文件格式见文末「截图轮次」。
 
 ## config.json
 
@@ -55,7 +55,7 @@
   ],
   "scores": [
     { "platform": "android-phone", "theme": "light", "state": "default", "score": 8.4,
-      "commit": "<完整 SHA>", "date": "2026-11-14", "deductions": ["提交按钮与表单左边线不齐 -0.3"] }
+      "commit": "<完整 SHA>", "date": "2026-11-14", "deductions": ["提交按钮与表单左边线不齐 -0.3"], "shot": "<画面哈希>" }
   ]
 }
 ```
@@ -67,7 +67,7 @@
 - `unsupported`：界面在某个平台上不存在，写明原因。
 - `sources`：判断评分是否过期的依据。`*` 是各平台共用的路径（共享组件、主题 token、核心层视图模型），其余按平台写。写文件或目录，目录覆盖其下全部文件。宁可多写共享样式目录，也要让改动这个界面的提交命中它。
 - `states`：界面所有可见状态，至少有 `default`。`gaps` 记录某平台暂时截不到这个状态的原因；补好截图入口后删掉对应条目。
-- `scores`：每个 平台 × 主题 × 状态 一格，只保留最后一次。由 `record` 写入，`commit` 是评分时的 HEAD，`deductions` 是评审员给的主要扣分点。`invalidated` 由 `invalidate` 写入，记录被标为过期的原因和日期；重新 `record` 这一格时清除。
+- `scores`：每个 平台 × 主题 × 状态 一格，只保留最后一次。由 `record` 写入，`commit` 是评分时的 HEAD，`deductions` 是评审员给的主要扣分点，`shot` 是评分时那张截图的画面哈希（见「截图轮次」）。`invalidated` 由 `invalidate` 写入，记录被标为过期的原因和日期；重新 `record` 这一格时清除。
 
 ## 格子状态
 
@@ -80,3 +80,28 @@
 | `ok` | 达标且未过期 | 不挑 |
 
 一个界面按它最差的格子归档，同档再按 `priority`、最低分排序。
+
+## 截图轮次
+
+一轮截图放在仓库外的一个目录里，由 `scripts/ui-shots.mjs` 读写。截图工具负责写图片和 `manifest.json`，其余文件由 `ui-shots` 生成：
+
+```json
+{
+  "platform": "android-phone",
+  "logicalWidth": 360,
+  "shots": [
+    { "screen": "home", "theme": "dark", "state": "empty", "file": "home-dark-empty.png" },
+    { "screen": "home", "theme": "dark", "state": "long", "file": "home-dark-long.png", "logicalWidth": 412 }
+  ]
+}
+```
+
+- `platform`：一轮只截一个平台。
+- `logicalWidth`：设备的逻辑宽度（dp、pt 或 CSS 像素）。拼图把每格缩到这个宽度；单条 shot 可以覆盖。省略时按原图宽度。
+- `shots`：`screen`、`theme`、`state` 与地图一致，`file` 相对本目录或写绝对路径。出现在这里的界面，要把它在本平台上除 `gaps` 以外的格子全部截齐，`verify` 按这条检查。
+- `plan.json`：`prepare` 写入，记录拼图、每格的画面哈希和沿用的分数。
+- `sheets/`：`prepare` 生成的拼图。
+- `review.json`：评审员回复的 JSON，按 [`review-prompt.md`](review-prompt.md) 的格式原样保存。
+- `scores.json`：`merge` 写入，`ui-map record --from` 读取，也是下一轮 `prepare --prev` 沿用分数的来源。
+
+画面哈希：PNG 取尺寸和解压后的像素，其他格式取文件字节。同一构建、同一状态连拍两次哈希应当相同，否则沿用分数不会生效。

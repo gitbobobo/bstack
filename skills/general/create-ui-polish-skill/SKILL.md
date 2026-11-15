@@ -1,6 +1,6 @@
 ---
 name: create-ui-polish-skill
-description: 为当前仓库生成界面打磨专用技能：完整的界面地图、按平台族划分的布局蓝图、截图工具和评分循环。
+description: 为当前仓库生成或升级界面打磨专用技能：完整的界面地图、按平台族划分的布局蓝图、截图工具和评分循环。
 disable-model-invocation: true
 ---
 
@@ -14,11 +14,14 @@ disable-model-invocation: true
 
 - [`references/project-skill.md`](references/project-skill.md)：生成技能 `SKILL.md` 的模板。
 - [`references/map-format.md`](references/map-format.md)：界面地图格式，原样复制。
-- [`references/rubric.md`](references/rubric.md)：默认评分标准和评审提示词。
+- [`references/rubric.md`](references/rubric.md)：默认评分维度。
+- [`references/review-prompt.md`](references/review-prompt.md)：评审提示词和评审结果格式，原样复制。
 - [`references/blueprint.md`](references/blueprint.md)：蓝图模板。
+- [`references/upgrade.md`](references/upgrade.md)：升级已有技能的步骤。
 - [`scripts/ui-map.mjs`](scripts/ui-map.mjs)：地图脚本，原样复制。
+- [`scripts/ui-shots.mjs`](scripts/ui-shots.mjs)：截图轮次脚本（校验、拼图、沿用分数、合并评审结果），原样复制。
 
-仓库里已经有 `ui-polish-<app>` 时，这次运行是升级：重新复制 `scripts/ui-map.mjs` 和 `map-format.md`，按新模板补齐 `SKILL.md` 缺少的段落，保留已有的 `config.json`、`screens/`、`blueprints/` 和评分标准。运行 `ui-map check` 没有错误就结束。
+仓库里已经有 `ui-polish-<app>` 时，这次运行是升级：按 [`references/upgrade.md`](references/upgrade.md) 走，不执行下面的步骤。
 
 ## 步骤
 
@@ -39,13 +42,14 @@ disable-model-invocation: true
 
 ### 2. 准备截图工具
 
-目标是一条可复用的命令，能按 界面 × 主题 × 状态 截下任意一格。仓库已有截图工具就扩展它；没有就新建一个，提交进仓库，并接入仓库的统一命令入口。
+目标是一条可复用的命令，能按 界面 × 主题 × 状态 截下任意一格，并满足 [`project-skill.md`](references/project-skill.md) 「截图」一节开头的三条要求：写清单、就绪断言、稳定。仓库已有截图工具就扩展它；没有就新建一个，提交进仓库，并接入仓库的统一命令入口。
 
-- 状态的注入要走应用真实的渲染路径，比如深链参数、演示数据、测试夹具。不要为截图另写一套界面。
+- 状态的注入要走应用真实的渲染路径，比如深链参数、演示数据、测试夹具。为截图另写的界面不算数。
 - 截图输出到仓库外，截图本身不提交。
+- 确认本机装有 ImageMagick 或 ffmpeg，`ui-shots` 用它拼图。
 - 本机能跑的平台各截一格，证明命令可用。本机跑不了的平台照样写好入口，在汇报里列为「未在本机验证」。
 
-完成标准：本机能跑的每个平台都截出过一张真实截图。
+完成标准：本机能跑的每个平台都截出过一张真实截图，同一格连拍两次，用本技能的 `scripts/ui-shots.mjs hash <图片>...` 算出的结果相同；做不到稳定的平台写明了原因。
 
 ### 3. 建立界面地图
 
@@ -77,6 +81,7 @@ disable-model-invocation: true
 - 内容取自现有实现和设计文档。同族平台一致的地方直接写进本族布局。
 - 同族平台不一致、文档里也没有结论的地方，标为「待定」并列出各平台的现状，留给用户决定。不同族之间的布局差异是正常的，不算待定。
 - 已确认的产品决定写进「产品约束」，注明出处。
+- 再从代码里找评审员看图容易误判的设计，也写进「产品约束」并注明出处文件：用户可以单独配置、会盖过主题效果的选项（比如独立的背景设置）；有业务含义的标记和徽标（比如表示同步或下载状态的圆点）；演示数据里大量重复出现的元素。评审员不知道这些，就会建议删掉或统一它们。
 
 完成标准：每个界面都指向一张蓝图，每张蓝图对这些界面涉及的每个平台族都有一节布局，每处「待定」都列进汇报。
 
@@ -84,12 +89,16 @@ disable-model-invocation: true
 
 在仓库的技能目录下建 `ui-polish-<app>/`：
 
-- `SKILL.md`：按 [`project-skill.md`](references/project-skill.md) 填写，「截图」一节写第 2 步的真实命令和约束。
-- `map-format.md`、`scripts/ui-map.mjs`：原样复制。
-- `rubric.md`：从 [`rubric.md`](references/rubric.md) 复制。仓库已有评分标准时改用仓库的。
-- `config.json`、`screens/`、`blueprints/`：第 3、4 步的产物。`config.json` 的 `families` 取第 1 步整理出的平台族。
+生成的文件分两类，升级时按这个归属处理：
 
-完成标准：生成的目录里搜不到 `{{`。
+| 文件 | 归属 | 来源 |
+|---|---|---|
+| `map-format.md`、`review-prompt.md`、`scripts/ui-map.mjs`、`scripts/ui-shots.mjs` | 本技能，升级时覆盖 | 原样复制 |
+| `SKILL.md` | 仓库，升级时按模板逐节对齐 | 按 [`project-skill.md`](references/project-skill.md) 填写，「截图」一节写第 2 步的真实命令和做法 |
+| `rubric.md` | 仓库，升级时保留 | 从 [`rubric.md`](references/rubric.md) 复制；仓库已有评分标准时改用仓库的。本仓库对评审员的额外要求写进「评审补充」 |
+| `config.json`、`screens/`、`blueprints/` | 仓库，升级时保留 | 第 3、4 步的产物。`config.json` 的 `families` 取第 1 步整理出的平台族 |
+
+完成标准：表里的文件都在，生成的目录里搜不到 `{{`。
 
 ### 6. 接入日常修改
 
@@ -98,9 +107,9 @@ disable-model-invocation: true
 
 ### 7. 跑通一次
 
-请用户指定评审员。按生成的技能「打磨一批」走一遍，只做一个界面：运行 `ui-map next --count 1 --platform <本机平台>`，然后截图、评审、记录分数，最后运行 `ui-map check`。哪一步走不通，就修生成的技能或截图工具，然后从那一步重新走。
+请用户指定评审员。按生成的技能「打磨一批」走一遍，只做一个界面：运行 `ui-map next --count 1 --platform <本机平台>`，截进一个轮次目录，依次运行 `ui-shots verify`、`ui-shots prepare`，评审，`ui-shots merge`，`ui-map record --from`，最后运行 `ui-map check`。哪一步走不通，就修生成的技能或截图工具，然后从那一步重新走。
 
-完成标准：地图里有了第一批真实分数，`ui-map check` 没有错误，执行时没有用到技能里没写的步骤。
+完成标准：地图里有了第一批带画面哈希的真实分数，`ui-map check` 没有错误，执行时没有用到技能里没写的步骤。
 
 ### 8. 汇报
 

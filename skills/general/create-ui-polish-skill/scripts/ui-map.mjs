@@ -14,8 +14,9 @@ const USAGE = `用法：node ui-map.mjs <命令> [选项]
 命令：
   status [--platform a,b]          各界面的评分覆盖、最低分、过期与截图缺口
   next [--platform a,b] [--count n] 下一批要打磨的界面（默认数量取 config.batchSize），附同平台族的参照平台
-  record <界面> --platform p --theme t --state s --score x [--deduction 文本]...
-                                   记录一格的最终分数，提交号取 HEAD；该平台源码有未提交改动时拒绝
+  record <界面> --platform p --theme t --state s --score x [--deduction 文本]... [--shot 画面哈希]
+  record --from <scores.json>      记录一格（或 ui-shots merge 产出的一批格子）的最终分数，提交号取 HEAD；
+                                   相关源码有未提交改动时拒绝
   invalidate [<界面>...] [--blueprint 名字] [--platform a,b] [--theme a,b] [--state a,b] --reason 文本
                                    把指定范围内已有的分数标为过期（如蓝图改了布局，同族其他平台需要重新对齐）
   check [--strict]                 校验地图格式，提示过期格与注册表里未登记的界面
@@ -29,13 +30,13 @@ const USAGE = `用法：node ui-map.mjs <命令> [选项]
 const RANK = { gap: 0, unscored: 0, low: 1, stale: 2, ok: 3 };
 const CONFIG_KEYS = { threshold: (v) => v >= 0 && v <= 10, batchSize: (v) => Number.isInteger(v) && v > 0 };
 
-export function parseArgs(argv) {
+export function parseArgs(argv, flags = ["strict", "help"]) {
   const out = { _: [], deduction: [] };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (!a.startsWith("--")) { out._.push(a); continue; }
     const key = a.slice(2);
-    if (key === "strict" || key === "help") { out[key] = true; continue; }
+    if (flags.includes(key)) { out[key] = true; continue; }
     const val = argv[++i];
     if (val === undefined) throw new Error(`选项 --${key} 缺少取值`);
     if (key === "deduction") out.deduction.push(val);
@@ -260,28 +261,41 @@ export function run(argv, log = console.log) {
   }
 
   if (cmd === "record") {
-    const [id] = rest;
-    const screen = map.screens.find((s) => s.id === id);
-    if (!screen) throw new Error(`地图里没有界面 ${id}`);
-    const { platform, theme, state } = args;
-    const score = Number(args.score);
-    if (!platform || !theme || !state || Number.isNaN(score)) throw new Error("record 需要 --platform --theme --state --score");
-    if (!platformsOf(screen, map.config).includes(platform)) throw new Error(`${id} 不支持平台 ${platform}`);
-    if (!(screen.themes ?? map.config.themes).includes(theme)) throw new Error(`${id} 没有主题 ${theme}`);
-    if (!screen.states.some((s) => s.id === state)) throw new Error(`${id} 没有状态 ${state}`);
-    if (!(score >= 0 && score <= 10)) throw new Error("分数须在 0–10 之间");
+    const items = args.from
+      ? JSON.parse(readFileSync(resolve(args.from), "utf8"))
+      : [{ screen: rest[0], platform: args.platform, theme: args.theme, state: args.state, score: Number(args.score), deductions: args.deduction, shot: args.shot }];
+    if (!Array.isArray(items) || !items.length) throw new Error(`${args.from} 里没有要记录的格子`);
     const root = repoRoot(map.dir);
-    const paths = sourcesOf(screen, platform);
-    if (!paths.length) throw new Error(`${id} 没有登记 ${platform} 的 sources，无法判断以后是否过期`);
-    const dirty = git(root, ["status", "--porcelain", "--", ...paths]).trim();
-    if (dirty) throw new Error(`先提交界面改动再记录分数：\n${dirty}`);
-    const entry = {
-      platform, theme, state, score, commit: git(root, ["rev-parse", "HEAD"]).trim(),
-      date: new Date().toISOString().slice(0, 10), deductions: args.deduction,
-    };
-    screen.scores = [...(screen.scores ?? []).filter((x) => !(x.platform === platform && x.theme === theme && x.state === state)), entry];
-    writeScreen(screen);
-    log(`已记录 ${id} ${platform}/${theme}/${state} = ${score}（${entry.commit.slice(0, 8)}）`);
+    const head = git(root, ["rev-parse", "HEAD"]).trim();
+    const date = new Date().toISOString().slice(0, 10);
+    const touched = new Set();
+    // 先校验全部格子再写盘，批量记录不会只写进一半。
+    const entries = items.map((item) => {
+      const screen = map.screens.find((s) => s.id === item.screen);
+      if (!screen) throw new Error(`地图里没有界面 ${item.screen}`);
+      const { platform, theme, state, score } = item;
+      if (!platform || !theme || !state || typeof score !== "number" || Number.isNaN(score)) throw new Error("record 需要 --platform --theme --state --score");
+      if (!platformsOf(screen, map.config).includes(platform)) throw new Error(`${screen.id} 不支持平台 ${platform}`);
+      if (!(screen.themes ?? map.config.themes).includes(theme)) throw new Error(`${screen.id} 没有主题 ${theme}`);
+      if (!screen.states.some((s) => s.id === state)) throw new Error(`${screen.id} 没有状态 ${state}`);
+      if (!(score >= 0 && score <= 10)) throw new Error("分数须在 0–10 之间");
+      const paths = sourcesOf(screen, platform);
+      if (!paths.length) throw new Error(`${screen.id} 没有登记 ${platform} 的 sources，无法判断以后是否过期`);
+      const dirty = git(root, ["status", "--porcelain", "--", ...paths]).trim();
+      if (dirty) throw new Error(`先提交界面改动再记录分数：\n${dirty}`);
+      const entry = { platform, theme, state, score, commit: head, date, deductions: item.deductions ?? [], ...(item.shot ? { shot: item.shot } : {}) };
+      return { screen, entry };
+    });
+    for (const { screen, entry } of entries) {
+      const { platform, theme, state } = entry;
+      screen.scores = [...(screen.scores ?? []).filter((x) => !(x.platform === platform && x.theme === theme && x.state === state)), entry];
+      touched.add(screen);
+    }
+    touched.forEach(writeScreen);
+    if (entries.length === 1) {
+      const { screen, entry } = entries[0];
+      log(`已记录 ${screen.id} ${entry.platform}/${entry.theme}/${entry.state} = ${entry.score}（${head.slice(0, 8)}）`);
+    } else log(`已记录 ${entries.length} 格（${touched.size} 个界面，${head.slice(0, 8)}）`);
     return 0;
   }
 
