@@ -54,7 +54,7 @@ node <技能目录>/scripts/route-playground.mjs [--caps-file ...]
 
 ## 开工前
 
-1. 调一次 `orchestrator_capabilities` 并把返回 JSON 落盘（例如 `/tmp/t3-caps.json`），`--caps-file` 用它判断 `canRunChildTask`、模型清单和选项名。MCP 工具没出现时，按 T3 注入的说明直接调用一次，或用 `acp-mcp-call` 兜底（语法见 `t3-code` 技能）输出重定向到文件。落盘后跑 `route.mjs audit --caps-file /tmp/t3-caps.json` 核对路由数据与目录一致。caps 文件没有 TTL：每次开工重新落盘，快照超 30 分钟脚本会把「不可派/无此模型」类判定标为可能过期——见到告警就重调覆盖，不凭旧快照拍板。
+1. 调一次 `orchestrator_capabilities` 并把返回 JSON 原样落盘（例如 `/tmp/t3-caps.json`），`--caps-file` 用它判断 `canRunChildTask`、模型清单和选项名。能力目录是原始证据：保留全部返回的 provider、模型、options 与约束；从 MCP 包装提取 JSON 时只做结构解包。审计缺项时查原始返回与省略标记，需要补全就按当前工具支持的搜索参数取证并保留响应；未查到的保持未知，不手工补写模型、可用性或选项来消除审计报错。MCP 工具没出现时，按 T3 注入的说明直接调用一次，或用 `acp-mcp-call` 兜底（语法见 `t3-code` 技能）输出重定向到文件。落盘后跑 `route.mjs audit --caps-file /tmp/t3-caps.json` 核对路由数据与目录一致。caps 文件没有 TTL：每次开工重新落盘，快照超 30 分钟脚本会把「不可派/无此模型」类判定标为可能过期——见到告警就重调覆盖，不凭旧快照拍板。
 2. 指定实现、独立审查和最终验证三类职责。最终验证始终只有一个负责人（默认主代理，可明确交给一个验证子代理）；交接时先结束旧负责人的检查。
 
 ## 派活
