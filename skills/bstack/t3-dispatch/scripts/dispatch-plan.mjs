@@ -2,12 +2,14 @@
 // 派活备选：从空位反推，只为有空位的仓库列候选，查重、粗排后给一张精简表，模型只在表里挑。
 // 取代「把全部候选导成文本逐段读」——那一步在首次接入新仓库时独占了一轮巡检的大半时间。
 //
-// 用法：node dispatch-plan.mjs --capacity <capacity-only 快照> [--per-slot 3] [--excerpt 0] [--detail 0]
+// 用法：node dispatch-plan.mjs --capacity <capacity-only 快照> [--per-slot 3] [--excerpt 0] [--detail 0] [--brief-dir <目录>]
 // 默认只取元数据，先分工再由负责人取详情；--detail N 仅用于已决定主代理处理的小批。
-// 输出 { slots, selection, repos: [{ repo, slots, devices, reviewed, shortlist, excluded, poolMissing, more }], skipped }：
-//   selection   当前容量时点的逐项目挑题分工（delegate / lead / skip）；由模型执行委派，不代表已启动
-//   slots       本轮最多还能派几个（perRun、perDay 余量与各仓库空位之和取小；perDay 为 0 不限）；为 0 时不列候选
-//   devices     该仓库有空位的设备（alias、environmentId、projectId、free）
+// --brief-dir 为每个待筛仓库写一份子代理输入（本仓库的候选、设备容量、相关台账与命令用法），路径列在 briefs。
+// 输出 { slots, projectedSlots, selection, repos: [{ repo, slots, projectedSlots, devices, reviewed, shortlist, excluded, poolMissing, more }], skipped }：
+//   selection   当前容量时点的逐项目挑题分工（delegate / lead / skip）；按 projectedSlots 判，由模型执行委派，不代表已启动
+//   slots       本轮按实际空位最多还能派几个（perRun、perDay 余量与各仓库空位之和取小；perDay 为 0 不限）
+//   projectedSlots 同口径但含快照 --expect-release 的预计名额；挑题按它覆盖，建线按复核后的实际空位；为 0 时不列候选
+//   devices     该仓库有实际或预计空位的设备（alias、environmentId、projectId、free、projected）
 //   shortlist   粗排后的前 max(5, 空位×per-slot) 条：ref、id、title、labels、excerpt、category（粗分类）、
 //               rank（越小越优先）、needsInfo（正文像在等补信息）、priority（用户优先）、attempts
 //   reviewed    与本轮准入列表匹配、版本与有效期未变的 ready 旧依据；源码、依赖与容量仍须发前复核
@@ -19,7 +21,8 @@
 // 用户优先标签先于粗排；同类按「高 / 中 / 低」标记。挑选仍按 SKILL.md 第 2 步逐条判断。
 // 有 T3 MCP 会话时，搜索表内编号并回读线程当前状态；无会话时标题只作线索，台账仍排除在派项。
 
-import { readFileSync, realpathSync } from "node:fs";
+import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfig } from "./dispatch-config.mjs";
 import { ledgerSummary, readLedger, run } from "./issue-source.mjs";
@@ -57,16 +60,17 @@ export const SELECTION_BATCH = 5;
 
 // 固定在候选深读之前分工，工作量含表外待筛项；不把共享池上限当成子代理独占名额。
 export function selectionOf(plan, capacityAt = null) {
+  const open = (x) => (x.projectedSlots ?? x.slots) > 0;
   const workload = (plan.repos ?? []).map((r) => ({
-    repo: r.repo, slots: r.slots, devices: (r.devices ?? []).map((d) => d.alias),
+    repo: r.repo, slots: r.slots, projectedSlots: r.projectedSlots ?? r.slots, devices: (r.devices ?? []).map((d) => d.alias),
     pendingCount: (r.shortlist ?? []).length + (r.more ?? 0) + (r.excluded ?? []).filter((e) => e.duplicateReview).length,
     reusedCount: (r.reviewed ?? []).length,
   }));
-  const screening = workload.filter((r) => plan.slots > 0 && r.slots > 0 && r.pendingCount > 0);
+  const screening = workload.filter((r) => open(plan) && r.projectedSlots > 0 && r.pendingCount > 0);
   return {
     capacityAt, batchThreshold: SELECTION_BATCH,
     assignments: workload.map((r) => {
-      if (!(plan.slots > 0 && r.slots > 0)) return { ...r, mode: "skip", reason: "no_slots" };
+      if (!(open(plan) && r.projectedSlots > 0)) return { ...r, mode: "skip", reason: "no_slots" };
       if (!r.pendingCount) return { ...r, mode: r.reusedCount ? "lead" : "skip", reason: r.reusedCount ? "reuse_evidence" : "no_candidates" };
       if (screening.length > 1) return { ...r, mode: "delegate", reason: "multiple_repos" };
       if (r.pendingCount >= SELECTION_BATCH) return { ...r, mode: "delegate", reason: "large_batch" };
@@ -94,19 +98,22 @@ export function buildPlan({ capacity, config, environments, ledger, listOf, perS
       const project = (e.projects ?? []).find((p) => p.canonicalKey?.toLowerCase() === r.repo);
       if (!project) continue;
       const free = e.capacity?.freeByRepo?.[project.canonicalKey] ?? 0;
-      if (free > 0) devices.push({ alias: aliasOf.get(e.environmentId) ?? e.label, environmentId: e.environmentId, projectId: project.id, free });
+      const projected = Math.max(free, e.capacity?.projectedFreeByRepo?.[project.canonicalKey] ?? free);
+      if (projected > 0) devices.push({ alias: aliasOf.get(e.environmentId) ?? e.label, environmentId: e.environmentId, projectId: project.id, free, projected });
       else skipped.push({ repo: r.repo, device: aliasOf.get(e.environmentId) ?? e.label, reason: e.capacity?.blocked?.join("；") || "名额已满" });
     }
     const slots = Math.min(budget, devices.reduce((s, d) => s + d.free, 0));
-    repos.push({ repo: r.repo, slots, devices, shortlist: [], excluded: [], more: 0 });
+    const projectedSlots = Math.min(budget, devices.reduce((s, d) => s + d.projected, 0));
+    repos.push({ repo: r.repo, slots, projectedSlots, devices, shortlist: [], excluded: [], more: 0 });
   }
   const slots = Math.min(budget, repos.reduce((s, r) => s + r.slots, 0));
-  if (slots === 0) {
-    const plan = { slots, budget, launchedToday: summary.launched, repos: repos.map(({ shortlist, excluded, more, ...r }) => r), skipped };
+  const projectedSlots = Math.min(budget, repos.reduce((s, r) => s + r.projectedSlots, 0));
+  if (projectedSlots === 0) {
+    const plan = { slots, projectedSlots, budget, launchedToday: summary.launched, repos: repos.map(({ shortlist, excluded, more, ...r }) => r), skipped };
     return { ...plan, selection: selectionOf(plan, capacity.generatedAt ?? null) };
   }
   for (const r of repos) {
-    if (!r.slots) continue;
+    if (!r.projectedSlots) continue;
     const listed = listOf(r.repo);
     const cands = [];
     const saved = new Map((candidatePool[r.repo] ?? []).map((e) => [e.id, e]));
@@ -123,7 +130,7 @@ export function buildPlan({ capacity, config, environments, ledger, listOf, perS
       }
     }
     cands.sort((a, b) => Number(b.priority) - Number(a.priority) || a.needsInfo - b.needsInfo || a.rank - b.rank || String(b.updatedAt).localeCompare(String(a.updatedAt)));
-    const n = Math.max(5, r.slots * perSlot);
+    const n = Math.max(5, r.projectedSlots * perSlot);
     // 旧依据单列，新候选仍按原优先级粗排；主代理合并裁决，缓存不等于可直接派出。
     r.reviewed = cands.filter((c) => c.cachedReview?.reuseEvidence);
     const unreviewed = cands.filter((c) => !c.cachedReview?.reuseEvidence);
@@ -133,8 +140,45 @@ export function buildPlan({ capacity, config, environments, ledger, listOf, perS
     r.labelConflicts = listed.skipped.filter((s) => s.conflict);
     r.deferred = listed.skipped.filter((s) => /bstack:defer/.test(s.reason ?? "")).length;
   }
-  const plan = { slots, budget, launchedToday: summary.launched, repos, skipped };
+  const plan = { slots, projectedSlots, budget, launchedToday: summary.launched, repos, skipped };
   return { ...plan, selection: selectionOf(plan, capacity.generatedAt ?? null) };
+}
+
+const SCRIPTS = dirname(fileURLToPath(import.meta.url));
+export const briefName = (repo) => `${repo.replace(/[^\w.-]+/g, "_")}.json`;
+
+// 挑题子代理的唯一输入：只含本仓库的切片，字段名与计划一致，省掉子代理自己摸大文件结构。
+export function repoBriefOf(plan, repo, { capacity, ledger = [], scripts = SCRIPTS } = {}) {
+  const r = plan.repos.find((x) => x.repo === repo);
+  const ids = new Set(r.devices.map((d) => d.environmentId));
+  const summary = ledgerSummary(ledger);
+  const mine = (e) => e.repo === repo;
+  return {
+    repo,
+    capacityAt: capacity?.generatedAt ?? null,
+    assignment: plan.selection?.assignments?.find((a) => a.repo === repo) ?? null,
+    slots: r.slots,
+    projectedSlots: r.projectedSlots,
+    devices: r.devices.map((d) => {
+      const e = (capacity?.environments ?? []).find((x) => x.environmentId === d.environmentId);
+      const key = (e?.projects ?? []).find((p) => p.id === d.projectId)?.canonicalKey;
+      const pool = (e?.capacity?.pools ?? []).find((p) => p.name === e?.capacity?.poolByRepo?.[key]);
+      return { ...d, pool: pool?.name ?? null, occupying: pool?.occupying ?? [], releasing: pool?.releasing ?? [] };
+    }),
+    openThreads: (capacity?.environments ?? []).filter((e) => ids.has(e.environmentId))
+      .flatMap((e) => (e.openThreads ?? []).map((t) => ({ ...t, environmentId: e.environmentId }))),
+    reviewed: r.reviewed ?? [],
+    shortlist: r.shortlist ?? [],
+    more: r.more ?? 0,
+    excluded: r.excluded ?? [],
+    poolMissing: r.poolMissing ?? [],
+    ledger: { active: summary.active.filter(mine), pending: summary.pending.filter(mine), recent: summary.recent.filter(mine) },
+    commands: {
+      list: `node ${join(scripts, "issue-source.mjs")} list --repo ${repo} --excerpt 0`,
+      show: `node ${join(scripts, "issue-source.mjs")} show --repo ${repo} --id <list 输出的 id，不是 ref>`,
+      validate: `node ${join(scripts, "candidate-pool.mjs")} validate --file <输出目录>/patch.json`,
+    },
+  };
 }
 
 // 表内问题再按编号在各设备该仓库的项目里搜一次：标题不含编号的线程靠标题查重会漏。
@@ -174,7 +218,7 @@ if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToP
   };
   const file = opt("capacity");
   if (!file) {
-    console.error("用法：node dispatch-plan.mjs --capacity <capacity-only 快照> [--per-slot 3] [--excerpt 0] [--detail 0]");
+    console.error("用法：node dispatch-plan.mjs --capacity <capacity-only 快照> [--per-slot 3] [--excerpt 0] [--detail 0] [--brief-dir <目录>]");
     process.exit(2);
   }
   try {
@@ -188,21 +232,22 @@ if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToP
     let poolWarning;
     try { candidatePool = readPool().state.repos; }
     catch (e) { poolWarning = `候选池读取失败，保留原文件，本轮按新候选筛选：${e.message}`; }
+    const ledger = readLedger();
     const plan = buildPlan({
       capacity,
       config,
       environments: loadEnvironments().environments,
-      ledger: readLedger(),
+      ledger,
       listOf: (repo) => run("list", { repo, excerpt }),
       perSlot: Number(opt("per-slot", 3)),
       candidatePool,
     });
-    if (plan.slots > 0 && hasSession()) {
+    if (plan.projectedSlots > 0 && hasSession()) {
       await connect("t3-dispatch-plan");
       await searchDupes(plan, capacity);
-    } else if (plan.slots > 0) plan.warnings = ["没有 T3 MCP 会话，标题命中仅作 threadMatch 线索；按查重规则回读后再决定是否排除"];
+    } else if (plan.projectedSlots > 0) plan.warnings = ["没有 T3 MCP 会话，标题命中仅作 threadMatch 线索；按查重规则回读后再决定是否排除"];
     plan.selection = selectionOf(plan, capacity.generatedAt ?? null);
-    if (plan.slots > 0 && detail > 0) {
+    if (plan.projectedSlots > 0 && detail > 0) {
       for (const r of plan.repos) {
         if (plan.selection.assignments.find((a) => a.repo === r.repo)?.mode !== "lead") continue;
         for (const c of r.shortlist) {
@@ -222,6 +267,16 @@ if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToP
       }
     }
     if (poolWarning) (plan.warnings ??= []).push(poolWarning);
+    const briefDir = opt("brief-dir");
+    if (briefDir && plan.projectedSlots > 0) {
+      mkdirSync(briefDir, { recursive: true });
+      plan.briefs = {};
+      for (const r of plan.repos.filter((x) => x.projectedSlots > 0)) {
+        const file = join(briefDir, briefName(r.repo));
+        writeFileSync(file, `${JSON.stringify(repoBriefOf(plan, r.repo, { capacity, ledger }), null, 1)}\n`);
+        plan.briefs[r.repo] = file;
+      }
+    }
     console.log(JSON.stringify(plan, null, 1));
   } catch (e) {
     console.error(e.message);

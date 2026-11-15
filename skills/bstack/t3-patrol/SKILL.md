@@ -9,6 +9,8 @@ description: 代表用户巡检、定案各 T3 环境未结线程。仅定时任
 
 每轮都是新会话，看不到前几轮的对话：跨轮事实（上一轮时间、档位、额度失败、各设备占用数、待交接队列）存在状态文件里，由快照带出来；上一轮对某线程说过什么，读该线程里的 `【巡检】` 消息。
 
+工具延迟加载的 harness（如 pi）先用一次 `tool_search` 同时加载本轮直接调用的 T3 工具：`t3_environment_links`、`t3_thread_read`、`t3_thread_list`、`t3_thread_search`、`t3_pending_request`、`orchestrator_capabilities`、`delegate_task`、`task_status`。
+
 调 `t3_environment_links`：返回里的 `environmentId` 是本机，`links` 是其他已连接环境。不可达的环境在报告里记一笔，本轮跳过。
 
 设备对照取快照的 `environmentsFile`：`unlisted`、`missing`、`errors` 都为空时，各环境条目的 `alias`、`device` 就是对照表。否则按 [快照与补读](references/snapshot.md#设备对照) 重新认，并在「例行复核」建议用户运行 bstack-setup 更新 `environments.json`。
@@ -126,7 +128,7 @@ node <技能目录>/scripts/patrol-evidence.mjs --from /tmp/t3-patrol-snapshot.j
 
 1. **发送前刷新**：目标线程在快照之后又有新 run 或新消息时（`patrol-evidence` 可见），按新状态重判，跳过过时提醒。
 2. **幂等**：比较本次拟动作与该线程里上一条 `【巡检】` 消息及之后的进展。相同请求且无新事实不重发，但持续超时仍须判定并报告：无新增进展本身不能销账。未启动查恢复，已接收却未执行查具体执行缺口，方案已被反例证伪走技术收敛。刚发请求不满 `thresholds.resendCooldownMinutes` 且无失败证据，记等待执行。
-3. 发前核档，按 recovery 处理不可用模型；发 `【巡检】` 前缀消息，带目标 environmentId、mode:auto。本轮的消息、改名、settle、interrupt 写成一个 calls 文件，用 `node <技能目录>/scripts/patrol-batch.mjs --calls <文件>` 一次执行。文件是 UTF-8 JSON 数组，每项 `{"label":"M10 #28","tool":"t3_thread_send","args":{"environmentId":"…","threadId":"…","mode":"auto","message":"【巡检】…"}}`；改名用 `t3_thread_update`（`action:"rename"`、`title`），settle 用 `t3_thread_organize`（`action:"settle"`），回读用 `t3_thread_read`（`limit:1`）。保存 messageId、runId、delivery 和预期可观察结果。
+3. 发前核档，按 recovery 处理不可用模型；发 `【巡检】` 前缀消息，带目标 environmentId、mode:auto。第 3 步判完全部有事线程后，本轮的消息、改名、settle、interrupt 与交接建线（[交接与 settle](references/handoff.md#有提示词时按顺序处理) 第 4 步的 `t3_thread_launch`）写成一个 calls 文件，用 `node <技能目录>/scripts/patrol-batch.mjs --calls <文件>` 一次执行；交接来源的 settle 等第 5 步接手验收后批量做。文件是 UTF-8 JSON 数组，每项 `{"label":"M10 #28","tool":"t3_thread_send","args":{"environmentId":"…","threadId":"…","mode":"auto","message":"【巡检】…"}}`；改名用 `t3_thread_update`（`action:"rename"`、`title`），settle 用 `t3_thread_organize`（`action:"settle"`），回读用 `t3_thread_read`（`limit:1`）。保存 messageId、runId、delivery 和预期可观察结果。
 4. 全部发完后，用一条 `patrol-evidence --from <patrol-batch 结果.json>` 批量回读（`--after` 取消息所在 position，或看 `recentRuns` 里对应 `runId`）。starting/queued 尚未启动时可再等一次，每次不超过 60 秒，累计约 2 分钟；仍排队记未启动及卡点。不要用不相关的最新 run 替代对应 run。
 5. run failed 按 recovery 归因后当轮补救一次，再验证；再次失败记录阻塞与恢复条件。已 running/completed 仅证实启动/结束，读到预期动作证据才能写执行。completed 却又在提问时重新判分支，不写任务完成。
 
@@ -143,18 +145,26 @@ node <技能目录>/scripts/patrol-evidence.mjs --from /tmp/t3-patrol-snapshot.j
 
 ## 5. 派活
 
-第 4 步的动作回读完再派：本轮要 settle 的线程（含交接接手后才 settle 的来源线程）先全部 settle，空位以此为准。派活之后又 settle 了线程，就再跑一次 t3-dispatch 第 1 步，有新空位接着派，直到没有空位或没有可派的问题。下文 `<t3-dispatch 技能目录>` 与本技能目录同级。
+第 4 步的批次回读完再派。本轮只在两个时点取派活容量：挑题前的**容量切点**和建线前的**复核**。会释放名额却要等别人完成的动作（交接接手、线程收尾）在切点登记为预计释放，挑题按含预计名额的容量一次铺开；复核后不再取容量。下文 `<t3-dispatch 技能目录>` 与本技能目录同级。
 
 1. 先判能不能派。以下任一成立就本轮不派，在「本轮派活」写明原因：
    - `node <t3-dispatch 技能目录>/scripts/dispatch-config.mjs` 跑不了（技能没装），或 `errors` 非空；
    - `config.mode` 是 `off`，或 `config.repos` 为空；
    - `~/.config/bstack/PAUSE` 存在；
    - 本轮模型阶梯已降到 `fallback` 档：额度紧张时只做恢复。
-2. 交接优先：重读 `patrol-state.mjs` 的 `pendingHandoffs`，合并本轮新增项，按 [待交接队列](references/handoff.md#待交接队列) 先用动作后空位重试。每个待交接项都有本轮结果后，才把剩余空位交给新问题；交接优先的阻挡范围按该文「派活隔离」落实到容量池。
-3. 按 t3-dispatch 技能执行，属于巡检调用：`dry-run` 走到它的第 2 步只出计划，`auto` 全程执行。它第 1 步的 `--capacity-only` 快照就是本轮动作之后的空位，同一动作状态只取一次，后续 settle 改变占用才刷新。挑题先按 t3-dispatch 计划的 `selection` 建分工记录、启动所需子代理，再按[项目挑选与跨轮候选池](../t3-dispatch/references/candidates.md)复用依据或补筛；后续容量变化保留前段分工与启动证据，不用最终池满追认未委派。本线程仍唯一负责交接优先级、共享池裁决、认领建线程及状态写入，逐线程巡检处置不下放。派活模型按 [t3-dispatch「派活模型」](../t3-dispatch/SKILL.md#派活模型) 选择，传入本轮已核实的额度失败证据与可用档位；恢复、交接和新问题共用这些证据。
-4. 本轮新派出的线程不再回到第 1–4 步判定，下一轮按候选正常巡检。
+2. **容量切点**：
 
-**完成标准**：全部待交接项已逐条复核并记录仍阻塞、已建待接手或有证据销账；挑题分工与实际委派结果已逐项目对账，缺启动记录的不能写成已委派或无需委派；每个设备的重型/通用任务池都有派活结果，余位按 [t3-dispatch 第 2 步停止条件](../t3-dispatch/SKILL.md#2-挑选) 核对并报告覆盖范围与缺口；`auto` 下每条派活都有认领结果、线程 link 和回读结论，失败的已归还；`dry-run` 的计划已列出。
+   ```bash
+   node <技能目录>/scripts/patrol-snapshot.mjs --capacity-only --expect-release <threadId>@<environmentId> ... > /tmp/t3-dispatch-capacity.json
+   ```
+
+   `--expect-release` 逐个列出此刻仍占位、本轮动作完成后会释放的线程：交接已建线、等接手后 settle 的来源，已发 M10/M17 等待收尾的线程。容量的 `releasing` 列出命中项，`projectedFreeByRepo` 是实际空位加上它们释放后的名额；顶层 `expectReleaseUnmatched` 是此刻已不占位或身份写错的项：已不占位的不用处理，写错的修正后再取。
+3. 交接优先：重读 `patrol-state.mjs` 的 `pendingHandoffs`，合并本轮新增项，按 [待交接队列](references/handoff.md#待交接队列) 用切点的实际空位重试。每个待交接项都有本轮结果后，才把剩余空位与预计名额交给新问题；交接优先的阻挡范围按该文「派活隔离」落实到容量池。
+4. 按 t3-dispatch 技能执行，属于巡检调用：`dry-run` 走到它的第 2 步只出计划，`auto` 全程执行。它第 1 步改用上面的切点快照，`dispatch-plan` 按含预计名额的 `projectedSlots` 列候选、定分工。挑题先按计划的 `selection` 建分工记录、启动所需子代理，再按[项目挑选与跨轮候选池](../t3-dispatch/references/candidates.md)复用依据或补筛。子代理运行期间回读交接目标与收尾线程，已接手的来源与已交付的线程用一个 calls 文件批量 settle，交接销账用一个数组文件 `handoff-resolve`。本线程仍唯一负责交接优先级、共享池裁决、认领建线程及状态写入，逐线程巡检处置不下放。派活模型按 [t3-dispatch「派活模型」](../t3-dispatch/SKILL.md#派活模型) 选择，传入本轮已核实的额度失败证据与可用档位；恢复、交接和新问题共用这些证据。
+5. **建线前复核**：挑题结果收齐后，不带 `--expect-release` 再跑一次 `--capacity-only` 写到 `/tmp/t3-dispatch-capacity-final.json`。空位先给切点后才有位的待交接项，再按 t3-dispatch 第 3 步用 `dispatch-launch --capacity /tmp/t3-dispatch-capacity-final.json` 派新问题，脚本拒绝超出实际空位的计划。预计名额没有释放的，把挑好的候选以 `ready`、`deferredBy: capacity` 存入候选池，下一轮直接复用。复核出现切点外的空位，只派候选池或本轮已核的 `ready` 项，不为它新开挑题。
+6. 本轮新派出的线程不再回到第 1–4 步判定，下一轮按候选正常巡检。
+
+**完成标准**：全部待交接项已逐条复核并记录仍阻塞、已建待接手或有证据销账；挑题分工与实际委派结果已逐项目对账，缺启动记录的不能写成已委派或无需委派；每个设备的重型/通用任务池都按切点容量（含预计名额）有挑题结果，并按复核容量写明派出、转入候选池或无合适任务，余位按 [t3-dispatch 第 2 步停止条件](../t3-dispatch/SKILL.md#2-挑选) 核对并报告覆盖范围与缺口；`auto` 下每条派活都有认领结果、线程 link 和回读结论，失败的已归还；`dry-run` 的计划已列出。
 
 ## 6. 汇报
 

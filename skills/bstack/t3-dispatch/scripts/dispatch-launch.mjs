@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // 派出：按计划文件逐条认领、渲染提示词、建工作树线程、记账、回读，失败归还。取代每轮现写的派活脚本。
 //
-// 用法：node dispatch-launch.mjs --plan <计划 JSON> [--dry-run]
+// 用法：node dispatch-launch.mjs --plan <计划 JSON> [--capacity <建线前复核的 capacity-only 快照>] [--dry-run]
 // 计划 JSON（UTF-8 文件，推荐理由写在里面，不进命令行）：
 //   { "launches": [ { "repo": "<repos[].repo>", "ids": ["<问题 ID>", …], "environmentId": "…", "projectId": "…",
 //                     "title": "INT-1234 主题", "reason": "推荐理由" } ], "modelSelection": { "instanceId": "…", "model": "…", "options": {} } }
@@ -18,7 +18,8 @@
 //   5. 回读：每 10 秒读一次，最多 90 秒，直到 run 进入 starting/running 且有 worktreePath。
 // 建线程报错、或线程/run 已失败时归还本条认领的全部问题。90 秒后仍在 preparing/queued 不算失败（大仓库建工作树就要这么久）：
 // 认领与台账保留，输出 pending，下一轮巡检按候选核对；归还会把已经开工的问题状态改回去。
-// --dry-run 只校验计划格式（仓库在配置里、字段齐全），不认领不建线程。
+// --capacity 先按复核快照的实际空位（同设备同池合计，不看 projected）校验整份计划，超额就整份不执行。
+// --dry-run 只校验计划格式（仓库在配置里、字段齐全）与 --capacity 名额，不认领不建线程。
 // 输出 [{ title, ids, claimed, link, threadId, status, worktreePath, pending, duplicate, error, released }]；有失败时退出码 1。
 
 import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
@@ -47,6 +48,26 @@ export function validatePlan(plan, config) {
     if (!config.repos.some((r) => r.repo === String(l.repo ?? "").toLowerCase())) errors.push(`${at}.repo：${l.repo} 不在 t3-dispatch.json 的 repos 里`);
     if (!Array.isArray(l.ids) || !l.ids.length || !l.ids.every((x) => typeof x === "string" && x)) errors.push(`${at}.ids：须为非空的问题 ID 数组`);
     for (const k of ["environmentId", "projectId", "title", "reason"]) if (typeof l[k] !== "string" || !l[k].trim()) errors.push(`${at}.${k}：缺失`);
+  }
+  return errors;
+}
+
+// 挑题可按预计名额覆盖，建线只认实际空位：同设备同池的仓库共享 freeByRepo 给出的池余位。
+export function capacityErrors(plan, capacity) {
+  const errors = [];
+  const used = new Map();
+  for (const [i, l] of (plan?.launches ?? []).entries()) {
+    const e = (capacity?.environments ?? []).find((x) => x.environmentId === l.environmentId);
+    const key = (e?.projects ?? []).find((p) => p.id === l.projectId)?.canonicalKey;
+    if (!e || e.error || !key) {
+      errors.push(`launches[${i}]：复核快照里找不到 ${l.environmentId}/${l.projectId}`);
+      continue;
+    }
+    const pool = `${l.environmentId}/${e.capacity?.poolByRepo?.[key] ?? "?"}`;
+    const free = e.capacity?.freeByRepo?.[key] ?? 0;
+    const n = (used.get(pool) ?? 0) + 1;
+    used.set(pool, n);
+    if (n > free) errors.push(`launches[${i}]（${l.title}）：${pool} 实际空位 ${free}，计划占到第 ${n} 个；未释放的预计名额不能建线，该项转入候选池`);
   }
   return errors;
 }
@@ -170,8 +191,10 @@ if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToP
   const args = process.argv.slice(2);
   const i = args.indexOf("--plan");
   const file = i >= 0 ? args[i + 1] : null;
-  if (!file) {
-    console.error("用法：node dispatch-launch.mjs --plan <计划 JSON> [--dry-run]");
+  const c = args.indexOf("--capacity");
+  const capacityFile = c >= 0 ? args[c + 1] : null;
+  if (!file || (c >= 0 && !capacityFile)) {
+    console.error("用法：node dispatch-launch.mjs --plan <计划 JSON> [--capacity <capacity-only 快照>] [--dry-run]");
     process.exit(2);
   }
   try {
@@ -179,6 +202,7 @@ if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToP
     if (cfgErrors.length) throw new Error(cfgErrors.join("；"));
     const plan = JSON.parse(readFileSync(file, "utf8").replace(/^\uFEFF/, ""));
     const errors = validatePlan(plan, config);
+    if (capacityFile) errors.push(...capacityErrors(plan, JSON.parse(readFileSync(capacityFile, "utf8"))));
     if (errors.length) throw new Error(errors.join("\n"));
     if (args.includes("--dry-run")) {
       console.log(JSON.stringify({ formatValid: true, projectBinding: "not-checked", launches: plan.launches.length }, null, 1));

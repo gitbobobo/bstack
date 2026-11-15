@@ -6,9 +6,9 @@
 
 交接完成的界限是**目标线程实际接手**，容量不足只是阻塞状态。待办存于 `patrol-state.mjs` 的 `pendingHandoffs`，每轮由快照与摘要原样带出；来源候选带 `pendingHandoff` 时保持有事。队列独立于候选：来源被过滤、归档或目标不可达时，仍逐条复核并报告。
 
-- **入账**：交接目标已确认后、容量判断前，用 `node <技能目录>/scripts/patrol-state.mjs handoff-put --file <UTF-8 JSON 文件>` 写入一项。字段：`sourceEnvironmentId`、`sourceThreadId`、`sourceLink`、`targetEnvironmentId`、`canonicalKey`（仓库身份）、`task`、`handoffRef`（可重读的收尾消息/提示词位置）、`waitingSince`（收尾时间，ISO 日期）、`blocker`（当前阻塞或待验证项）。以来源环境＋线程去重，更新保留最初等待时间。新建后补 `launchedThreadLink`，准备失败或未启动时保留它供查重。
-- **每轮复核**：按 `waitingSince` 先后，读取目标设备及任务池的本轮容量，再按下文第 2–5 步查重、建线与验收；已有建线先核其接手情况。来源没有新活动也照常复核，设备占用总数变化不作为前提。仍无空位则更新 `blocker`；有空位就交接。第 4 步动作释放空位后，派新问题前再核尚未接手的项。
-- **销账**：目标实际接手，或来源明确撤销后续段时，用 `handoff-resolve --file <UTF-8 JSON 文件>`。文件含 `sourceEnvironmentId`、`sourceThreadId`、`outcome`（`accepted` / `cancelled`）、`evidenceRef`（实际接手活动或撤销原文位置）。launch 成功只是已建线，验收前保留队列与来源。
+- **入账**：交接目标已确认后、容量判断前，用 `node <技能目录>/scripts/patrol-state.mjs handoff-put --file <UTF-8 JSON 文件>` 写入；文件可以是单项或数组，同批多项一次写入。字段：`sourceEnvironmentId`、`sourceThreadId`、`sourceLink`、`targetEnvironmentId`、`canonicalKey`（仓库身份）、`task`、`handoffRef`（可重读的收尾消息/提示词位置）、`waitingSince`（收尾时间，ISO 日期）、`blocker`（当前阻塞或待验证项）。以来源环境＋线程去重，更新保留最初等待时间。新建后补 `launchedThreadLink`，准备失败或未启动时保留它供查重。
+- **每轮复核**：按 `waitingSince` 先后，读取目标设备及任务池的本轮容量，再按下文第 2–5 步查重、建线与验收；已有建线先核其接手情况。来源没有新活动也照常复核，设备占用总数变化不作为前提。仍无空位则更新 `blocker`；有空位就交接。建线随 [SKILL.md 第 4 步](../SKILL.md#4-发送与动作验证) 的批次发出；接手验收在第 5 步挑题期间批量回读，未接手的来源在容量切点登记为预计释放；建线前复核时，空位先给尚未建线的项。
+- **销账**：目标实际接手，或来源明确撤销后续段时，用 `handoff-resolve --file <UTF-8 JSON 文件>`，同批多项写成数组。每项含 `sourceEnvironmentId`、`sourceThreadId`、`outcome`（`accepted` / `cancelled`）、`evidenceRef`（实际接手活动或撤销原文位置）。launch 成功只是已建线，验收前保留队列与来源。
 - **补旧账**：首次启用队列的快照自动全量（`triage.reason` 为「待交接队列首次对账」），从未 settle 的已合并来源核收尾与原任务，把未交接项入账；旧报告中的「等待空位」只作发现线索，核当前去向后再入账。
 
 **完成标准**：每个队列项都有本轮目标容量与结果：仍阻塞、已建待接手，或有证据销账。状态文件写入/读取失败列阻塞，恢复前暂停新问题派活，保留待办证据。

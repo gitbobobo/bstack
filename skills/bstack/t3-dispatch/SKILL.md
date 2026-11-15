@@ -31,9 +31,9 @@ description: 从问题来源挑问题，在各 T3 环境建工作树线程派活
 
 ## 1. 空位与备选
 
-1. `node <t3-patrol 技能目录>/scripts/patrol-snapshot.mjs --capacity-only > /tmp/t3-dispatch-capacity.json`。每个环境带 `capacity`、`projects`（项目 id 与 `canonicalKey`）和 `openThreads`（未 settle 的顶层线程标题）。退出码 2 表示当前 harness 拿不到 T3 MCP 会话（如 Codex）：改走 [手工派活](references/manual.md)。
-2. `node <技能目录>/scripts/dispatch-plan.mjs --capacity /tmp/t3-dispatch-capacity.json > /tmp/t3-dispatch-plan.json`。它按 [t3-patrol handoff.md 第 3 步](../t3-patrol/references/handoff.md) 的口径算各仓库目标设备的可建数，以 `limits.perRun` 与 `limits.perDay` 余量封顶，只为有空位的仓库取实时准入列表，排除在派台账与暂缓标签；线程标题仅作线索，搜索命中经回读确认未结后列入 `excluded`，执行范围由负责人按[查重](references/duplicates.md)复核。旧候选依据进 `reviewed`；其余按[派活标签](references/labels.md)与技术粗排取首批 `shortlist`。默认只读元数据并输出逐项目分工 `selection`，避免主代理在委派前串行取完详情；正文与共识由指定负责人按需补读。字段见脚本头注释。
-3. `slots` 为 0：到此为止，按第 4 步报告空位，`skipped` 里是各设备卡住的原因（名额、闸）。
+1. `node <t3-patrol 技能目录>/scripts/patrol-snapshot.mjs --capacity-only > /tmp/t3-dispatch-capacity.json`；巡检调用时改用 t3-patrol 第 5 步带 `--expect-release` 的容量切点快照，不另取。每个环境带 `capacity`、`projects`（项目 id 与 `canonicalKey`）和 `openThreads`（未 settle 的顶层线程标题）。退出码 2 表示当前 harness 拿不到 T3 MCP 会话（如 Codex）：改走 [手工派活](references/manual.md)。
+2. `node <技能目录>/scripts/dispatch-plan.mjs --capacity /tmp/t3-dispatch-capacity.json --brief-dir /tmp/t3-dispatch-briefs > /tmp/t3-dispatch-plan.json`。它按 [t3-patrol handoff.md 第 3 步](../t3-patrol/references/handoff.md) 的口径算各仓库目标设备的可建数，以 `limits.perRun` 与 `limits.perDay` 余量封顶，只为有空位的仓库取实时准入列表，排除在派台账与暂缓标签；线程标题仅作线索，搜索命中经回读确认未结后列入 `excluded`，执行范围由负责人按[查重](references/duplicates.md)复核。旧候选依据进 `reviewed`；其余按[派活标签](references/labels.md)与技术粗排取首批 `shortlist`。默认只读元数据并输出逐项目分工 `selection`，避免主代理在委派前串行取完详情；正文与共识由指定负责人按需补读。字段见脚本头注释。
+3. `projectedSlots` 为 0（没有预计名额时等于 `slots`）：到此为止，按第 4 步报告空位，`skipped` 里是各设备卡住的原因（名额、闸）。
 
 完成标准：每台目标设备写出可建数及其依据，卡在 0 的写明卡在哪。用户要的数量超过可建数时，按可建数派并说明原因。
 
@@ -67,15 +67,18 @@ description: 从问题来源挑问题，在各 T3 环境建工作树线程派活
 
 **停止条件**：派活预算用完、可派池已满，或全量列表里对该余位池可能匹配的候选均已复核处置。只有最后一种才能写「没有合适任务」，并给候选覆盖范围与阻塞分类；空位不降低准入标准。工具失败或本轮执行预算耗尽导致提前结束时，标「筛选未完成」，列剩余可能匹配项的编号、最小待查动作与断点；未核项不能计入硬阻塞或无合适任务。候选有限且每条只核一次，不对同一缺口反复查询。
 
-完成标准：每份计划的项目分工已对账（taskId/结果、主代理处理原因或失败/接管证据）；每台设备选中的数不超过它的 `free` 与 `slots`；同设备同池的所有仓库合计占用不超过该池余位（以 `poolByRepo` 分组）；每条选中项有目标、价值与执行条件的依据，切片项附交接边界；被跳过的高优先级与歧义项留编号及关键依据，其余按原因合并计数；每个余位池有停止依据、已核/待核数；仍有派活预算与空位的池，可能匹配的待核项为零才算筛选完成。
+完成标准：每份计划的项目分工已对账（taskId/结果、主代理处理原因或失败/接管证据）；每台设备选中的数不超过它的 `projected` 与 `projectedSlots`，建线按第 3 步复核的实际空位裁剪；同设备同池的所有仓库合计占用不超过该池余位（以 `poolByRepo` 分组）；每条选中项有目标、价值与执行条件的依据，切片项附交接边界；被跳过的高优先级与歧义项留编号及关键依据，其余按原因合并计数；每个余位池有停止依据、已核/待核数；仍有派活预算与空位的池，可能匹配的待核项为零才算筛选完成。
 
 ## 3. 派出
 
 **绑定身份**：认领前用目标环境的 `t3_project_list`（翻完分页）核 `projectId` 的 `repositoryIdentity.canonicalKey` 与计划 `repo` 完全一致；环境、项目、仓库是一组身份，从同一条记录取。清单不可读或身份不符就停该项，保留未认领状态。`dispatch-launch` 执行时自动核；手工派活与跨设备交接按同一规则核实，问题来源的项目 ID 不能替代 T3 项目身份。
 
 ```bash
-node <技能目录>/scripts/dispatch-launch.mjs --plan <计划文件> > /tmp/t3-dispatch-launched.json
+node <t3-patrol 技能目录>/scripts/patrol-snapshot.mjs --capacity-only > /tmp/t3-dispatch-capacity-final.json   # 巡检调用时用 t3-patrol 第 5 步的复核快照
+node <技能目录>/scripts/dispatch-launch.mjs --plan <计划文件> --capacity /tmp/t3-dispatch-capacity-final.json > /tmp/t3-dispatch-launched.json
 ```
+
+`--capacity` 按复核快照的实际空位校验整份计划，同设备同池合计超额就整份不执行；把超出的项（通常是预计名额未释放）移出计划、按[候选池](references/candidates.md#3-持久化未派项)存为 `ready` 后重跑。
 
 逐条核绑定身份、按主问题编号跨环境查重并回读当前状态（表外挑的问题也覆盖；范围判定按[查重](references/duplicates.md)）、认领、按 `repos[].template` 渲染提示词、`t3_thread_launch` 建工作树线程（模型取计划的 `modelSelection`，省略则取配置；`runtimeMode` 取配置，`clientRequestId` 防重建）、记账、回读 run 与 `worktreePath`（最多等 90 秒）。结果按字段读：
 

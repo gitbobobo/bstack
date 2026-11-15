@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { buildPlan, rankOf, selectionOf } from "./dispatch-plan.mjs";
+import { briefName, buildPlan, rankOf, repoBriefOf, selectionOf } from "./dispatch-plan.mjs";
 import { validateCandidate } from "./candidate-pool.mjs";
-import { validatePlan, launchConfigFor } from "./dispatch-launch.mjs";
+import { capacityErrors, validatePlan, launchConfigFor } from "./dispatch-launch.mjs";
 
 const MUS = "fj.frp.musiver.cn/fjbobo/musiver";
 const TMA = "fj.frp.musiver.cn/fjbobo/tma";
@@ -204,4 +204,47 @@ test("用户优先项在截表前提升，暂缓排除，无标签仍参与技�
   assert.equal(r.shortlist.length, 5);
   assert.ok(r.shortlist.slice(1).every((c) => !c.priority));
   assert.ok(r.excluded.some((c) => c.ref === "INT-91"));
+});
+
+test("预计名额：实际满但有预计释放时照常列候选与分工，slots 仍按实际空位", () => {
+  const pc = env("e-pc", [0, 0]);
+  pc.capacity.projectedFreeByRepo = { [MUS]: 1, [TMA]: 0 };
+  const plan = buildPlan({ capacity: { generatedAt: "cut", environments: [pc] }, config, environments, ledger: [],
+    listOf: () => ({ candidates: [cand("INT-1", "播放失败"), cand("INT-2", "保存失败")], skipped: [] }) });
+  const mus = plan.repos.find((r) => r.repo === MUS);
+  assert.equal(plan.slots, 0);
+  assert.equal(plan.projectedSlots, 1);
+  assert.deepEqual(mus.devices.map((d) => [d.alias, d.free, d.projected]), [["pc", 0, 1]]);
+  assert.equal(mus.shortlist.length, 2);
+  assert.equal(plan.selection.assignments.find((a) => a.repo === MUS).mode, "lead");
+  const none = buildPlan({ capacity: { environments: [env("e-pc", [0, 0])] }, config, environments, ledger: [], listOf: () => { throw new Error("没有预计名额不读来源"); } });
+  assert.equal(none.projectedSlots, 0);
+});
+
+test("子代理输入只含本仓库切片：设备池占用与预计释放、相关台账、命令用法", () => {
+  const pc = env("e-pc", [0, 1], { openThreads: [{ title: "GH-360 下载目录", id: "t1" }] });
+  Object.assign(pc.capacity, { projectedFreeByRepo: { [MUS]: 1, [TMA]: 1 }, poolByRepo: { [MUS]: "heavy", [TMA]: "general" },
+    pools: [{ name: "heavy", occupying: ["#233 设置弹框"], releasing: ["#233 设置弹框"] }, { name: "general", occupying: [], releasing: [] }] });
+  const ledger = [{ at: new Date().toISOString(), event: "launched", repo: MUS, id: "a" }, { at: new Date().toISOString(), event: "launched", repo: TMA, id: "b" }];
+  const capacity = { generatedAt: "cut", environments: [pc] };
+  const plan = buildPlan({ capacity, config, environments, ledger, listOf: () => ({ candidates: [cand("INT-1", "播放失败")], skipped: [] }) });
+  const brief = repoBriefOf(plan, MUS, { capacity, ledger, scripts: "/s" });
+  assert.equal(brief.capacityAt, "cut");
+  assert.deepEqual(brief.devices.map((d) => [d.pool, d.free, d.projected, d.releasing]), [["heavy", 0, 1, ["#233 设置弹框"]]]);
+  assert.deepEqual(brief.ledger.active.map((e) => e.id), ["a"]);
+  assert.equal(brief.openThreads[0].title, "GH-360 下载目录");
+  assert.equal(brief.shortlist[0].ref, "INT-1");
+  assert.match(brief.commands.show, /^node \/s\/issue-source\.mjs show --repo .+ --id /);
+  assert.equal(briefName(MUS), "fj.frp.musiver.cn_fjbobo_musiver.json");
+});
+
+test("建线复核：同设备同池合计不超实际空位，预计名额不能建线", () => {
+  const capacity = { environments: [{ environmentId: "e", projects: [{ id: "p-mus", canonicalKey: MUS }, { id: "p-tma", canonicalKey: TMA }],
+    capacity: { freeByRepo: { [MUS]: 1, [TMA]: 1 }, projectedFreeByRepo: { [MUS]: 2, [TMA]: 2 }, poolByRepo: { [MUS]: "heavy", [TMA]: "heavy" } } }] };
+  const l = (projectId, title) => ({ repo: MUS, ids: ["x"], environmentId: "e", projectId, title, reason: "r" });
+  assert.deepEqual(capacityErrors({ launches: [l("p-mus", "A")] }, capacity), []);
+  const over = capacityErrors({ launches: [l("p-mus", "A"), l("p-tma", "B")] }, capacity);
+  assert.equal(over.length, 1);
+  assert.match(over[0], /B.*实际空位 1/);
+  assert.match(capacityErrors({ launches: [l("p-x", "C")] }, capacity)[0], /找不到/);
 });

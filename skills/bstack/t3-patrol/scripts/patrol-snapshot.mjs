@@ -3,8 +3,11 @@
 // 只输出判定需要的字段，避免把 t3_thread_list / t3_thread_read 的原始大 JSON 灌进上下文。
 //
 // 用法：node patrol-snapshot.mjs [--self <本线程 id>] [--tail 4] [--chars 600] [--capacity-only] [--full] [--brief <文件>]
+//                               [--expect-release <threadId>@<environmentId> …]
 // --brief 另把精简摘要（patrol-brief.mjs）写进指定文件，巡检一次读完。
 // --capacity-only 只输出各环境的容量、项目与未 settle 顶层线程标题（派活用），跳过候选详情与 PR 实况。
+// --expect-release 可重复：本轮动作完成后会释放的占位线程（省略 @environmentId 则匹配任意环境）。
+//   容量另给 releasing 与 projectedFreeByRepo；没占位或身份写错的列进顶层 expectReleaseUnmatched。
 // --full 强制全量分诊（所有候选按「有事」输出）。
 // 依赖 T3 向 harness 进程注入的 MCP 会话（ACP 类与 pi 有，Codex 没有；缺席时退出码 2，改用 MCP 工具手工取证）。
 
@@ -31,6 +34,11 @@ const TAIL = Number(opt("tail", 4));
 const CHARS = Number(opt("chars", 600));
 const CONC = Number(opt("concurrency", 6));
 const CAPACITY_ONLY = args.includes("--capacity-only");
+const EXPECT = args.flatMap((a, i) => (a === "--expect-release" && args[i + 1] ? [args[i + 1]] : [])).map((v) => {
+  const at = v.lastIndexOf("@");
+  return at > 0 ? { threadId: v.slice(0, at), environmentId: v.slice(at + 1) } : { threadId: v, environmentId: null };
+});
+const MATCHED = new Set();
 // 生效的巡检偏好（默认值 + ~/.config/bstack/t3-patrol.json），启动时加载一次。
 const PREFS = loadConfig();
 const CFG = PREFS.config;
@@ -277,17 +285,23 @@ async function occupancyOf(env, top, detailsOf, now, rootsP, waiting) {
   }
   const unverifiedThreads = top.filter((t) => countsCapacity(t, SELF) && detailsOf(t)?.error)
     .map((t) => ({ threadId: t.threadId, title: t.title, error: detailsOf(t).error }));
+  const expected = new Set(EXPECT.filter((x) => !x.environmentId || x.environmentId === env.environmentId).map((x) => x.threadId));
+  const releasing = occupying.filter((t) => expected.has(t.threadId));
+  for (const t of releasing) MATCHED.add(t.threadId);
+  const base = capacityOf({
+    threads: occupying,
+    projects,
+    device: DEVICE_OF.get(env.environmentId),
+    cfg: CFG.capacity,
+    diskFreeGB: env.isLocal ? localDiskFreeGB() : null,
+    waiting,
+    releasing: new Set(releasing.map((t) => t.threadId)),
+  });
   const capacity = {
-    ...capacityOf({
-      threads: occupying,
-      projects,
-      device: DEVICE_OF.get(env.environmentId),
-      cfg: CFG.capacity,
-      diskFreeGB: env.isLocal ? localDiskFreeGB() : null,
-      waiting,
-    }),
+    ...base,
+    ...(releasing.length ? { releasing: releasing.map((t) => ({ threadId: t.threadId, title: clip(t.title, 40) })) } : {}),
     ...(unverifiedThreads.length ? { unverifiedThreads } : {}),
-    ...(projectsError ? { projectsError, blocked: [projectsError], freeByRepo: {}, freeOther: 0 } : {}),
+    ...(projectsError ? { projectsError, blocked: [projectsError], freeByRepo: {}, freeOther: 0, ...(base.projectedFreeByRepo ? { projectedFreeByRepo: {}, projectedFreeOther: 0 } : {}) } : {}),
   };
   return { occupying, capacity, projects };
 }
@@ -510,7 +524,9 @@ async function main() {
   for (const u of unreachable) Object.assign(u, aliasOf.get(u.environmentId) ?? {});
   const triage = CAPACITY_ONLY ? undefined : { full: ROUND.full, ...(ROUND.full ? { reason: ROUND.reason } : { since: ROUND.since }) };
   const lastRound = STATE.lastRound ? { at: STATE.lastRound.at, tier: STATE.lastRound.tier, quotaFailure: STATE.lastRound.quotaFailure } : null;
-  const snapshot = { generatedAt, config, modelLadder, lastRound, pendingHandoffs: STATE.pendingHandoffs, triage, environmentsFile, unreachable, environments };
+  const expectReleaseUnmatched = EXPECT.filter((x) => !MATCHED.has(x.threadId));
+  const snapshot = { generatedAt, config, modelLadder, lastRound, pendingHandoffs: STATE.pendingHandoffs, triage, environmentsFile, unreachable, environments,
+    ...(expectReleaseUnmatched.length ? { expectReleaseUnmatched } : {}) };
   const briefFile = opt("brief", null);
   if (briefFile && !CAPACITY_ONLY) writeFileSync(briefFile, `${JSON.stringify(briefOf(snapshot), null, 1)}\n`);
   console.log(JSON.stringify(snapshot, null, 1));

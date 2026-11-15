@@ -49,6 +49,17 @@ test("commit 保留交接队列；旧状态兼容，损坏状态报错而非清�
     writeFileSync(input, JSON.stringify({ ...entry, outcome: "accepted", evidenceRef: "目标调查活动" }));
     run("handoff-resolve", "--file", input);
     assert.deepEqual(loadState(env).pendingHandoffs, []);
+    const second = { ...entry, sourceThreadId: "ios2" };
+    writeFileSync(input, JSON.stringify([entry, second]));
+    run("handoff-put", "--file", input);
+    assert.deepEqual(loadState(env).pendingHandoffs.map((x) => x.sourceThreadId), ["ios", "ios2"], "一个文件批量入账");
+    writeFileSync(input, JSON.stringify([{ ...entry, outcome: "accepted", evidenceRef: "接手活动" }, { ...second, outcome: "accepted" }]));
+    const bad = spawnSync(process.execPath, [fileURLToPath(new URL("./patrol-state.mjs", import.meta.url)), "handoff-resolve", "--file", input], { env, encoding: "utf8" });
+    assert.notEqual(bad.status, 0);
+    assert.equal(loadState(env).pendingHandoffs.length, 2, "批内有一项缺证据就整批不写");
+    writeFileSync(input, JSON.stringify([{ ...entry, outcome: "accepted", evidenceRef: "接手活动" }, { ...second, outcome: "cancelled", evidenceRef: "来源撤销" }]));
+    run("handoff-resolve", "--file", input);
+    assert.deepEqual(loadState(env).pendingHandoffs, []);
     writeFileSync(path, JSON.stringify({ lastRound: { tier: "old" } }));
     assert.deepEqual(loadState(env), { lastRound: { tier: "old" }, pendingHandoffs: [] });
     writeFileSync(path, "broken");

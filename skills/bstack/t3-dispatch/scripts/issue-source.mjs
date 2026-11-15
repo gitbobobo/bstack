@@ -1,17 +1,7 @@
 #!/usr/bin/env node
 // 问题来源统一入口：派活只经这里读写问题，换来源不改派活流程。
 //
-// 用法（--repo 取 t3-dispatch.json 里 repos[].repo）：
-//   node issue-source.mjs ensure-labels --repo <key> [--check 1]   补齐标签目录；--check 1 只读
-//   node issue-source.mjs list    --repo <key> [--excerpt 400]       可派的候选与跳过原因（--excerpt 0 不带正文摘要；派过 limits.maxAttempts 次的跳过）
-//   node issue-source.mjs show    --repo <key> --id <问题 ID>         单条详情（正文、共识、PR）
-//   node issue-source.mjs claim   --repo <key> --id <问题 ID>         认领（Fast Ship 置 in_progress），记入派活台账；输出带认领时间 at
-//   node issue-source.mjs release --repo <key> --id <问题 ID>         归还到认领前的状态（已推进或有 PR 的不改），记入台账
-//   node issue-source.mjs render  --repo <key> --id <问题 ID> [--reason-file <文件>]
-//                                                                    按 repos[].template 渲染派活提示词
-//   node issue-source.mjs record  --repo <key> --id <问题 ID> --env <environmentId> --thread <threadId>
-//                                                                    记下派出的线程
-//   node issue-source.mjs ledger  [--hours 24]                        最近的台账与派出数（perDay 节流用，perDay 为 0 不限）
+// 用法见下方 USAGE（`node issue-source.mjs --help` 不读配置直接输出）。
 // 输出 JSON；失败时 stderr 给原因、退出码 1，用法错误退出码 2。
 // 推荐理由含中文时写进 UTF-8 文件再用 --reason-file 传，不进命令行。
 //
@@ -27,6 +17,19 @@ import { loadConfig } from "./dispatch-config.mjs";
 import * as fastShip from "./sources/fast-ship.mjs";
 
 const SKILL_DIR = dirname(dirname(fileURLToPath(import.meta.url)));
+export const USAGE = `用法（--repo 取 t3-dispatch.json 里 repos[].repo，即 host/owner/name）：
+  node issue-source.mjs ensure-labels --repo <key> [--check 1]   补齐标签目录；--check 1 只读
+  node issue-source.mjs list    --repo <key> [--excerpt 400]       可派的候选与跳过原因（--excerpt 0 不带正文摘要；派过 limits.maxAttempts 次的跳过）
+  node issue-source.mjs show    --repo <key> --id <问题 ID>         单条详情（正文、共识、PR）
+  node issue-source.mjs claim   --repo <key> --id <问题 ID>         认领（Fast Ship 置 in_progress），记入派活台账；输出带认领时间 at
+  node issue-source.mjs release --repo <key> --id <问题 ID>         归还到认领前的状态（已推进或有 PR 的不改），记入台账
+  node issue-source.mjs render  --repo <key> --id <问题 ID> [--reason-file <文件>]
+                                                                   按 repos[].template 渲染派活提示词
+  node issue-source.mjs record  --repo <key> --id <问题 ID> --env <environmentId> --thread <threadId>
+                                                                   记下派出的线程
+  node issue-source.mjs ledger  [--hours 24]                        最近的台账与派出数（perDay 节流用，perDay 为 0 不限）
+<问题 ID> 取 list 输出里每条的 id 字段（来源内部 ID），不是 INT-123 这类 ref。
+例：node issue-source.mjs list --repo <key> --excerpt 0 > list.json，再 show --repo <key> --id <list.json 里的 candidates[].id>`;
 const ADAPTERS = { "fast-ship": fastShip };
 
 export const ledgerPath = (env = process.env) => join(configDir(env), "state", "t3-dispatch.jsonl");
@@ -159,11 +162,16 @@ export function parseArgs(argv) {
 // 技能常经符号链接安装：比较 realpath，否则直接运行时静默不执行。
 if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) {
   try {
-    const { cmd, opts } = parseArgs(process.argv.slice(2));
+    const argv = process.argv.slice(2);
+    if (["--help", "-h", "help"].includes(argv[0])) {
+      console.log(USAGE);
+      process.exit(0);
+    }
+    const { cmd, opts } = parseArgs(argv);
     if (!cmd) throw Object.assign(new Error("缺少命令"), { usage: true });
     console.log(JSON.stringify(run(cmd, opts), null, 1));
   } catch (e) {
-    console.error(`${e.message}${e.usage ? "\n用法：node issue-source.mjs <ensure-labels|list|show|claim|release|render|record|ledger> --repo <key> [--id <问题 ID>] …" : ""}`);
+    console.error(`${e.message}${e.usage ? `\n${USAGE}` : ""}`);
     process.exit(e.usage ? 2 : 1);
   }
 }

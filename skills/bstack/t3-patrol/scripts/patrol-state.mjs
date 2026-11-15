@@ -9,6 +9,7 @@
 //   node patrol-state.mjs commit --snapshot <快照> --tier <档位 name> [--quota-failure]   一轮结束时记账
 //   node patrol-state.mjs handoff-put --file <JSON>                                     交接入账/更新
 //   node patrol-state.mjs handoff-resolve --file <JSON>                                 有接手/撤销证据后销账
+// 交接文件可以是单项或数组；数组先全部校验，任一项不合格就整批不写。
 
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -65,10 +66,14 @@ if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToP
   } else if (cmd === "handoff-put" || cmd === "handoff-resolve") {
     const file = opt("file");
     if (!file) throw new Error(`${cmd} 需要 --file <UTF-8 JSON 文件>`);
-    const entry = JSON.parse(readFileSync(file, "utf8"));
-    if (cmd === "handoff-put") putHandoff(state, entry);
-    else resolveHandoff(state, entry);
-    saveState(state);
+    const input = JSON.parse(readFileSync(file, "utf8"));
+    const next = structuredClone(state);
+    for (const entry of Array.isArray(input) ? input : [input]) {
+      if (cmd === "handoff-put") putHandoff(next, entry);
+      else resolveHandoff(next, entry);
+    }
+    saveState(next);
+    state.pendingHandoffs = next.pendingHandoffs;
     console.log(JSON.stringify({ pendingHandoffs: state.pendingHandoffs }));
   } else if (cmd === "commit") {
     const file = opt("snapshot");

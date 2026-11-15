@@ -268,3 +268,20 @@ test("标签目录：只读检查、补齐缺失项、保留已有项、创建�
   assert.match(forgejo.warnings[0], /Forgejo/);
   assert.equal(created.length, 1, "未知主机保持只读，交技能识别服务");
 });
+
+test("--help 不读配置直接给出各子命令用法，并说明 --id 取 list 的 id", async () => {
+  const { spawnSync } = await import("node:child_process");
+  const dir = mkdtempSync(join(tmpdir(), "issue-source-help-"));
+  try {
+    const script = new URL("./issue-source.mjs", import.meta.url).pathname;
+    const r = spawnSync(process.execPath, [script, "--help"], { env: { PATH: process.env.PATH, HOME: dir, BSTACK_CONFIG_DIR: dir }, encoding: "utf8" });
+    assert.equal(r.status, 0, r.stderr);
+    for (const cmd of ["list", "show", "claim", "release", "render", "record", "ledger"]) assert.match(r.stdout, new RegExp(`issue-source\\.mjs ${cmd}\\b`));
+    assert.match(r.stdout, /不是 INT-123/);
+    const bad = spawnSync(process.execPath, [script, "show", "--repo"], { env: { PATH: process.env.PATH, HOME: dir, BSTACK_CONFIG_DIR: dir }, encoding: "utf8" });
+    assert.equal(bad.status, 2);
+    assert.match(bad.stderr, /issue-source\.mjs show\s+--repo/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

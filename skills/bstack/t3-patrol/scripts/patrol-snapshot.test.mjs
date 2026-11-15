@@ -97,5 +97,14 @@ test("完整/容量快照一致排除 Fast Ship 审查，保留实现父线程�
       assert.equal(e.checks.candidates, 9);
     }
   }
+  const { stdout } = await exec(process.execPath, [script, "--self", "self", "--capacity-only",
+    "--expect-release", "impl0@mini", "--expect-release", "impl2@mini", "--expect-release", "background",
+    "--expect-release", "impl1@other", "--expect-release", "ghost@mini"], { env, timeout: 15000 });
+  const snap = JSON.parse(stdout);
+  const c = snap.environments[0].capacity;
+  assert.equal(c.freeByRepo[REPO], 0, "预计释放不改实际空位");
+  assert.equal(c.projectedFreeByRepo[REPO], 1, "7 占 5 位，三个预计释放后余 1");
+  assert.deepEqual(c.releasing.map((x) => x.threadId).sort(), ["background", "impl0", "impl2"]);
+  assert.deepEqual(snap.expectReleaseUnmatched.map((x) => x.threadId).sort(), ["ghost", "impl1"], "别的环境或不占位的线程要报出来核对");
   assert.deepEqual(errors, []);
 });
