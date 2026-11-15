@@ -9,7 +9,10 @@ function fixture(matches, threads) {
   const calls = [];
   const call = async (name, args) => {
     calls.push({ name, args });
-    if (name === "t3_thread_search") return { matches };
+    if (name === "t3_thread_search") {
+      assert.equal(args.limit, 50, "遵守搜索工具 1–50 上限，避免计划与派出共用查重入口被拒");
+      return { matches };
+    }
     assert.equal(args.environmentId, "pc");
     if (threads[args.threadId] instanceof Error) throw threads[args.threadId];
     return { thread: { threadId: args.threadId, ...threads[args.threadId] } };

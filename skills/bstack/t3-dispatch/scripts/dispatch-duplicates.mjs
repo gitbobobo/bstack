@@ -3,7 +3,7 @@ export const refRe = (ref) => new RegExp(`(^|[^\\w-])${String(ref).replace(/[.*+
 
 export async function findOpenThread(ref, scopes, call) {
   for (const scope of scopes) {
-    const result = await call("t3_thread_search", { ...scope, query: ref, limit: 100 });
+    const result = await call("t3_thread_search", { ...scope, query: ref, limit: 50 });
     if (!Array.isArray(result?.matches)) throw new Error(`查重搜索结果缺失：${scope.environmentId}`);
     const seen = new Set();
     for (const hit of result.matches) {
