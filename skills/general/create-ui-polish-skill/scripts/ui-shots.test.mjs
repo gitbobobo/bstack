@@ -15,13 +15,19 @@ function chunk(type, data) {
   return Buffer.concat([head, data, Buffer.alloc(4)]);
 }
 
-function png(width, height, gray, text) {
+// 灰度 PNG：前 topRows 行取 top 的灰度（模拟状态栏），filter 为 2 时按 Up 滤波编码。
+function png(width, height, gray, text, { top = gray, topRows = 0, filter = 0 } = {}) {
   const ihdr = Buffer.alloc(13);
   ihdr.writeUInt32BE(width, 0);
   ihdr.writeUInt32BE(height, 4);
   ihdr[8] = 8; ihdr[9] = 0;
-  const rows = Buffer.alloc((width + 1) * height, gray);
-  for (let y = 0; y < height; y++) rows[y * (width + 1)] = 0;
+  const raw = (y) => (y < topRows ? top : gray);
+  const rows = Buffer.alloc((width + 1) * height);
+  for (let y = 0; y < height; y++) {
+    rows[y * (width + 1)] = filter;
+    const v = filter === 2 && y > 0 ? (raw(y) - raw(y - 1)) & 0xff : raw(y);
+    rows.fill(v, y * (width + 1) + 1, (y + 1) * (width + 1));
+  }
   return Buffer.concat([
     Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
     chunk("IHDR", ihdr), ...(text ? [chunk("tEXt", Buffer.from(text))] : []),
@@ -49,11 +55,11 @@ function fixture({ themes = ["light", "dark"], states = [{ id: "default" }, { id
   const fakeBuild = (sheet, file) => { built.push(sheet.id); writeFileSync(file, "jpg"); };
   const cli = (argv, build = fakeBuild) => { out.length = 0; const code = run(["--dir", dir, ...argv], (l) => out.push(l), build); return { code, text: out.join("\n") }; };
   const mapCli = (...argv) => { const o = []; mapRun(["--dir", dir, ...argv], (l) => o.push(l)); return o.join("\n"); };
-  const round = (name, shots, logicalWidth = 360) => {
+  const round = (name, shots, logicalWidth = 360, ignore) => {
     const r = join(repo, "shots", name);
     mkdirSync(r, { recursive: true });
-    for (const s of shots) writeFileSync(join(r, `${s.theme}-${s.state}.png`), png(s.w ?? 1080, s.h ?? 2340, s.gray, s.text));
-    writeFileSync(join(r, "manifest.json"), JSON.stringify({ platform: "phone-a", logicalWidth, shots: shots.map((s) => ({ screen: "a", theme: s.theme, state: s.state, file: `${s.theme}-${s.state}.png` })) }));
+    for (const s of shots) writeFileSync(join(r, `${s.theme}-${s.state}.png`), png(s.w ?? 1080, s.h ?? 2340, s.gray, s.text, { top: s.topClock ?? s.gray, topRows: s.topClock ? 3 : 0 }));
+    writeFileSync(join(r, "manifest.json"), JSON.stringify({ platform: "phone-a", logicalWidth, ...(ignore ? { ignore } : {}), shots: shots.map((s) => ({ screen: "a", theme: s.theme, state: s.state, file: `${s.theme}-${s.state}.png` })) }));
     return r;
   };
   return { repo, dir, g, cli, mapCli, round, built };
@@ -64,15 +70,33 @@ const full = (gray = {}) => [
   { theme: "light", state: "empty", gray: gray.le ?? 30 }, { theme: "dark", state: "empty", gray: gray.de ?? 40 },
 ];
 
-test("画面哈希只看像素，忽略 PNG 的附加块", () => {
+test("画面哈希只看像素：忽略附加块和滤波方式，跳过 ignore 区域", () => {
   const dir = mkdtempSync(join(tmpdir(), "ui-shots-hash-"));
-  writeFileSync(join(dir, "a.png"), png(4, 4, 7, "time 1"));
-  writeFileSync(join(dir, "b.png"), png(4, 4, 7, "time 2"));
-  writeFileSync(join(dir, "c.png"), png(4, 4, 8));
-  const [a, b, c] = ["a", "b", "c"].map((n) => readImage(join(dir, `${n}.png`)));
-  assert.equal(a.hash, b.hash);
-  assert.notEqual(a.hash, c.hash);
-  assert.deepEqual([a.width, a.height], [4, 4]);
+  writeFileSync(join(dir, "a.png"), png(4, 6, 7, "time 1", { top: 90, topRows: 2 }));
+  writeFileSync(join(dir, "b.png"), png(4, 6, 7, "time 2", { top: 90, topRows: 2, filter: 2 }));
+  writeFileSync(join(dir, "c.png"), png(4, 6, 7, undefined, { top: 91, topRows: 2 }));
+  writeFileSync(join(dir, "d.png"), png(4, 6, 8, undefined, { top: 90, topRows: 2 }));
+  const read = (n, ignore) => readImage(join(dir, `${n}.png`), ignore);
+  assert.equal(read("a").hash, read("b").hash);
+  assert.notEqual(read("a").hash, read("c").hash);
+  const statusBar = [{ height: 2 }];
+  assert.equal(read("a", statusBar).hash, read("c", statusBar).hash);
+  assert.notEqual(read("a", statusBar).hash, read("d", statusBar).hash);
+  assert.equal(read("a", [{ x: 0, y: 0, width: 4, height: 2 }]).hash, read("c", statusBar).hash);
+  assert.deepEqual([read("a").width, read("a").height], [4, 6]);
+});
+
+test("compare 逐格比较两轮，manifest 的 ignore 区域不计", () => {
+  const { cli, round } = fixture();
+  const shots = (clock) => full().map((s) => ({ ...s, w: 8, h: 16, text: undefined, topClock: clock }));
+  const a = round("clock-a", shots(100), 8, [{ height: 3 }]);
+  const b = round("clock-b", shots(200), 8, [{ height: 3 }]);
+  assert.match(cli(["compare", a, b]).text, /4 格画面一致，0 格不一致/);
+  const c = round("clock-c", shots(200), 8);
+  const d = round("clock-d", shots(100), 8);
+  const r = cli(["compare", c, d]);
+  assert.equal(r.code, 1);
+  assert.match(r.text, /0 格画面一致，4 格不一致/);
 });
 
 test("verify 报出缺截图、多余的 gaps 和没进入状态的截图", () => {

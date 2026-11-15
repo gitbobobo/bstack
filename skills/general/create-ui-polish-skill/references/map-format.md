@@ -89,19 +89,23 @@
 {
   "platform": "android-phone",
   "logicalWidth": 360,
+  "ignore": [{ "height": 96 }],
   "shots": [
     { "screen": "home", "theme": "dark", "state": "empty", "file": "home-dark-empty.png" },
-    { "screen": "home", "theme": "dark", "state": "long", "file": "home-dark-long.png", "logicalWidth": 412 }
+    { "screen": "home", "theme": "dark", "state": "long", "file": "home-dark-long.png", "logicalWidth": 412 },
+    { "screen": "player", "theme": "dark", "state": "default", "file": "player-dark-default.png",
+      "ignore": [{ "x": 48, "y": 1820, "width": 160, "height": 52 }] }
   ]
 }
 ```
 
 - `platform`：一轮只截一个平台。
 - `logicalWidth`：设备的逻辑宽度（dp、pt 或 CSS 像素）。拼图把每格缩到这个宽度；单条 shot 可以覆盖。省略时按原图宽度。
+- `ignore`：算画面哈希时跳过的易变区域，单位是图片像素。省略 `x` / `y` 从 0 开始，省略 `width` / `height` 延伸到图片边缘，所以 `{ "height": 96 }` 就是顶部 96px 高的状态栏。顶层的对整轮生效，单条 shot 的再叠加上去。只支持 PNG。
 - `shots`：`screen`、`theme`、`state` 与地图一致，`file` 相对本目录或写绝对路径。出现在这里的界面，要把它在本平台上除 `gaps` 以外的格子全部截齐，`verify` 按这条检查。
 - `plan.json`：`prepare` 写入，记录拼图、每格的画面哈希和沿用的分数。
 - `sheets/`：`prepare` 生成的拼图。
 - `review.json`：评审员回复的 JSON，按 [`review-prompt.md`](review-prompt.md) 的格式原样保存。
 - `scores.json`：`merge` 写入，`ui-map record --from` 读取，也是下一轮 `prepare --prev` 沿用分数的来源。
 
-画面哈希：PNG 取尺寸和解压后的像素，其他格式取文件字节。同一构建、同一状态连拍两次哈希应当相同，否则沿用分数不会生效。
+画面哈希：PNG 取尺寸、调色板和还原后的像素，`ignore` 区域清零后再算，换一种压缩方式编码也不影响；其他格式取文件字节。同一构建连拍两轮，`compare` 应当全部一致，否则沿用分数不会生效。

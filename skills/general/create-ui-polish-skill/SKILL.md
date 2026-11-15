@@ -49,7 +49,7 @@ disable-model-invocation: true
 - 确认本机装有 ImageMagick 或 ffmpeg，`ui-shots` 用它拼图。
 - 本机能跑的平台各截一格，证明命令可用。本机跑不了的平台照样写好入口，在汇报里列为「未在本机验证」。
 
-完成标准：本机能跑的每个平台都截出过一张真实截图，同一格连拍两次，用本技能的 `scripts/ui-shots.mjs hash <图片>...` 算出的结果相同；做不到稳定的平台写明了原因。
+完成标准：本机能跑的每个平台都截出过一张真实截图；状态栏这类易变区域已经写进 `manifest.json` 的 `ignore`。连拍两轮的比较放到第 7 步做，那时地图已经建好。
 
 ### 3. 建立界面地图
 
@@ -107,9 +107,9 @@ disable-model-invocation: true
 
 ### 7. 跑通一次
 
-请用户指定评审员。按生成的技能「打磨一批」走一遍，只做一个界面：运行 `ui-map next --count 1 --platform <本机平台>`，截进一个轮次目录，依次运行 `ui-shots verify`、`ui-shots prepare`，评审，`ui-shots merge`，`ui-map record --from`，最后运行 `ui-map check`。哪一步走不通，就修生成的技能或截图工具，然后从那一步重新走。
+请用户指定评审员。按生成的技能「打磨一批」走一遍，只做一个界面：运行 `ui-map next --count 1 --platform <本机平台>`，截进一个轮次目录，依次运行 `ui-shots verify`、`ui-shots prepare`，评审，`ui-shots merge`，`ui-map record --from`，最后运行 `ui-map check`。另外不改代码再截一轮，运行 `ui-shots compare` 比较两轮；有不一致的格子，就把变化的区域补进 `ignore` 或者消除它，做不到的写进「截图」一节。哪一步走不通，就修生成的技能或截图工具，然后从那一步重新走。
 
-完成标准：地图里有了第一批带画面哈希的真实分数，`ui-map check` 没有错误，执行时没有用到技能里没写的步骤。
+完成标准：地图里有了第一批带画面哈希的真实分数，`ui-map check` 没有错误，`compare` 全部一致或者不稳定的原因已经写明，执行时没有用到技能里没写的步骤。
 
 ### 8. 汇报
 

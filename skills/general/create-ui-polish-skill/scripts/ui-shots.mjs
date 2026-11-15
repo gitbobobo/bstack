@@ -15,7 +15,8 @@ import { cells, loadMap, parseArgs, platformsOf, validate } from "./ui-map.mjs";
 const USAGE = `用法：node ui-shots.mjs <命令> [选项]
 
 命令：
-  hash <图片>...                  打印画面哈希；同一格连拍两次哈希相同，截图才算稳定
+  compare <轮次目录> <轮次目录>  逐格比较两轮的画面哈希（跳过 manifest 的 ignore 区域）；
+                                  同一构建连拍两轮全部一致，截图才算稳定
   verify <轮次目录>               校验 manifest.json：每个出现的界面在本平台上的格子是否截全、
                                   文件能否读取、不同状态是否截成了同一张图
   prepare <轮次目录> [--prev <上一轮目录>] [--fresh]
@@ -38,24 +39,80 @@ const FONTS = [
   "/usr/share/fonts/dejavu/DejaVuSans.ttf",
 ];
 
-// 画面哈希：PNG 只取尺寸和解压后的像素数据，忽略时间戳等附加块；其他格式取文件字节。
-export function readImage(file) {
+const CHANNELS = { 0: 1, 2: 3, 3: 1, 4: 2, 6: 4 };
+
+// 还原 PNG 的逐行滤波，得到原始像素字节；同样的像素换一种滤波或压缩方式编码，结果也相同。
+function pngPixels(file, ihdr, data) {
+  const width = ihdr.readUInt32BE(0);
+  const height = ihdr.readUInt32BE(4);
+  const channels = CHANNELS[ihdr[9]];
+  if (!channels) throw new Error(`${file}：不认识的 PNG 颜色类型 ${ihdr[9]}`);
+  if (ihdr[12]) throw new Error(`${file}：不支持隔行扫描的 PNG，截图工具改存普通 PNG`);
+  const bitsPerPixel = channels * ihdr[8];
+  const bpp = Math.max(1, bitsPerPixel >> 3);
+  const stride = Math.ceil((width * bitsPerPixel) / 8);
+  const pixels = Buffer.alloc(stride * height);
+  let prev = Buffer.alloc(stride);
+  for (let y = 0; y < height; y++) {
+    const filter = data[y * (stride + 1)];
+    const line = data.subarray(y * (stride + 1) + 1, (y + 1) * (stride + 1));
+    const cur = pixels.subarray(y * stride, (y + 1) * stride);
+    for (let i = 0; i < stride; i++) {
+      const a = i >= bpp ? cur[i - bpp] : 0;
+      const b = prev[i];
+      const c = i >= bpp ? prev[i - bpp] : 0;
+      let pred = 0;
+      if (filter === 1) pred = a;
+      else if (filter === 2) pred = b;
+      else if (filter === 3) pred = (a + b) >> 1;
+      else if (filter === 4) {
+        const p = a + b - c;
+        const pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c);
+        pred = pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
+      } else if (filter !== 0) throw new Error(`${file}：PNG 第 ${y} 行的滤波类型 ${filter} 无效`);
+      cur[i] = (line[i] + pred) & 0xff;
+    }
+    prev = cur;
+  }
+  return { width, height, stride, bitsPerPixel, pixels };
+}
+
+// 把易变区域清零后再算哈希。区域单位是图片像素，省略 x / y 从 0 开始，省略 width / height 延伸到图片边缘。
+function blankRegions(img, regions) {
+  for (const r of regions) {
+    const x0 = Math.max(0, r.x ?? 0);
+    const y0 = Math.max(0, r.y ?? 0);
+    const x1 = Math.min(img.width, r.width === undefined ? img.width : x0 + r.width);
+    const y1 = Math.min(img.height, r.height === undefined ? img.height : y0 + r.height);
+    const b0 = Math.floor((x0 * img.bitsPerPixel) / 8);
+    const b1 = Math.ceil((x1 * img.bitsPerPixel) / 8);
+    for (let y = y0; y < y1; y++) img.pixels.fill(0, y * img.stride + b0, y * img.stride + b1);
+  }
+}
+
+// 画面哈希：PNG 取尺寸、调色板和还原后的像素，忽略时间戳等附加块，ignore 里的区域不计；其他格式取文件字节。
+export function readImage(file, ignore = []) {
   const buf = readFileSync(file);
   if (buf.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) {
     let ihdr = null;
+    let plte = Buffer.alloc(0);
     const idat = [];
     for (let i = 8; i + 8 <= buf.length;) {
       const len = buf.readUInt32BE(i);
       const type = buf.toString("ascii", i + 4, i + 8);
       const data = buf.subarray(i + 8, i + 8 + len);
       if (type === "IHDR") ihdr = data;
+      if (type === "PLTE") plte = data;
       if (type === "IDAT") idat.push(data);
       i += 12 + len;
     }
     if (!ihdr || !idat.length) throw new Error(`${file} 不是完整的 PNG`);
-    const hash = createHash("sha256").update(ihdr).update(inflateSync(Buffer.concat(idat))).digest("hex");
-    return { width: ihdr.readUInt32BE(0), height: ihdr.readUInt32BE(4), hash };
+    const img = pngPixels(file, ihdr, inflateSync(Buffer.concat(idat)));
+    blankRegions(img, ignore);
+    const hash = createHash("sha256").update(ihdr.subarray(0, 13)).update(plte).update(img.pixels).digest("hex");
+    return { width: img.width, height: img.height, hash };
   }
+  if (ignore.length) throw new Error(`${file}：manifest 给了 ignore 区域，这只支持 PNG，截图工具改存 PNG`);
   if (buf[0] === 0xff && buf[1] === 0xd8) {
     for (let i = 2; i + 9 < buf.length;) {
       if (buf[i] !== 0xff) { i++; continue; }
@@ -80,7 +137,7 @@ export function loadRound(dir) {
     if (!s.screen || !s.theme || !s.state || !s.file) throw new Error(`${file}：每条 shot 需要 screen、theme、state、file`);
     const path = isAbsolute(s.file) ? s.file : resolve(dir, s.file);
     if (!existsSync(path)) throw new Error(`${file}：找不到图片 ${path}`);
-    return { ...s, path, logicalWidth: s.logicalWidth ?? m.logicalWidth, ...readImage(path) };
+    return { ...s, path, logicalWidth: s.logicalWidth ?? m.logicalWidth, ...readImage(path, [...(m.ignore ?? []), ...(s.ignore ?? [])]) };
   });
   return { dir: resolve(dir), platform: m.platform, shots };
 }
@@ -245,10 +302,21 @@ export function run(argv, log = console.log, build = defaultBuild()) {
   const [cmd, ...rest] = args._;
   if (!cmd || args.help) { log(USAGE); return 0; }
 
-  if (cmd === "hash") {
-    if (!rest.length) throw new Error("hash 需要图片路径");
-    for (const f of rest) log(`${readImage(f).hash}  ${f}`);
-    return 0;
+  if (cmd === "compare") {
+    if (rest.length !== 2) throw new Error("compare 需要两个轮次目录");
+    const [a, b] = rest.map(loadRound);
+    const other = new Map(b.shots.map((s) => [key(s), s]));
+    const diff = [];
+    let same = 0;
+    for (const s of a.shots) {
+      const t = other.get(key(s));
+      if (!t) diff.push(`${key(s)}：第二轮没有这一格`);
+      else if (t.hash !== s.hash) diff.push(`${key(s)}：画面不同（${s.path} ↔ ${t.path}）`);
+      else same++;
+    }
+    log(`${same} 格画面一致，${diff.length} 格不一致。`);
+    for (const d of diff) log(`- ${d}`);
+    return diff.length ? 1 : 0;
   }
 
   const dir = resolve(args.dir ?? join(dirname(fileURLToPath(import.meta.url)), ".."));
