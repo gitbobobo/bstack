@@ -12,11 +12,12 @@
 //               rank（越小越优先）、needsInfo（正文像在等补信息）、priority（用户优先）、attempts
 //   reviewed    与本轮准入列表匹配、版本与有效期未变的 ready 旧依据；源码、依赖与容量仍须发前复核
 //   poolMissing 池中存在但当前准入列表缺失的条目，待核原因，不自动删除
-//   excluded    已有未结线程或台账在派的问题（附依据）；more 是排在 shortlist 表外、未进入 reviewed 的候选数
+//   excluded    回读确认未结的线程命中（范围待复核）、台账在派或暂缓项；more 为表外候选数
+//   threadMatch 标题线索，不自动排除；duplicateCheckError 为查重待核，不代表无重复
 // --detail：仅为 lead 项目的表内候选补 body（前 N 字）与 consensus；delegate 项目交指定负责人取证，默认 0 关闭。
 // 粗排只是排序提示：按标题与标签的关键词归类（崩溃/丢数据 → 门禁/构建/发版 → 安全 → 功能错误 → 性能 → 体验 → 重构），
 // 用户优先标签先于粗排；同类按「高 / 中 / 低」标记。挑选仍按 SKILL.md 第 2 步逐条判断。
-// 有 T3 MCP 会话时，再对表内问题在各设备该仓库的项目里 t3_thread_search 查重；没有会话只按标题与台账查重。
+// 有 T3 MCP 会话时，搜索表内编号并回读线程当前状态；无会话时标题只作线索，台账仍排除在派项。
 
 import { readFileSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -27,6 +28,7 @@ import { call, connect, hasSession, pool } from "../../t3-patrol/scripts/t3-mcp.
 
 import { labelPolicy } from "./dispatch-labels.mjs";
 import { cachedReview, readPool } from "./candidate-pool.mjs";
+import { findOpenThread, refRe } from "./dispatch-duplicates.mjs";
 
 const CATEGORIES = [
   ["无法使用/丢数据", /崩溃|闪退|无法启动|启动失败|白屏|卡死|丢失|误删|数据损坏|无法播放|crash|panic/i],
@@ -51,15 +53,13 @@ export function rankOf(c) {
   return { category: i < 0 ? "未分类" : CATEGORIES[i][0], rank: cat * 10 + LEVEL(text), needsInfo: NEEDS_INFO.test(c.excerpt ?? "") };
 }
 
-const refRe = (ref) => new RegExp(`(^|[^\\w-])${String(ref).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w])`, "i");
-
 export const SELECTION_BATCH = 5;
 
 // 固定在候选深读之前分工，工作量含表外待筛项；不把共享池上限当成子代理独占名额。
 export function selectionOf(plan, capacityAt = null) {
   const workload = (plan.repos ?? []).map((r) => ({
     repo: r.repo, slots: r.slots, devices: (r.devices ?? []).map((d) => d.alias),
-    pendingCount: (r.shortlist ?? []).length + (r.more ?? 0),
+    pendingCount: (r.shortlist ?? []).length + (r.more ?? 0) + (r.excluded ?? []).filter((e) => e.duplicateReview).length,
     reusedCount: (r.reviewed ?? []).length,
   }));
   const screening = workload.filter((r) => plan.slots > 0 && r.slots > 0 && r.pendingCount > 0);
@@ -113,14 +113,13 @@ export function buildPlan({ capacity, config, environments, ledger, listOf, perS
     r.poolMissing = [...saved.values()].filter((e) => !listed.candidates.some((c) => c.id === e.id)).map(({ id, ref }) => ({ id, ref }));
     for (const c of listed.candidates) {
       const thread = openThreads.find((t) => refRe(c.ref).test(t.title ?? ""));
-      if (thread) r.excluded.push({ ref: c.ref, title: c.title, reason: `已有未结线程「${thread.title}」`, link: thread.link });
-      else if (activeIds.has(c.id)) r.excluded.push({ ref: c.ref, title: c.title, reason: "台账里已派出、线程未了结" });
+      if (activeIds.has(c.id)) r.excluded.push({ ref: c.ref, title: c.title, reason: "台账里已派出、线程未了结" });
       else if (labelPolicy(c.labels).deferred) r.excluded.push({ ref: c.ref, title: c.title, reason: "bstack:defer 暂缓自动派活" });
       else {
         const entry = saved.get(c.id);
         const review = entry ? cachedReview(entry, c, now) : null;
         if (review && !r.devices.some((d) => entry.devices.includes(d.alias))) review.reuseEvidence = false;
-        cands.push({ ...c, ...rankOf(c), priority: labelPolicy(c.labels).priority, ...(review ? { cachedReview: review } : {}) });
+        cands.push({ ...c, ...rankOf(c), priority: labelPolicy(c.labels).priority, ...(thread ? { threadMatch: thread } : {}), ...(review ? { cachedReview: review } : {}) });
       }
     }
     cands.sort((a, b) => Number(b.priority) - Number(a.priority) || a.needsInfo - b.needsInfo || a.rank - b.rank || String(b.updatedAt).localeCompare(String(a.updatedAt)));
@@ -128,7 +127,7 @@ export function buildPlan({ capacity, config, environments, ledger, listOf, perS
     // 旧依据单列，新候选仍按原优先级粗排；主代理合并裁决，缓存不等于可直接派出。
     r.reviewed = cands.filter((c) => c.cachedReview?.reuseEvidence);
     const unreviewed = cands.filter((c) => !c.cachedReview?.reuseEvidence);
-    r.shortlist = unreviewed.slice(0, n).map(({ id, ref, title, labels, excerpt, category, rank, needsInfo, priority, attempts, updatedAt, cachedReview }) => ({ id, ref, title, labels, excerpt, category, rank, needsInfo, priority, updatedAt, ...(attempts ? { attempts } : {}), ...(cachedReview ? { cachedReview } : {}) }));
+    r.shortlist = unreviewed.slice(0, n).map(({ id, ref, title, labels, excerpt, category, rank, needsInfo, priority, attempts, updatedAt, cachedReview, threadMatch }) => ({ id, ref, title, labels, excerpt, category, rank, needsInfo, priority, updatedAt, ...(threadMatch ? { threadMatch } : {}), ...(attempts ? { attempts } : {}), ...(cachedReview ? { cachedReview } : {}) }));
     r.more = Math.max(0, unreviewed.length - n);
     r.sourceSkipped = listed.skipped.length;
     r.labelConflicts = listed.skipped.filter((s) => s.conflict);
@@ -139,7 +138,7 @@ export function buildPlan({ capacity, config, environments, ledger, listOf, perS
 }
 
 // 表内问题再按编号在各设备该仓库的项目里搜一次：标题不含编号的线程靠标题查重会漏。
-async function searchDupes(plan, capacity) {
+export async function searchDupes(plan, capacity, callTool = call) {
   const envs = capacity.environments ?? [];
   for (const r of plan.repos) {
     const candidates = [...(r.reviewed ?? []), ...r.shortlist];
@@ -149,19 +148,17 @@ async function searchDupes(plan, capacity) {
       return p && !e.error ? [{ environmentId: e.environmentId, projectId: p.id }] : [];
     });
     const hits = await pool(candidates, 4, async (c) => {
-      for (const s of scopes) {
-        const res = await call("t3_thread_search", { ...s, query: c.ref, limit: 5 }).catch(() => null);
-        // 只认标题或用户消息（任务书）里的命中：代理在别的线程里顺口提到这个编号（如登记成后续）不算在做它。
-        const t = (res?.matches ?? []).find((x) => x.source !== "assistant" && refRe(c.ref).test(`${x.title ?? ""} ${x.snippet ?? ""}`));
-        if (t) return { ...t, environmentId: s.environmentId };
+      try { return await findOpenThread(c.ref, scopes, callTool); }
+      catch (e) {
+        c.duplicateCheckError = e.message;
+        return null;
       }
-      return null;
     });
     const duplicates = new Set();
     candidates.forEach((c, i) => {
       if (hits[i]) {
         duplicates.add(c.id);
-        r.excluded.push({ ref: c.ref, title: c.title, reason: `搜到未结线程「${hits[i].title}」`, link: hits[i].link });
+        r.excluded.push({ ref: c.ref, title: c.title, reason: `回读确认未结线程「${hits[i].title}」，任务范围待负责人复核`, duplicateReview: true, environmentId: hits[i].environmentId, threadId: hits[i].threadId, link: hits[i].link });
       }
     });
     r.shortlist = r.shortlist.filter((c) => !duplicates.has(c.id));
@@ -203,7 +200,7 @@ if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToP
     if (plan.slots > 0 && hasSession()) {
       await connect("t3-dispatch-plan");
       await searchDupes(plan, capacity);
-    } else if (plan.slots > 0) plan.warnings = ["没有 T3 MCP 会话，只按标题与台账查重；派出前按 SKILL.md 第 3 步手工搜一次"];
+    } else if (plan.slots > 0) plan.warnings = ["没有 T3 MCP 会话，标题命中仅作 threadMatch 线索；按查重规则回读后再决定是否排除"];
     plan.selection = selectionOf(plan, capacity.generatedAt ?? null);
     if (plan.slots > 0 && detail > 0) {
       for (const r of plan.repos) {

@@ -55,7 +55,7 @@ test("没有空位时不列候选", () => {
   assert.ok(plan.skipped.some((s) => /等资源/.test(s.reason)));
 });
 
-test("只为有空位的仓库列候选；devices 限定设备；查重排除未结线程与台账在派的问题；表长按空位", () => {
+test("只为有空位的仓库列候选；devices 限定设备；标题命中仅作线索，台账在派仍排除；表长按空位", () => {
   const listCalls = [];
   const many = Array.from({ length: 12 }, (_, i) => cand(`INT-${100 + i}`, `第 ${i} 个功能错误`));
   const plan = buildPlan({
@@ -74,10 +74,11 @@ test("只为有空位的仓库列候选；devices 限定设备；查重排除未
   const mus = plan.repos.find((r) => r.repo === MUS);
   assert.equal(plan.slots, 1);
   assert.deepEqual(mus.devices.map((d) => [d.environmentId, d.projectId, d.free]), [["e-pc", "e-pc-mus", 1]]);
-  assert.deepEqual(mus.excluded.map((e) => e.ref).sort(), ["INT-100", "INT-101"]);
+  assert.deepEqual(mus.excluded.map((e) => e.ref).sort(), ["INT-101"]);
+  assert.equal(mus.shortlist.find((c) => c.ref === "INT-100").threadMatch.link, "<l>");
   assert.equal(mus.shortlist[0].ref, "INT-99", "崩溃排第一");
   assert.equal(mus.shortlist.length, 5);
-  assert.equal(mus.more, 6);
+  assert.equal(mus.more, 7);
   assert.equal(mus.sourceSkipped, 1);
 });
 
@@ -119,7 +120,7 @@ test("变化、过期、阻塞、证据不足或设备不匹配的缓存回到�
   }
 });
 
-test("缓存不能绕过实时准入、未结线程、台账和暂缓标签", () => {
+test("缓存仍保留标题线索，不能绕过实时准入、台账和暂缓标签", () => {
   const cs = [1, 2, 3, 4, 5].map((i) => cand(`INT-${i}`, "播放失败"));
   cs[2].labels = ["bstack:defer"];
   const p = buildPlan({ capacity: { environments: [env("e-pc", [1, 0], { openThreads: [{ title: "INT-1 已在做" }] })] }, config, environments,
@@ -127,8 +128,9 @@ test("缓存不能绕过实时准入、未结线程、台账和暂缓标签", ()
     candidatePool: { [MUS]: cs.map((c) => saved(c)) }, now: NOW,
     listOf: () => ({ candidates: cs.slice(0, 4), skipped: [] }),
   });
-  assert.deepEqual(p.repos[0].reviewed.map((c) => c.ref), ["INT-4"]);
-  assert.equal(p.repos[0].excluded.length, 3);
+  assert.deepEqual(p.repos[0].reviewed.map((c) => c.ref), ["INT-1", "INT-4"]);
+  assert.equal(p.repos[0].reviewed[0].threadMatch.title, "INT-1 已在做");
+  assert.equal(p.repos[0].excluded.length, 2);
   assert.deepEqual(p.repos[0].poolMissing, [{ id: cs[4].id, ref: "INT-5" }]);
 });
 

@@ -38,7 +38,7 @@ T3 Code 多 harness 编排：按固定规则选 harness 与模型，派活验收
 
 ### t3-dispatch
 
-挑题前按项目分工并核最新基线，以统一补丁记录证据，派出前强校验目标仓库身份，再按设备共享池建工作树线程。[SKILL.md](skills/bstack/t3-dispatch/SKILL.md)
+挑题前按项目分工并核最新基线，查重回读线程状态与执行范围、保留历史共识为上下文，派出前核目标仓库身份，再按设备共享池建工作树线程。[SKILL.md](skills/bstack/t3-dispatch/SKILL.md)
 
 ## 通用技能
 

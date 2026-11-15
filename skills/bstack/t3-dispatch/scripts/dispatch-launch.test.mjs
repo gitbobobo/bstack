@@ -28,6 +28,8 @@ console.log(JSON.stringify({code:0,data:issue}));`);
   let failSecond = false;
   let failOnceSecond = false;
   let repeatCursor = false;
+  let searchFails = false;
+  let historicalSettled = true;
   const server = createServer(async (req, res) => {
     let body = ""; for await (const b of req) body += b;
     const rpc = JSON.parse(body);
@@ -45,8 +47,16 @@ console.log(JSON.stringify({code:0,data:issue}));`);
         data = a.cursor === 100
           ? { projects: [{ id: "correct", repositoryIdentity: { canonicalKey: REPO } }], nextCursor: repeatCursor ? 100 : null }
           : { projects: [{ id: "wrong", repositoryIdentity: { canonicalKey: "host/owner/musiver" } }, { id: "correct-first", repositoryIdentity: { canonicalKey: REPO } }], nextCursor: 100 };
-      } else if (name === "t3_thread_search") data = { matches: [] };
+      } else if (name === "t3_thread_search") {
+        if (searchFails) {
+          res.end(JSON.stringify({ jsonrpc: "2.0", id: rpc.id, result: { isError: true, content: [{ text: "搜索不可读" }] } })); return;
+        }
+        data = { matches: [{ threadId: "historical", title: "INT-200 仅讨论共识", source: "title", link: "<historical>" }] };
+      }
       else if (name === "t3_thread_launch") data = { threadId: "launched", link: "<test-thread>" };
+      else if (name === "t3_thread_read" && a.threadId === "historical") data = {
+        thread: { threadId: "historical", title: "INT-200 仅讨论共识", settled: historicalSettled, archived: false, link: "<historical>" },
+      };
       else if (name === "t3_thread_read") data = {
         thread: { threadId: "launched", title: "INT-200 race验收", status: "running", worktreePath: "/fixture/fast_ship", providerInstanceId: "pi", model: "test", itemCount: 2 },
         recentRuns: [{ runId: "run", status: "running" }],
@@ -97,6 +107,18 @@ console.log(JSON.stringify({code:0,data:issue}));`);
   assert.match(JSON.parse(repeated.stdout)[0].error, /游标重复/);
   assert.equal(existsSync(trace), false);
   repeatCursor = false;
+  searchFails = true;
+  const searchError = await run(plan("correct"));
+  assert.equal(searchError.code, 1);
+  assert.match(JSON.parse(searchError.stdout)[0].error, /查重失败/);
+  assert.ok(!readFileSync(trace, "utf8").includes('"method":"PUT"'), "搜索失败在认领前停止");
+  searchFails = false;
+  historicalSettled = false;
+  const live = await run(plan("correct"));
+  assert.equal(live.code, 1);
+  assert.equal(JSON.parse(live.stdout)[0].duplicate.threadId, "historical");
+  assert.ok(!readFileSync(trace, "utf8").includes('"method":"PUT"'), "未结命中须复核范围，暂不认领");
+  historicalSettled = true;
   failOnceSecond = true;
   const batchPlan = plan("correct");
   batchPlan.launches.push({ ...batchPlan.launches[0] });
@@ -113,7 +135,8 @@ console.log(JSON.stringify({code:0,data:issue}));`);
   calls.length = 0;
   const good = await run(plan("correct"));
   assert.equal(good.code, 0, good.stderr);
-  assert.equal(JSON.parse(good.stdout)[0].threadId, "launched");
+  assert.equal(JSON.parse(good.stdout)[0].threadId, "launched", "已结束的共识线程不阻止派出");
+  assert.ok(calls.some((c) => c.name === "t3_thread_read" && c.a.threadId === "historical" && c.a.environmentId === "local"));
   assert.ok(calls.some((c) => c.name === "t3_project_list" && c.a.cursor === 100));
   assert.ok(readFileSync(trace, "utf8").includes('"method":"PUT"'));
   const results = join(dir, "launched.json");

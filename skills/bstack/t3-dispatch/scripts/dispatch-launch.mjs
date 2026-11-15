@@ -27,6 +27,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfig } from "./dispatch-config.mjs";
 import { run } from "./issue-source.mjs";
+import { findOpenThread } from "./dispatch-duplicates.mjs";
 import { call, connect, hasSession, NO_SESSION } from "../../t3-patrol/scripts/t3-mcp.mjs";
 
 export function validatePlan(plan, config) {
@@ -55,7 +56,6 @@ export const launchConfigFor = (plan, config) => ({ ...config, model: plan.model
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const FAILED = new Set(["failed", "interrupted", "cancelled"]);
 const READY = new Set(["starting", "running", "completed"]);
-const refRe = (ref) => new RegExp(`(^|[^\\w-])${String(ref).replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?![\\w])`, "i");
 
 // 各可达环境里该仓库的项目，按仓库缓存。
 const scopeCache = new Map();
@@ -84,12 +84,7 @@ async function scopesOf(repo) {
 
 // 只认标题或任务书命中：代理在别的线程里顺口提到这个编号不算在做它。
 export async function openThreadFor(ref, repo) {
-  for (const s of await scopesOf(repo)) {
-    const res = await call("t3_thread_search", { ...s, query: ref, limit: 5 }).catch(() => null);
-    const t = (res?.matches ?? []).find((x) => x.source !== "assistant" && refRe(ref).test(`${x.title ?? ""} ${x.snippet ?? ""}`));
-    if (t) return t;
-  }
-  return null;
+  return findOpenThread(ref, await scopesOf(repo), call);
 }
 
 const READBACK_STEP_MS = Number(process.env.T3_DISPATCH_READBACK_STEP_MS ?? 10000);
@@ -115,7 +110,7 @@ async function launchOne(l, config, dir) {
     }
     const ref = run("show", { repo: l.repo, id: l.ids[0] }).ref;
     const dup = ref && (await openThreadFor(ref, l.repo.toLowerCase()));
-    if (dup) return { ...out, duplicate: { title: dup.title, link: dup.link }, error: `${ref} 已有未结线程「${dup.title}」，跳过` };
+    if (dup) return { ...out, duplicate: { title: dup.title, link: dup.link, threadId: dup.threadId, environmentId: dup.environmentId }, error: `${ref} 回读确认未结线程「${dup.title}」，认领前须按查重规则复核任务范围` };
   } catch (e) {
     return { ...out, error: `查重失败：${e.message}` };
   }
