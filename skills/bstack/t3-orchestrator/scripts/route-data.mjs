@@ -26,6 +26,7 @@
 // devin 订阅已移除，不再提供 opus/swe-2），仍是这些模型的首选入口；swe-2 只从 devin harness
 // （acpRegistry_devin）选，opus 从 devin/droid 选（均用户定）；codex（只跑 GPT）是 gpt-6.1-sol
 // 的备用入口，droid 是其余模型的备用入口。主代理不查额度，失败就换路。
+// opus/grok 仅用户点名（用户定，2026-11-17，订阅削减后额度受限）：不进任何 ROUTES 行，也不参与白名单递补。
 //
 // 用户级开关（只有用户能改）：
 //   - status: "named"    仅用户点名才用，自动调度与换路一律跳过
@@ -53,8 +54,8 @@ export const EFFORT_OPTION_IDS = ["thinking", "reasoningEffort", "reasoning_effo
 export const MODELS = {
   "opus-5.5": {
     label: "Opus 5.5",
-    status: "advisor",
-    // 用户定：只做实现顾问（--task design），不做代码审查与安全复核
+    // 用户定（2026-11-17）：额度受限，仅用户点名；点名时仍只做实现顾问（--task design），不做代码审查与安全复核
+    status: "named",
     tasks: ["design"],
     vision: 82.0,
     entries: [
@@ -85,7 +86,8 @@ export const MODELS = {
   },
   "grok-4.7": {
     label: "Grok 4.7",
-    status: "advisor",
+    // 用户定（2026-11-17）：额度受限，仅用户点名
+    status: "named",
     vision: 63.5,
     entries: [
       { provider: "pi", id: "cliproxyapi/grok-4.7", options: { thinking: "medium" } },
@@ -134,23 +136,17 @@ export const ROUTES = {
     { model: "glm-5.3-flash", provider: "acpRegistry_factory_droid" },
     { model: "deepseek-v4.1-flash", provider: "acpRegistry_factory_droid" },
   ],
-  // 审查：Opus 不做审查（tasks 限定）。
+  // 审查与实现顾问：opus/grok 仅点名（用户定 2026-11-17），行内只剩 gpt-6.1-sol；
+  // 第二位审查者/顾问（--exclude-model gpt-6.1-sol）由白名单递补到 swe-2 等 auto 模型（用户接受）。
   review: [
     { model: "gpt-6.1-sol", provider: "pi" },
-    { model: "grok-4.7", provider: "pi" },
     { model: "gpt-6.1-sol", provider: "codex" },
     { model: "gpt-6.1-sol", provider: "acpRegistry_factory_droid" },
-    { model: "grok-4.7", provider: "acpRegistry_factory_droid" },
   ],
-  // 实现顾问：Opus 首选（用户定），走 devin/droid（用户定）。
   design: [
-    { model: "opus-5.5", provider: "acpRegistry_devin" },
     { model: "gpt-6.1-sol", provider: "pi" },
-    { model: "grok-4.7", provider: "pi" },
     { model: "gpt-6.1-sol", provider: "codex" },
-    { model: "opus-5.5", provider: "acpRegistry_factory_droid" },
     { model: "gpt-6.1-sol", provider: "acpRegistry_factory_droid" },
-    { model: "grok-4.7", provider: "acpRegistry_factory_droid" },
   ],
 };
 

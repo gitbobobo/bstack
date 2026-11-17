@@ -74,11 +74,13 @@ test("check: 快速模式恒红", () => {
   fail(["--provider", "acpRegistry_factory_droid", "--model", "gpt-6-sol-fast", ...DROID, "--user-named"], "-fast");
 });
 
-test("check: 顾问不写实现，Opus 只做实现顾问（用户点名降级 warn）", () => {
+test("check: 顾问不写实现；opus/grok 仅点名（用户定 2026-11-17），Opus 点名时仍只做实现顾问", () => {
   fail(["--provider", "pi", "--model", "cliproxyapi/gpt-6.1-sol", "--role", "implementation"], "顾问");
   ok(["--provider", "pi", "--model", "cliproxyapi/gpt-6.1-sol", "--role", "review"]);
-  fail(["--provider", "acpRegistry_devin", "--model", "claude-opus-5-5-medium", "--role", "review"], "只承担 design");
-  ok(["--provider", "acpRegistry_devin", "--model", "claude-opus-5-5-medium", "--role", "design"]);
+  fail(["--provider", "acpRegistry_devin", "--model", "claude-opus-5-5-medium", "--role", "design"], "仅限用户点名");
+  fail(["--provider", "pi", "--model", "cliproxyapi/grok-4.7", "--role", "review"], "仅限用户点名");
+  ok(["--provider", "acpRegistry_devin", "--model", "claude-opus-5-5-medium", "--role", "design", "--user-named"]);
+  ok(["--provider", "pi", "--model", "cliproxyapi/grok-4.7", "--role", "review", "--user-named"]);
   ok(["--provider", "acpRegistry_devin", "--model", "claude-opus-5-5-medium", "--role", "review", "--user-named"]);
 });
 
@@ -160,14 +162,19 @@ test("expandRoute: 行内顺序即声明顺序（swe-2 走 devin，其余首选 
     "acpRegistry_factory_droid/glm-5.3-flash",
     "acpRegistry_factory_droid/deepseek-v4.1-flash",
   ]);
-  eq(ids(expandRoute("review")).slice(0, 3), ["pi/cliproxyapi/gpt-6.1-sol", "pi/cliproxyapi/grok-4.7", "codex/gpt-6.1-sol"]);
+  eq(ids(expandRoute("review")).slice(0, 3), ["pi/cliproxyapi/gpt-6.1-sol", "codex/gpt-6.1-sol", "acpRegistry_factory_droid/gpt-6.1-sol"]);
 });
 
-test("expandRoute: general 不含顾问，review 不含 opus，design 含全部顾问", () => {
+test("expandRoute: general 不含顾问，review/design 不含点名专用的 opus/grok", () => {
   const models = (t) => new Set(expandRoute(t).map((i) => i.model));
   eq([...models("general")].sort(), ["deepseek-v4.1-flash", "glm-5.3-flash", "swe-2"]);
-  eq(models("review").has("opus-5.5"), false);
-  for (const k of ["opus-5.5", "gpt-6.1-sol", "grok-4.7"]) eq(models("design").has(k), true, k);
+  for (const t of ["review", "design"]) {
+    for (const k of ["opus-5.5", "grok-4.7"]) {
+      eq(models(t).has(k), false, `${t} ${k}`);
+      eq(whitelistCands(t).map((c) => c.model).includes(k), false, `${t} 递补 ${k}`);
+    }
+    eq(models(t).has("gpt-6.1-sol"), true, t);
+  }
   eq(whitelistCands("general").map((c) => c.model).includes("gpt-6.1-sol"), false);
 });
 
@@ -176,21 +183,22 @@ test("expandRoute: general 不含顾问，review 不含 opus，design 含全部�
 test("select: 各任务首选", () => {
   eq(pickOf(select(["--task", "general"])), "pi/cliproxyapi/glm-5.3-flash");
   eq(pickOf(select(["--task", "review"])), "pi/cliproxyapi/gpt-6.1-sol");
-  eq(pickOf(select(["--task", "design"])), "acpRegistry_devin/claude-opus-5-5-medium");
+  eq(pickOf(select(["--task", "design"])), "pi/cliproxyapi/gpt-6.1-sol");
 });
 
 test("select: --exclude 按行内顺序递补", () => {
-  eq(pickOf(select(["--task", "review", "--exclude", "pi/cliproxyapi/gpt-6.1-sol"])), "pi/cliproxyapi/grok-4.7");
-  eq(pickOf(select(["--task", "review", "--exclude", "pi/cliproxyapi/gpt-6.1-sol", "--exclude", "pi/cliproxyapi/grok-4.7"])), "codex/gpt-6.1-sol");
+  eq(pickOf(select(["--task", "review", "--exclude", "pi/cliproxyapi/gpt-6.1-sol"])), "codex/gpt-6.1-sol");
+  eq(pickOf(select(["--task", "review", "--exclude", "pi/cliproxyapi/gpt-6.1-sol", "--exclude", "codex/gpt-6.1-sol"])), "acpRegistry_factory_droid/gpt-6.1-sol");
 });
 
-test("select: --exclude-model 排除同模型全部入口，且不计入换路次数", () => {
+test("select: --exclude-model 排除同模型全部入口，且不计入换路次数；第二位递补到 auto 模型而非 opus/grok", () => {
   const r = select(["--task", "review", "--exclude-model", "gpt-6.1-sol", "--json"]);
   const out = JSON.parse(r.stdout);
-  eq(out.pick.modelKey, "grok-4.7");
+  eq(out.pick.modelKey, "swe-2");
   eq(out.attempt, 1);
-  eq([out.pick, ...out.alternatives].some((p) => p.modelKey === "gpt-6.1-sol"), false);
-  eq(pickOf(select(["--task", "review", "--exclude-model", "pi/cliproxyapi/gpt-6.1-sol"])), "pi/cliproxyapi/grok-4.7");
+  eq([out.pick, ...out.alternatives].some((p) => ["gpt-6.1-sol", "opus-5.5", "grok-4.7"].includes(p.modelKey)), false);
+  eq(pickOf(select(["--task", "review", "--exclude-model", "pi/cliproxyapi/gpt-6.1-sol"])), "acpRegistry_devin/swe-2-high");
+  eq(pickOf(select(["--task", "design", "--exclude-model", "gpt-6.1-sol"])), "acpRegistry_devin/swe-2-high");
   eq(select(["--task", "review", "--exclude-model", "nope"]).status, 2);
 });
 
@@ -215,7 +223,7 @@ test("select: --exclude-provider pi 整体落到备用 harness，计一次尝试
 
 test("select: --vision 按视觉分数降序", () => {
   eq(pickOf(select(["--task", "general", "--vision"])), "acpRegistry_devin/swe-2-high");
-  eq(pickOf(select(["--task", "design", "--vision"])), "acpRegistry_devin/claude-opus-5-5-medium");
+  eq(pickOf(select(["--task", "design", "--vision"])), "pi/cliproxyapi/gpt-6.1-sol");
 });
 
 test("select: caps 文件超 30 分钟 → 告警且不可派判定标注过期", () => {
@@ -286,6 +294,11 @@ test("named: 点名模型按入口优先级出列并对非 named 状态告警", 
     if (!r.stdout.includes("不是点名专用")) throw new Error(r.stdout);
     eq(pickOf(run(["named", "gpt-6.1-sol", "--provider", "codex", ...f.base])), "codex/gpt-6.1-sol");
     eq(run(["named", "nope", ...f.base]).status, 2);
+    for (const [nm, want] of [["opus-5.5", "acpRegistry_devin/claude-opus-5-5-medium"], ["grok-4.7", "pi/cliproxyapi/grok-4.7"]]) {
+      const rn = run(["named", nm, ...f.base]);
+      eq(pickOf(rn), want, nm);
+      if (rn.stdout.includes("不是点名专用")) throw new Error(rn.stdout);
+    }
   } finally {
     f.cleanup();
   }
