@@ -64,7 +64,7 @@ PR 收尾：整合目标分支、合并、分流遗留，再关闭关联问题�
 
 ### create-ui-polish-skill
 
-为仓库生成或升级界面打磨专用技能：完整界面地图、按平台族划分的布局蓝图、截图工具，以及拼图送审、只复评画面变化格子的评分循环。仅限用户主动调用。[SKILL.md](skills/general/create-ui-polish-skill/SKILL.md)
+为仓库生成或升级界面打磨专用技能：完整界面地图、按平台族划分的布局蓝图、截图工具，以及「定调轮由用户确认打磨范围、之后只采纳评审建议」的评分循环，前后截图对比和过程记录生成网页。仅限用户主动调用。[SKILL.md](skills/general/create-ui-polish-skill/SKILL.md)
 
 ## 服务技能
 

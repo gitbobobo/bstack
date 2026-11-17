@@ -35,7 +35,10 @@ function png(width, height, gray, text, { top = gray, topRows = 0, filter = 0 } 
   ]);
 }
 
-function fixture({ themes = ["light", "dark"], states = [{ id: "default" }, { id: "empty" }] } = {}) {
+const SCOPE = "### 打磨范围：a\n\n锁定：\n- 区块顺序\n\n可调：\n- 标题间距，±50% 以内\n";
+const blueprint = (scope) => `# flow：测试\n\n## 共通\n\n### 产品约束\n\n- 收藏圆点表示同步状态\n\n## 布局：phone\n\n平台：phone-a\n\n标题在上，列表在下。\n\n${scope ? SCOPE : ""}\n## 决定记录\n\n- 初始\n`;
+
+function fixture({ themes = ["light", "dark"], states = [{ id: "default" }, { id: "empty" }], scoped = true } = {}) {
   const repo = mkdtempSync(join(tmpdir(), "ui-shots-"));
   const g = (...a) => execFileSync("git", ["-C", repo, ...a], { encoding: "utf8" });
   g("init", "-q");
@@ -47,7 +50,10 @@ function fixture({ themes = ["light", "dark"], states = [{ id: "default" }, { id
   const dir = join(repo, "skill");
   mkdirSync(join(dir, "screens"), { recursive: true });
   writeFileSync(join(dir, "config.json"), JSON.stringify({ threshold: 9, batchSize: 3, platforms: ["phone-a"], themes, families: { phone: ["phone-a"] } }));
-  writeFileSync(join(dir, "screens/a.json"), JSON.stringify({ id: "a", name: "甲", sources: { "phone-a": ["app/a.kt"] }, states, scores: [] }));
+  writeFileSync(join(dir, "screens/a.json"), JSON.stringify({ id: "a", name: "甲", blueprint: "flow", sources: { "phone-a": ["app/a.kt"] }, states, scores: [] }));
+  mkdirSync(join(dir, "blueprints"));
+  writeFileSync(join(dir, "blueprints/flow.md"), blueprint(scoped));
+  writeFileSync(join(dir, "rubric.md"), "# 评分标准\n\n| 维度 | 看什么 |\n\n## 评审补充\n\n应用是测试播放器。\n");
   g("add", ".");
   g("commit", "-qm", "init");
   const out = [];
@@ -147,7 +153,7 @@ test("复评只送画面变了的图，沿用的分数经 merge 和 record --fro
   assert.throws(() => cli(["merge", r1]), /需要 --review/);
   const cellsOf = (state, scores) => ["light", "dark"].map((theme, i) => ({ screen: "a", theme, state,
     dimensions: { 空间比例: scores[i] / 5, 视觉层级: scores[i] / 5, 风格一致性: scores[i] / 5, 可读性: scores[i] / 5, 精致度: scores[i] / 5 },
-    deductions: [{ element: "标题", where: "顶部", points: 0.2, kind: "真实问题" }, { element: "按钮", where: "底部", points: 0.5, kind: "个人偏好" }] }));
+    deductions: [{ element: "标题", where: "顶部", points: 0.2, kind: "真实问题", suggestion: "标题下移 8pt" }, { element: "按钮", where: "底部", points: 0.5, kind: "个人偏好", suggestion: "按钮对比度提高" }] }));
   const partial = join(r1, "review-partial.json");
   writeFileSync(partial, JSON.stringify({ cells: cellsOf("default", [9.5, 9.2]) }));
   assert.throws(() => cli(["merge", r1, "--review", partial]), /a\/light\/empty：评审结果里没有这一格/);
@@ -178,6 +184,76 @@ test("复评只送画面变了的图，沿用的分数经 merge 和 record --fro
 
   mapCli("invalidate", "a", "--state", "default", "--reason", "蓝图改了顶部布局");
   assert.match(cli(["prepare", round("r4", full({ le: 31 }))]).text, /本轮送审 1 张图（2 格），沿用 2 格/);
+});
+
+const dims = (n) => ({ 空间比例: n / 5, 视觉层级: n / 5, 风格一致性: n / 5, 可读性: n / 5, 精致度: n / 5 });
+const reviewOf = (cellsList, extra = {}) => ({ cells: cellsList.map(([theme, state, n, suggestion = "标题下移 8pt"]) => ({ screen: "a", theme, state, dimensions: dims(n),
+  deductions: [{ element: "标题", where: "顶部", points: 0.3, kind: "真实问题", ...(suggestion ? { suggestion } : {}) }] })), ...extra });
+const allCells = (n, suggestion) => ["light", "dark"].flatMap((t) => ["default", "empty"].map((s) => [t, s, n, suggestion]));
+
+test("没有打磨范围的界面走定调轮：提示词要求起草范围，merge 校验草案并给建议编号", () => {
+  const { cli, round, dir } = fixture({ scoped: false });
+  const r1 = round("r1", full());
+  assert.match(cli(["prepare", r1]).text, /定调轮：a 在蓝图里还没有打磨范围/);
+  const prompt = readFileSync(join(r1, "prompt.md"), "utf8");
+  assert.match(prompt, /定调轮/);
+  assert.match(prompt, /为这些界面各起草一份打磨范围：a/);
+  assert.match(prompt, /收藏圆点表示同步状态[\s\S]*## 布局：phone[\s\S]*标题在上，列表在下/);
+  assert.match(prompt, /应用是测试播放器/);
+  assert.match(prompt, /a（甲）：default、empty/);
+  assert.doesNotMatch(prompt, /\[\[|决定记录/);
+  assert.equal(JSON.parse(readFileSync(join(r1, "plan.json"), "utf8")).mode, "calibrate");
+
+  const noScope = join(r1, "review-no-scope.json");
+  writeFileSync(noScope, JSON.stringify(reviewOf(allCells(8))));
+  assert.throws(() => cli(["merge", r1, "--review", noScope]), /a：定调轮的评审结果里没有这个界面的打磨范围草案/);
+  const noSuggestion = join(r1, "review-no-suggestion.json");
+  writeFileSync(noSuggestion, JSON.stringify(reviewOf(allCells(8, null), { scope: [{ screen: "a", locked: [{ item: "区块顺序" }], adjustable: [{ item: "间距" }] }] })));
+  assert.throws(() => cli(["merge", r1, "--review", noSuggestion]), /扣分点「标题」没有修改建议/);
+
+  const review = join(r1, "review.json");
+  writeFileSync(review, JSON.stringify(reviewOf(allCells(8), {
+    scope: [{ screen: "a", locked: [{ item: "区块顺序", why: "现状合理" }], adjustable: [{ item: "标题间距", range: "±50%" }] }],
+    directions: [{ screen: "a", text: "考虑合并两个分组" }], blueprintMismatches: [{ sheet: "a--default.jpg", text: "标题不在顶部" }],
+  })));
+  const m = cli(["merge", r1, "--review", review]);
+  assert.match(m.text, /4 条修改建议，1 处与蓝图不一致，1 条方向性建议/);
+  assert.match(m.text, /S4 a\/dark\/empty 标题（顶部） -0.3 → 标题下移 8pt/);
+  assert.match(m.text, /D1 方向性建议：a 考虑合并两个分组/);
+  const sugg = JSON.parse(readFileSync(join(r1, "suggestions.json"), "utf8"));
+  assert.deepEqual([sugg.mode, sugg.scope[0].screen, sugg.mismatches[0].id], ["calibrate", "a", "M1"]);
+
+  writeFileSync(join(dir, "blueprints/flow.md"), blueprint(true));
+  const r2 = round("r2", full({ le: 31 }));
+  assert.match(cli(["prepare", r2, "--prev", r1]).text, /打磨轮：送审界面都有打磨范围/);
+  const polish = readFileSync(join(r2, "prompt.md"), "utf8");
+  assert.match(polish, /「打磨范围」已经由用户确认[\s\S]*### 打磨范围：a[\s\S]*标题间距，±50% 以内/);
+  assert.doesNotMatch(polish, /起草/);
+});
+
+test("page 把各轮截图、分数和采纳记录做成网页，图片路径相对网页", () => {
+  const { cli, round, repo } = fixture();
+  const r1 = round("r1", full());
+  cli(["prepare", r1]);
+  writeFileSync(join(r1, "review.json"), JSON.stringify(reviewOf(allCells(8))));
+  cli(["merge", r1, "--review", join(r1, "review.json")]);
+  const r2 = round("r2", full({ le: 31 }));
+  cli(["prepare", r2, "--prev", r1]);
+  writeFileSync(join(r2, "review.json"), JSON.stringify(reviewOf([["light", "empty", 9.4], ["dark", "empty", 9.1]])));
+  cli(["merge", r2, "--review", join(r2, "review.json")]);
+
+  writeFileSync(join(r1, "changes.json"), JSON.stringify({ adopted: [{ id: "S1", change: "标题下移 8pt" }], declined: [{ id: "S2", reason: "改动锁定的区块顺序" }] }));
+  const out = join(repo, "shots", "report.html");
+  const p = cli(["page", r1, r2, "--out", out]);
+  assert.match(p.text, /2 轮，4 格/);
+  assert.match(p.text, /r1：changes.json 没有交代 S3、S4/);
+  const html = readFileSync(out, "utf8");
+  const data = JSON.parse(/<script id="data" type="application\/json">([\s\S]*?)<\/script>/.exec(html)[1]);
+  assert.deepEqual(data.rounds.map((r) => r.name), ["r1", "r2"]);
+  assert.equal(data.rounds[0].shots[0].src, "r1/light-default.png");
+  assert.equal(data.rounds[1].shots.find((s) => s.key === "a/light/empty").score, 9.4);
+  assert.equal(data.rounds[0].adopted[0].change, "标题下移 8pt");
+  assert.equal(data.cells[0].label, "甲 / light / default");
 });
 
 test("record --from 有一格不合法时整批都不写", () => {

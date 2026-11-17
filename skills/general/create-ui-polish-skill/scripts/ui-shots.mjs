@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// 截图轮次：校验一轮截图的清单，按主题拼图送审，沿用画面没变的格子的分数，合并评审结果。
+// 截图轮次：校验一轮截图的清单，按主题拼图送审，生成评审提示词，沿用画面没变的格子的分数，
+// 合并评审结果，把前后截图和过程记录做成网页。
 //
 // 用法：node ui-shots.mjs <命令> [选项]，--help 查看全部命令。
 // 地图目录默认是本脚本所在技能目录（scripts/ 的上一级），可用 --dir 覆盖。
@@ -7,10 +8,10 @@
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { inflateSync } from "node:zlib";
-import { cells, loadMap, parseArgs, platformsOf, validate } from "./ui-map.mjs";
+import { cells, familyOf, loadMap, parseArgs, platformsOf, validate } from "./ui-map.mjs";
 
 const USAGE = `用法：node ui-shots.mjs <命令> [选项]
 
@@ -19,14 +20,22 @@ const USAGE = `用法：node ui-shots.mjs <命令> [选项]
                                   同一构建连拍两轮全部一致，截图才算稳定
   verify <轮次目录>               校验 manifest.json：每个出现的界面在本平台上的格子是否截全、
                                   文件能否读取、不同状态是否截成了同一张图
-  prepare <轮次目录> [--prev <上一轮目录>] [--fresh]
+  prepare <轮次目录> [--prev <上一轮目录>] [--fresh] [--ref <参照轮次目录>]
                                   先做 verify，再按「界面 × 状态」拼图（同一张图里放各主题），
-                                  画面没变的格子沿用上一轮或地图里的分数，写 plan.json 并列出送审图片
+                                  画面没变的格子沿用上一轮或地图里的分数，写 plan.json 和评审提示词 prompt.md；
+                                  送审界面在蓝图里还没有「打磨范围」时是定调轮，否则是打磨轮
   merge <轮次目录> [--review <评审结果.json>]
-                                  把评审结果和沿用的分数合成 scores.json，供 ui-map record --from 使用
+                                  把评审结果和沿用的分数合成 scores.json（供 ui-map record --from 使用），
+                                  把修改建议、方向性建议和打磨范围草案编号写进 suggestions.json
+  page <轮次目录>... --out <网页.html> [--title 标题]
+                                  按轮次顺序把截图、分数、修改建议和 changes.json 做成一个网页：
+                                  第一轮和最后一轮前后对比，点图放大
 
 通用选项：
   --dir <技能目录>                默认是本脚本的上一级目录`;
+
+const ASSETS = join(dirname(fileURLToPath(import.meta.url)), "..", "assets");
+const asset = (name) => readFileSync(join(ASSETS, name), "utf8");
 
 // 多数模型把长边超过约 1568px 的图片先缩小再读，拼图的长边不超过它，每格的像素才不会被二次压缩。
 export const MAX_EDGE = 1568;
@@ -290,11 +299,155 @@ export function mergeReview(plan, review) {
       const score = sum ?? cell.total;
       if (typeof score !== "number") { errors.push(`${key(t)}：没有分数`); continue; }
       if (sum !== null && typeof cell.total === "number" && Math.abs(sum - cell.total) > 0.05) notes.push(`${key(t)}：评审员的总分 ${cell.total} 与各维度之和 ${sum} 不一致，按维度之和记录`);
+      for (const d of cell.deductions ?? []) if (typeof d !== "object" || !d.suggestion) errors.push(`${key(t)}：扣分点「${d?.element ?? d}」没有修改建议`);
       const deductions = [...(cell.deductions ?? [])].sort((a, b) => (b.points ?? 0) - (a.points ?? 0)).slice(0, 5).map(formatDeduction);
       out.push({ ...base, score, deductions });
     }
   }
+  if (plan.mode === "calibrate") {
+    for (const id of plan.pending ?? []) {
+      const s = review?.scope?.find((x) => x.screen === id);
+      if (!s?.locked?.length || !s?.adjustable?.length) errors.push(`${id}：定调轮的评审结果里没有这个界面的打磨范围草案（scope 的 locked 和 adjustable 都不能为空）`);
+    }
+  }
   return { errors, scores: out, notes };
+}
+
+// 编号后的修改建议（S）、与蓝图不一致（M）、方向性建议（D）：代理逐条在 changes.json 里写明采纳或不采纳。
+export function collectSuggestions(plan, review) {
+  const suggestions = (review?.cells ?? []).flatMap((c) => (c.deductions ?? []).map((d) => ({
+    screen: c.screen, theme: c.theme, state: c.state, element: d.element, where: d.where, points: d.points, kind: d.kind, suggestion: d.suggestion,
+  }))).map((s, i) => ({ id: `S${i + 1}`, ...s }));
+  const number = (list, p) => (list ?? []).map((x, i) => ({ id: `${p}${i + 1}`, ...(typeof x === "string" ? { text: x } : x) }));
+  return {
+    mode: plan.mode ?? null, suggestions, mismatches: number(review?.blueprintMismatches, "M"), directions: number(review?.directions, "D"),
+    ...(plan.mode === "calibrate" ? { scope: review?.scope ?? [] } : {}),
+  };
+}
+
+// 蓝图按二级标题切节，标题里的半角冒号统一成全角。
+export function blueprintSections(md) {
+  const out = new Map();
+  let cur = null;
+  for (const line of md.split("\n")) {
+    const m = /^## (.+?)\s*$/.exec(line);
+    if (m) { cur = m[1].replace(":", "："); out.set(cur, [line]); } else if (cur) out.get(cur).push(line);
+  }
+  return new Map([...out].map(([k, v]) => [k, v.join("\n").trim()]));
+}
+
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+export const hasScope = (layout, id) => new RegExp(`^### 打磨范围[：:]\\s*${escapeRe(id)}\\s*$`, "m").test(layout);
+
+// 送审界面涉及的蓝图（共通 + 本族布局）和还没有打磨范围的界面；有一个界面没有范围，整轮就是定调轮。
+export function reviewContext(map, platform, ids) {
+  const family = familyOf(map.config, platform);
+  const parts = new Map();
+  const pending = [];
+  for (const id of ids) {
+    const screen = map.screens.find((s) => s.id === id);
+    if (!screen?.blueprint) throw new Error(`${id}：地图里没有指定 blueprint，先补上再送审`);
+    const file = join(map.dir, "blueprints", `${screen.blueprint}.md`);
+    if (!existsSync(file)) throw new Error(`${id}：找不到蓝图 ${file}`);
+    const sec = blueprintSections(readFileSync(file, "utf8"));
+    const common = sec.get("共通");
+    const layout = sec.get(`布局：${family}`);
+    if (!common || !layout) throw new Error(`${file} 缺少「## 共通」或「## 布局：${family}」一节`);
+    parts.set(screen.blueprint, `【蓝图 ${screen.blueprint}】\n\n${common}\n\n${layout}`);
+    if (!hasScope(layout, id)) pending.push(id);
+  }
+  return { family, pending, blueprint: [...parts.values()].join("\n\n") };
+}
+
+export function fillPrompt(template, values) {
+  return template.replace(/\[\[([^\]]+)\]\]/g, (m, k) => {
+    if (!(k in values)) throw new Error(`提示词模板里有未知占位 ${m}`);
+    return values[k];
+  });
+}
+
+function buildPrompt(map, round, plan, refDir) {
+  const review = plan.sheets.filter((s) => s.review);
+  const tiles = review.flatMap((s) => s.tiles);
+  const ids = [...new Set(tiles.map((t) => t.screen))];
+  const ctx = reviewContext(map, round.platform, ids);
+  const rubric = join(map.dir, "rubric.md");
+  if (!existsSync(rubric)) throw new Error(`找不到 ${rubric}`);
+  const describe = ids.map((id) => {
+    const screen = map.screens.find((s) => s.id === id);
+    const states = [...new Set(tiles.filter((t) => t.screen === id).map((t) => t.state))]
+      .map((st) => { const name = screen.states.find((x) => x.id === st)?.name; return name ? `${st}（${name}）` : st; });
+    return `- ${id}（${screen.name ?? id}）：${states.join("、")}`;
+  });
+  const sizes = [...new Set(round.shots.filter((s) => ids.includes(s.screen))
+    .map((s) => `截图 ${s.width}×${s.height} 像素${s.logicalWidth ? `，逻辑宽度 ${s.logicalWidth}` : ""}`))];
+  let refs = "无";
+  if (refDir) {
+    const ref = loadRound(refDir);
+    const list = ref.shots.filter((s) => ids.includes(s.screen)).map((s) => `${s.path}  ${s.screen} / ${s.theme} / ${s.state}（${ref.platform}）`);
+    if (list.length) refs = list.join("\n");
+  }
+  const mode = ctx.pending.length ? "calibrate" : "polish";
+  const text = fillPrompt(asset(mode === "calibrate" ? "review-calibrate.md" : "review-polish.md"), {
+    平台: `${round.platform}（平台族 ${ctx.family}）`,
+    送审图片: review.map((s) => `${s.file}  ${s.tiles.map((t) => t.label).join(" | ")}`).join("\n"),
+    原图: tiles.map((t) => `${t.path}  ${t.label}`).join("\n"),
+    截图说明: [...sizes, ...describe].join("\n"),
+    参照图: refs,
+    蓝图: ctx.blueprint,
+    评分标准: readFileSync(rubric, "utf8").trim(),
+    定调界面: ctx.pending.join("、"),
+  });
+  return { mode, pending: ctx.pending, text };
+}
+
+const optJson = (file) => (existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : null);
+
+// 网页数据：每格在各轮的截图和分数，各轮的建议、采纳记录和打磨范围草案。图片路径相对网页所在目录。
+export function pageData(map, dirs, out, title) {
+  const base = dirname(resolve(out));
+  const src = (p) => { const r = relative(base, p); return isAbsolute(r) ? pathToFileURL(p).href : r.split(sep).join("/"); };
+  const names = (s) => {
+    const screen = map.screens.find((x) => x.id === s.screen);
+    const state = screen?.states.find((x) => x.id === s.state);
+    return `${screen?.name ?? s.screen} / ${s.theme} / ${state?.name ?? s.state}`;
+  };
+  const warnings = [];
+  const rounds = dirs.map((d, i) => {
+    const dir = resolve(d);
+    const manifest = optJson(join(dir, "manifest.json"));
+    if (!manifest) throw new Error(`找不到 ${join(dir, "manifest.json")}`);
+    const scores = optJson(join(dir, "scores.json")) ?? [];
+    const sugg = optJson(join(dir, "suggestions.json"));
+    const changes = optJson(join(dir, "changes.json"));
+    if (!scores.length) warnings.push(`${basename(dir)}：没有 scores.json，先运行 merge`);
+    const ids = [...(sugg?.suggestions ?? []), ...(sugg?.mismatches ?? [])].map((x) => x.id);
+    const answered = new Set([...(changes?.adopted ?? []), ...(changes?.declined ?? [])].map((x) => x.id));
+    const missing = ids.filter((id) => !answered.has(id));
+    if (i < dirs.length - 1 && missing.length) warnings.push(`${basename(dir)}：changes.json 没有交代 ${missing.join("、")}`);
+    return {
+      name: basename(dir), platform: manifest.platform, mode: sugg?.mode ?? null,
+      shots: manifest.shots.map((s) => {
+        const sc = scores.find((x) => key(x) === key(s));
+        return { key: key(s), src: src(isAbsolute(s.file) ? s.file : resolve(dir, s.file)), score: sc?.score ?? null, deductions: sc?.deductions ?? [] };
+      }),
+      suggestions: sugg?.suggestions ?? [], mismatches: sugg?.mismatches ?? [], directions: sugg?.directions ?? [], scope: sugg?.scope ?? null,
+      adopted: changes?.adopted ?? [], declined: changes?.declined ?? [],
+    };
+  });
+  const seen = new Map();
+  for (const r of rounds) for (const s of r.shots) if (!seen.has(s.key)) {
+    const [screen, theme, state] = s.key.split("/");
+    seen.set(s.key, { key: s.key, label: names({ screen, theme, state }) });
+  }
+  return {
+    data: { title: title ?? `${rounds[0].platform} 界面打磨`, threshold: map.config.threshold, generatedAt: new Date().toISOString(), cells: [...seen.values()], rounds },
+    warnings,
+  };
+}
+
+export function renderPage(data) {
+  return asset("page.html").replace("/*DATA*/null", () => JSON.stringify(data).replace(/</g, "\\u003c"));
 }
 
 export function run(argv, log = console.log, build = defaultBuild()) {
@@ -324,6 +477,16 @@ export function run(argv, log = console.log, build = defaultBuild()) {
   const [roundDir] = rest;
   if (!roundDir) throw new Error(`${cmd} 需要轮次目录`);
 
+  if (cmd === "page") {
+    if (!args.out) throw new Error("page 需要 --out <网页.html>");
+    const { data, warnings } = pageData(map, rest, args.out, args.title);
+    mkdirSync(dirname(resolve(args.out)), { recursive: true });
+    writeFileSync(resolve(args.out), renderPage(data));
+    log(`已写入 ${resolve(args.out)}：${data.rounds.length} 轮，${data.cells.length} 格。`);
+    for (const w of warnings) log(`提示：${w}`);
+    return 0;
+  }
+
   if (cmd === "verify" || cmd === "prepare") {
     const round = loadRound(roundDir);
     const errors = verifyRound(map, round);
@@ -344,15 +507,20 @@ export function run(argv, log = console.log, build = defaultBuild()) {
       sheets: sheets.map((s) => ({ id: s.id, file: s.file, review: s.review,
         tiles: s.tiles.map((t) => ({ screen: t.screen, theme: t.theme, state: t.state, label: t.label, path: t.path, hash: t.hash, ...(t.carry ? { carry: t.carry } : {}) })) })),
     };
-    writeFileSync(join(round.dir, "plan.json"), `${JSON.stringify(plan, null, 2)}\n`);
     const review = plan.sheets.filter((s) => s.review);
+    const prompt = review.length ? buildPrompt(map, round, plan, args.ref) : null;
+    if (prompt) Object.assign(plan, { mode: prompt.mode, pending: prompt.pending });
+    writeFileSync(join(round.dir, "plan.json"), `${JSON.stringify(plan, null, 2)}\n`);
     const carried = plan.sheets.filter((s) => !s.review).flatMap((s) => s.tiles);
     log(`本轮送审 ${review.length} 张图（${review.reduce((n, s) => n + s.tiles.length, 0)} 格），沿用 ${carried.length} 格的分数。`);
-    if (review.length) {
+    if (prompt) {
+      writeFileSync(join(round.dir, "prompt.md"), prompt.text);
+      log(prompt.mode === "calibrate"
+        ? `\n定调轮：${prompt.pending.join("、")} 在蓝图里还没有打磨范围，评审员会起草草案，merge 后交给用户确认。`
+        : "\n打磨轮：送审界面都有打磨范围。");
+      log(`评审提示词：${join(round.dir, "prompt.md")}（全文原样发给评审员）`);
       log("\n送审图片：");
       for (const s of review) log(`${s.file}  ${s.tiles.map((t) => t.label).join(" | ")}`);
-      log("\n原图（拼图上看不清细节时才打开）：");
-      for (const t of review.flatMap((s) => s.tiles)) log(`${t.path}  ${t.label}`);
     } else log("画面都没有变化，不需要评审，直接运行 merge。");
     if (carried.length) {
       log("\n沿用的分数：");
@@ -370,6 +538,8 @@ export function run(argv, log = console.log, build = defaultBuild()) {
     const { errors, scores, notes } = mergeReview(plan, review);
     if (errors.length) throw new Error(`评审结果不完整，让评审员补齐后再合并：\n${errors.join("\n")}`);
     writeFileSync(join(round, "scores.json"), `${JSON.stringify(scores, null, 2)}\n`);
+    const sugg = collectSuggestions(plan, review);
+    writeFileSync(join(round, "suggestions.json"), `${JSON.stringify(sugg, null, 2)}\n`);
     for (const n of notes) log(`提示：${n}`);
     const low = scores.filter((s) => s.score < map.config.threshold);
     log(`已写入 ${join(round, "scores.json")}：${scores.length} 格，${low.length} 格低于阈值 ${map.config.threshold}。`);
@@ -377,7 +547,11 @@ export function run(argv, log = console.log, build = defaultBuild()) {
       log(`- ${id}：最低分 ${Math.min(...scores.filter((s) => s.screen === id).map((s) => s.score))}`);
     }
     for (const s of low) log(`  未达标 ${key(s)} ${s.score}：${s.deductions[0] ?? "（无扣分点）"}`);
-    for (const m of review?.blueprintMismatches ?? []) log(`与蓝图不一致：${typeof m === "string" ? m : `${m.sheet ?? ""} ${m.text ?? JSON.stringify(m)}`}`);
+    log(`\n已写入 ${join(round, "suggestions.json")}：${sugg.suggestions.length} 条修改建议，${sugg.mismatches.length} 处与蓝图不一致，${sugg.directions.length} 条方向性建议。`);
+    for (const s of sugg.suggestions) log(`${s.id} ${key(s)} ${formatDeduction(s)} → ${s.suggestion}`);
+    for (const m of sugg.mismatches) log(`${m.id} 与蓝图不一致：${m.sheet ? `${m.sheet} ` : ""}${m.text ?? ""}`);
+    for (const d of sugg.directions) log(`${d.id} 方向性建议：${d.screen ? `${d.screen} ` : ""}${d.text ?? ""}`);
+    if (sugg.mode === "calibrate") log(`\n定调轮：打磨范围草案覆盖 ${sugg.scope.map((s) => s.screen).join("、")}，用 page 生成网页交给用户确认。`);
     return 0;
   }
 

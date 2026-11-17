@@ -103,9 +103,12 @@
 - `logicalWidth`：设备的逻辑宽度（dp、pt 或 CSS 像素）。拼图把每格缩到这个宽度；单条 shot 可以覆盖。省略时按原图宽度。
 - `ignore`：算画面哈希时跳过的易变区域，单位是图片像素。省略 `x` / `y` 从 0 开始，省略 `width` / `height` 延伸到图片边缘，所以 `{ "height": 96 }` 就是顶部 96px 高的状态栏。顶层的对整轮生效，单条 shot 的再叠加上去。只支持 PNG。
 - `shots`：`screen`、`theme`、`state` 与地图一致，`file` 相对本目录或写绝对路径。出现在这里的界面，要把它在本平台上除 `gaps` 以外的格子全部截齐，`verify` 按这条检查。
-- `plan.json`：`prepare` 写入，记录拼图、每格的画面哈希和沿用的分数。
+- `plan.json`：`prepare` 写入，记录拼图、每格的画面哈希、沿用的分数、轮次类型（`mode`：`calibrate` 定调轮 / `polish` 打磨轮）和待定调的界面。
 - `sheets/`：`prepare` 生成的拼图。
-- `review.json`：评审员回复的 JSON，按 [`review-prompt.md`](review-prompt.md) 的格式原样保存。
+- `prompt.md`：`prepare` 用 `assets/` 里的模板、蓝图和 `rubric.md` 生成的评审提示词，全文原样发给评审员。
+- `review.json`：评审员回复的 JSON，格式写在 `prompt.md` 末尾，原样保存。
 - `scores.json`：`merge` 写入，`ui-map record --from` 读取，也是下一轮 `prepare --prev` 沿用分数的来源。
+- `suggestions.json`：`merge` 写入，把修改建议编号为 `S1…`、与蓝图不一致编号为 `M1…`、方向性建议编号为 `D1…`；定调轮另带 `scope`，即评审员起草的打磨范围。
+- `changes.json`：代理写入，逐条交代这一轮的 `S`、`M` 采纳了哪些、改了什么，没采纳的写明原因（格式见 `SKILL.md`「打磨一批」）。`page` 用它生成过程记录。
 
 画面哈希：PNG 取尺寸、调色板和还原后的像素，`ignore` 区域清零后再算，换一种压缩方式编码也不影响；其他格式取文件字节。同一构建连拍两轮，`compare` 应当全部一致，否则沿用分数不会生效。

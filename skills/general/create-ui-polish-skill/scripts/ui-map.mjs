@@ -250,7 +250,7 @@ export function run(argv, log = console.log) {
       const list = cells(screen, map.config, changed, filter);
       for (const fam of [...new Set(list.map((c) => familyOf(map.config, c.platform)))]) {
         const refs = references(screen, map.config, changed, fam);
-        log(`### 平台族 ${fam}  参照：${refs.length ? refs.join("、") : "无，本族首个达标的平台负责写实蓝图里本族的布局"}`);
+        log(`### 平台族 ${fam}  参照：${refs.length ? refs.join("、") : "无"}`);
         for (const c of list.filter((x) => familyOf(map.config, x.platform) === fam)) {
           const extra = c.status === "gap" ? `：${c.gap}` : c.score !== undefined ? ` ${c.score}${c.reason ? `（${c.reason}）` : ""}` : "";
           log(`- ${c.platform} / ${c.theme} / ${c.state}：${c.status}${extra}`);
