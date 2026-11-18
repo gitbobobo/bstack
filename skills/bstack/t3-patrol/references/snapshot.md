@@ -14,7 +14,8 @@
   - `modelLadder`：生效配置的模型阶梯；所有换模、探测只从这里取实例与参数。
   - `config`：名额、阈值、分诊、久审审计线及 `source`/`warnings`/`errors`。
   - `environmentsFile`：`environments.json` 与本轮环境集合的对比（`unlisted` 是文件里没有的环境，`missing` 是文件里有但本轮没连上的别名）。
-- **候选** `environments[].candidates`：已剔除子代理线程、首条消息是派活模板且没有工作树的执行线程、Fast Ship 审查线程（「代码审查 · PR #N」「视觉审查 · PR #N」）、「额度探测」「资源探测」（旧版遗留）线程和本线程；剔除数量在 `delegatedExcluded`。
+- **巡检排除** `environments[].patrolExcluded`：无派出归属记录的线程，带 `id`、`link`、`title`、`reason`；摘要原样保留，按 SKILL.md「派出归属」处理。归属来自全部历史派活 `launched` 记录、持久化交接目标和待交接目标；按环境＋线程精确匹配，缺文件视为没有记录，损坏或不可读则报错并保持只读。容量统计及派活查重仍保留排除项。
+- **候选** `environments[].candidates`：已剔除上述巡检排除项、子代理线程、首条消息是派活模板且没有工作树的执行线程、Fast Ship 审查线程（「代码审查 · PR #N」「视觉审查 · PR #N」）、「额度探测」「资源探测」（旧版遗留）线程和本线程；剔除数量在 `delegatedExcluded`。
   - 每条带 `triage`（`hot`/`quiet`）与 `triageReasons`。
   - 有事候选带全部字段：`link`、`status`、`hasWorktree`、`prs`、`lastMsgAt`、`lastRunEndedAt`、最近 3 次 `runs`、`pendingRequestCount`、`task`（首条用户消息）、`tail`（最后 4 条消息，保留首尾共 600 字——代理常在长汇报末尾才提问）、`prHealth`；在跑的还有空转迹象 `distinctRecentCommands`（最近 30 个工具调用里不同命令数）、`sampleCommand`、`minutesSinceLastMessage`。
   - `bgKills`：尾部 60 条活动里，命令行带单独 `&` 的后台启动却以超时结束的次数（`count`）、最近时间（`lastAt`）与命令（`sample`）——后台进程已随进程组被杀。在跑和停着的候选都采。
@@ -26,12 +27,12 @@
   - `checks[]`：这个 HEAD 上每个检查的最新状态 `success`/`failure`/`pending`、时间与说明；`failChecks`、`pendingChecks` 由它汇总。
   - `latestAt`：review、评论与检查出结论的最新时间；晚于线程 `lastMsgAt` 时 `prs` 标 `(stale)`。
   - `lastCommentAt`/`lastCommentBy`、`mergeable`、`openHours`、`rounds`、`inline24h`/`inlineP0P2`（24 小时内行内意见及其中 P0–P2 条数）。
-- **失败清单** `failedThreads`：合并候选内失败线程与 `failedTopLevel`（被候选过滤排除、但状态是 failed/interrupted/cancelled 的顶层线程），`source` 标来源。探测结果与 Fast Ship 审查失败不回灌恢复清单，后者由 Fast Ship 重派；其余过滤外失败逐条处理，避免静默漏掉真实执行任务。
+- **失败清单** `failedThreads`：合并候选内失败线程与 `failedTopLevel`（被候选过滤排除、但状态是 failed/interrupted/cancelled 的顶层线程），`source` 标来源。巡检排除项、探测结果与 Fast Ship 审查失败不回灌恢复清单，后者由 Fast Ship 重派；其余过滤外失败逐条处理，避免静默漏掉真实执行任务。
 - **体检清单**（环境级，不论分诊）：
   - `needsWatchThreads`：有 open PR 没挂监听（`prs`、`urls`）。
   - `needsRenameThreads`：标题是原文堆砌、超宽或缺 open PR 号（`reasons`），带 `prs`/`task`/`tail` 作为命名依据。
   - `convergenceAuditThreads`：PR 开着超过 `convergenceAudit.openHours` 或审查超过 `convergenceAudit.reviewRounds` 轮，且 24 小时内仍有 P0–P2（`prs` 带时长/轮次/条数，直接当审计题头）。
-- **计数** `checks`：候选、有事、静默与各清单条数。汇报「例行复核」只引用这里的数字。
+- **计数** `checks`：巡检排除、候选、有事、静默与各清单条数。汇报「例行复核」只引用这里的数字。
 - **容量** `environments[].capacity`：绑定读取失败见 `unverifiedThreads`，该类无 PR 任务保守占位；重型/通用两池占用、项目池归属 `poolByRepo`、按仓库的可建数 `freeByRepo`、`blocked`（本机磁盘低于保底，或设备上有线程在等资源；非空时可建数全为 0），以及 `activeTopLevel` 与 `occupying`，完整快照与 `--capacity-only` 共用 [handoff.md](handoff.md) 第 3 步的计数与审查排除规则。`disk.freeGB` 只有本机有值，远程磁盘由在那里干活的线程自己查。
 
 ## 分诊规则

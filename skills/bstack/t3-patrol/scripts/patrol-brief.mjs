@@ -25,6 +25,7 @@ export function briefOf(snap) {
       alias: e.alias ?? e.label,
       environmentId: e.environmentId,
       checks: e.checks,
+      patrolExcluded: e.patrolExcluded ?? [],
       capacity: {
         used: cap.used,
         pools: cap.pools,

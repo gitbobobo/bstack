@@ -21,11 +21,36 @@ export const statePath = (env = process.env) => join(configDir(env), "state", "t
 export function loadState(env = process.env) {
   try {
     const saved = JSON.parse(readFileSync(statePath(env), "utf8"));
-    return { lastRound: saved.lastRound ?? null, pendingHandoffs: saved.pendingHandoffs ?? [] };
+    return { lastRound: saved.lastRound ?? null, pendingHandoffs: saved.pendingHandoffs ?? [], managedThreads: saved.managedThreads ?? [] };
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
-    return { lastRound: null, pendingHandoffs: [] };
+    return { lastRound: null, pendingHandoffs: [], managedThreads: [] };
   }
+}
+
+// 持久归属：派活台账全部 launched 记录 + 巡检交接目标；不按标题、创建者或近期时间推断。
+export function managedThreadsOf(state, env = process.env) {
+  let ledger = "";
+  try {
+    ledger = readFileSync(join(configDir(env), "state", "t3-dispatch.jsonl"), "utf8");
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  const out = [...(state.managedThreads ?? [])];
+  for (const line of ledger.split("\n").filter((s) => s.trim())) {
+    const e = JSON.parse(line);
+    if (e.event === "launched" && e.environmentId && e.threadId) out.push({ environmentId: e.environmentId, threadId: e.threadId });
+  }
+  for (const h of state.pendingHandoffs ?? []) {
+    const target = handoffTarget(h);
+    if (target) out.push(target);
+  }
+  return [...new Map(out.map((x) => [JSON.stringify([x.environmentId, x.threadId]), x])).values()];
+}
+
+function handoffTarget(entry) {
+  const match = String(entry.launchedThreadLink ?? "").match(/^<?t3-thread:\/\/v2\/([^/]+)\/([^/<>]+)>?$/);
+  return match && match[1] === entry.targetEnvironmentId ? { environmentId: match[1], threadId: match[2] } : null;
 }
 
 export function putHandoff(state, entry) {
@@ -38,11 +63,24 @@ export function putHandoff(state, entry) {
   const next = { ...entry, waitingSince: i < 0 ? entry.waitingSince : pending[i].waitingSince };
   if (i < 0) pending.push(next);
   else pending[i] = next;
+  const target = handoffTarget(next);
+  if (target) {
+    const managed = state.managedThreads ??= [];
+    if (!managed.some((x) => x.environmentId === target.environmentId && x.threadId === target.threadId)) managed.push(target);
+  }
 }
 
 export function resolveHandoff(state, entry) {
   if (!entry.sourceEnvironmentId || !entry.sourceThreadId || !entry.evidenceRef || !["accepted", "cancelled"].includes(entry.outcome)) {
     throw new Error("交接销账需要来源身份、outcome（accepted/cancelled）及 evidenceRef");
+  }
+  // 先固化旧队列中的目标归属，再销账，避免下一轮目标线程丢失巡检归属。
+  for (const h of state.pendingHandoffs ?? []) {
+    const target = handoffTarget(h);
+    if (target) {
+      const managed = state.managedThreads ??= [];
+      if (!managed.some((x) => x.environmentId === target.environmentId && x.threadId === target.threadId)) managed.push(target);
+    }
   }
   state.pendingHandoffs = (state.pendingHandoffs ?? []).filter((x) => x.sourceEnvironmentId !== entry.sourceEnvironmentId || x.sourceThreadId !== entry.sourceThreadId);
 }

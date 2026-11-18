@@ -33,7 +33,12 @@ test("完整/容量快照一致排除 Fast Ship 审查，保留实现父线程�
   top.find((x) => x.threadId === "impl3").pullRequests = [{ state: "open", repository: "owner/heavy", number: 3 }];
   for (const r of top.filter((x) => x.threadId.startsWith("review"))) r.pullRequests = [{ state: "open", repository: "owner/heavy", number: 10 }];
   const children = [thread("child1", "实现子代理", "running", { parentThreadId: "impl4" }), thread("child2", "审查子代理", "running", { parentThreadId: "review2" })];
+  mkdirSync(join(dir, "state"));
+  const ledger = join(dir, "state", "t3-dispatch.jsonl");
+  const records = top.map((tr) => ({ event: "launched", environmentId: "mini", threadId: tr.threadId, at: "2020-01-01T00:00:00Z" }));
+  writeFileSync(ledger, records.map((r) => JSON.stringify(r)).join("\n"));
   const reads = [];
+  const detailReads = [];
   const errors = [];
   const server = createServer(async (req, res) => {
     try {
@@ -47,9 +52,13 @@ test("完整/容量快照一致排除 Fast Ship 审查，保留实现父线程�
         if (name === "t3_environment_links") data = { environmentId: "mini", links: [] };
         else if (name === "t3_thread_list") data = { threads: a.includeSubagents ? children : top, nextCursor: null };
         else if (name === "t3_project_list") data = { projects: [{ id: "p", repositoryIdentity: { canonicalKey: REPO } }], nextCursor: null };
-        else if (name === "list_thread_pull_requests") data = { pullRequests: [] };
+        else if (name === "list_thread_pull_requests") {
+          detailReads.push(a.threadId);
+          data = { pullRequests: [] };
+        }
         else if (name === "t3_thread_read") {
           reads.push(a.threadId);
+          if (a.view === "activity") detailReads.push(a.threadId);
           if (a.threadId === "unreadable") {
             res.end(JSON.stringify({ jsonrpc: "2.0", id: rpc.id, result: { isError: true, content: [{ text: "fixture 绑定读取失败" }] } }));
             return;
@@ -107,7 +116,6 @@ test("完整/容量快照一致排除 Fast Ship 审查，保留实现父线程�
   assert.deepEqual(c.releasing.map((x) => x.threadId).sort(), ["background", "impl0", "impl2"]);
   assert.deepEqual(snap.expectReleaseUnmatched.map((x) => x.threadId).sort(), ["ghost", "impl1"], "别的环境或不占位的线程要报出来核对");
 
-  mkdirSync(join(dir, "state"));
   writeFileSync(join(dir, "state", "t3-patrol.json"), JSON.stringify({ pendingHandoffs: [
     { sourceEnvironmentId: "mini", sourceThreadId: "impl2", launchedThreadLink: "<t3-thread://x>" },
     { sourceEnvironmentId: "mini", sourceThreadId: "impl1" },
@@ -125,5 +133,28 @@ test("完整/容量快照一致排除 Fast Ship 审查，保留实现父线程�
   assert.deepEqual(c2.releasing.map((x) => x.threadId).sort(), ["impl0", "impl2"], "带 releases 的成功调用与已建线交接来源记为预计释放");
   assert.deepEqual(snap2.expectReleaseUnflagged.map((x) => x.threadId), ["background"], "发过消息、仍占位却没标 releases 的要报出来");
   assert.equal(snap2.expectReleaseUnmatched, undefined);
+  // 没有派出归属的线程保留实际容量，但失败兜底、全量与独立体检都不能将它们捞回。
+  const protectedIds = ["impl0", "impl3", "background", "discussion"];
+  writeFileSync(ledger, records.filter((r) => !protectedIds.includes(r.threadId)).concat([
+    { event: "launched", environmentId: "other", threadId: "impl3" }, // 同名异环境不能冒认
+    { event: "claimed", environmentId: "mini", threadId: "impl0" }, // 认领不等于派出
+  ]).map((r) => JSON.stringify(r)).join("\n"));
+  for (const mode of [[], ["--full"], ["--capacity-only"]]) {
+    detailReads.length = 0;
+    const { stdout } = await exec(process.execPath, [script, "--self", "self", ...mode], { env, timeout: 15000 });
+    const e = JSON.parse(stdout).environments[0];
+    assert.equal(e.capacity.used, 7, "归属排除不释放实际占用");
+    assert.ok(!detailReads.some((id) => protectedIds.includes(id)), "排除项仅可读容量元数据，不取活动或PR实况");
+    if (mode.includes("--capacity-only")) {
+      assert.ok(e.openThreads.some((x) => x.id === "impl0"), "派活查重仍保留非巡检线程");
+      continue;
+    }
+    assert.equal(e.checks.candidates, 5);
+    assert.equal(e.checks.patrolExcluded, 4);
+    assert.deepEqual(e.patrolExcluded.map((x) => [x.id, x.reason]), protectedIds.map((id) => [id, "非巡检派出"]));
+    for (const key of ["candidates", "failedTopLevel", "failedThreads", "needsWatchThreads", "needsRenameThreads", "convergenceAuditThreads"]) {
+      assert.ok(!e[key].some((x) => protectedIds.includes(x.id)), `${key} 不得包含排除项`);
+    }
+  }
   assert.deepEqual(errors, []);
 });

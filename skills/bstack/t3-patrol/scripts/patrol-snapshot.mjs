@@ -23,7 +23,7 @@ import { capacityOf, countsCapacity, isReviewBot } from "./patrol-capacity.mjs";
 export { isReviewBot } from "./patrol-capacity.mjs";
 import { call, connect, hasSession, NO_SESSION, pool } from "./t3-mcp.mjs";
 import { configure as configurePr, prLiveOf } from "./pr-live.mjs";
-import { loadState } from "./patrol-state.mjs";
+import { loadState, managedThreadsOf } from "./patrol-state.mjs";
 import { bgKillsOf, fullRoundOf, triageOf, WAIT_MARK } from "./patrol-triage.mjs";
 import { briefOf } from "./patrol-brief.mjs";
 
@@ -39,6 +39,8 @@ const CONC = Number(opt("concurrency", 6));
 const CAPACITY_ONLY = args.includes("--capacity-only");
 const multi = (name) => args.flatMap((a, i) => (a === `--${name}` && args[i + 1] ? [args[i + 1]] : []));
 const STATE = loadState();
+const MANAGED = new Set(managedThreadsOf(STATE).map((x) => JSON.stringify([x.environmentId, x.threadId])));
+const isManaged = (environmentId, threadId) => MANAGED.has(JSON.stringify([environmentId, threadId]));
 const EXPECT_FILES = multi("expect-release-from").map((f) => JSON.parse(readFileSync(f, "utf8").replace(/^\uFEFF/, "")));
 const { expect: EXPECT, messaged: MESSAGED } = expectReleaseOf({
   manual: multi("expect-release"),
@@ -370,7 +372,12 @@ async function snapshotEnv(env) {
   const all = await listAll(env.isLocal ? null : env.environmentId);
   const top = all.filter((t) => !isSubagent(t));
   const rootsP = liveSubagentRoots(env.isLocal ? null : env.environmentId, top);
-  const candidates = top.filter((t) => !isReviewBot(t) && !isProbe(t) && t.threadId !== SELF);
+  const eligible = top.filter((t) => !isReviewBot(t) && !isProbe(t) && t.threadId !== SELF);
+  const owned = (t) => isManaged(env.environmentId, t.threadId);
+  const patrolExcluded = eligible.filter((t) => !owned(t)).map((t) => ({
+    id: t.threadId, link: t.link, title: clip(t.title, 80), reason: "非巡检派出",
+  }));
+  const candidates = eligible.filter(owned);
   const enriched = await pool(candidates, CONC, async (t) => {      const base = {
         id: t.threadId,
         link: t.link,
@@ -432,7 +439,12 @@ async function snapshotEnv(env) {
       }
   });
   const byId = new Map(enriched.map((x) => [x.id, x]));
-  const waiting = enriched.filter((x) => x.waitingResources && countsCapacity(x, SELF)).map((x) => clip(x.title, 40));
+  // 排除的是巡检处置，不是实际占用；仅补容量所需的只读绑定/run/资源字段。
+  const scope = env.isLocal ? {} : { environmentId: env.environmentId };
+  await pool(eligible.filter((t) => !owned(t)), CONC, async (t) => {
+    byId.set(t.threadId, await idleStateOf(scope, t));
+  });
+  const waiting = top.filter((t) => byId.get(t.threadId)?.waitingResources && countsCapacity(t, SELF)).map((t) => clip(t.title, 40));
   const { occupying, capacity } = await occupancyOf(env, top, (t) => byId.get(t.threadId), now, rootsP, waiting);
   const prevUsed = STATE.lastRound?.occupancy?.[env.environmentId];
   const deviceFreed = Number.isInteger(prevUsed) && capacity.used < prevUsed;
@@ -449,7 +461,7 @@ async function snapshotEnv(env) {
   // 把误杀的线程留在这份名单里，巡检每轮必须逐个过——静默消失比多算几条候选危险得多。
   const realIds = new Set(real.map((x) => x.id));
   const failedTopLevel = top
-    .filter((t) => ["failed", "interrupted", "cancelled"].includes(t.status) && !realIds.has(t.threadId) && !isProbe(t) && !isReviewBot(t))
+    .filter((t) => owned(t) && ["failed", "interrupted", "cancelled"].includes(t.status) && !realIds.has(t.threadId) && !isProbe(t) && !isReviewBot(t))
     .map((t) => ({
       id: t.threadId,
       link: t.link,
@@ -498,6 +510,7 @@ async function snapshotEnv(env) {
     // 静默候选只留识别与分诊字段：巡检对它们只记一行，不再深读。
     candidates: real.map((x) => (x.triage === "quiet" ? pick(x, QUIET_FIELDS) : x)),
     delegatedExcluded: enriched.length - real.length,
+    patrolExcluded,
     failedTopLevel,
     failedThreads,
     needsWatchThreads,
@@ -505,6 +518,7 @@ async function snapshotEnv(env) {
     convergenceAuditThreads,
     // 汇报只允许引用这里的计数；从候选摘要或记忆里估数会把漏做的体检写成 0。
     checks: {
+      patrolExcluded: patrolExcluded.length,
       candidates: real.length,
       hot: real.filter((x) => x.triage === "hot").length,
       quiet: real.filter((x) => x.triage === "quiet").length,

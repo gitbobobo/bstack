@@ -1,11 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { loadState, statePath, putHandoff, resolveHandoff } from "./patrol-state.mjs";
+import { loadState, statePath, putHandoff, resolveHandoff, managedThreadsOf } from "./patrol-state.mjs";
 
 const entry = { sourceEnvironmentId: "mbp", sourceThreadId: "ios", sourceLink: "t3-thread://ios", targetEnvironmentId: "mini", canonicalKey: "host/repo", task: "Android 后续", handoffRef: "来源收尾消息", waitingSince: "2026-11-09T04:00:00Z", blocker: "Musiver 池 4/4" };
 
@@ -25,13 +25,39 @@ test("交接按来源环境及线程去重，更新保留最初等待时间；�
   assert.throws(() => putHandoff(state, { ...entry, targetEnvironmentId: "" }), /targetEnvironmentId/);
 });
 
+test("归属只取派活记录和交接目标，队列销账后目标仍受管，台账损坏报错", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "patrol-ownership-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const env = { BSTACK_CONFIG_DIR: dir };
+  const state = { pendingHandoffs: [] };
+  assert.deepEqual(managedThreadsOf(state, env), []);
+  mkdirSync(join(dir, "state"));
+  const ledger = join(dir, "state", "t3-dispatch.jsonl");
+  writeFileSync(ledger, [
+    { event: "launched", environmentId: "mini", threadId: "a", at: "2020-01-01" },
+    { event: "released", environmentId: "mini", threadId: "a" },
+    { event: "claimed", environmentId: "mini", threadId: "b" },
+  ].map((x) => JSON.stringify(x)).join("\n"));
+  const handoff = { ...entry, launchedThreadLink: "<t3-thread://v2/mini/android>" };
+  putHandoff(state, handoff);
+  putHandoff(state, handoff);
+  assert.deepEqual(state.managedThreads, [{ environmentId: "mini", threadId: "android" }]);
+  resolveHandoff(state, { ...entry, outcome: "accepted", evidenceRef: "接手活动" });
+  assert.deepEqual(managedThreadsOf(state, env), [
+    { environmentId: "mini", threadId: "android" }, { environmentId: "mini", threadId: "a" },
+  ]);
+  assert.deepEqual(managedThreadsOf({ pendingHandoffs: [handoff] }, env).map((x) => x.threadId), ["a", "android"], "旧队列可恢复目标归属，但不收编来源");
+  writeFileSync(ledger, "broken");
+  assert.throws(() => managedThreadsOf(state, env));
+});
+
 test("commit 保留交接队列；旧状态兼容，损坏状态报错而非清空", () => {
   const dir = mkdtempSync(join(tmpdir(), "patrol-state-"));
   const env = { ...process.env, BSTACK_CONFIG_DIR: dir };
   try {
-    assert.deepEqual(loadState(env), { lastRound: null, pendingHandoffs: [] });
+    assert.deepEqual(loadState(env), { lastRound: null, pendingHandoffs: [], managedThreads: [] });
     const path = statePath(env);
-    const state = { lastRound: null, pendingHandoffs: [entry] };
+    const state = { lastRound: null, pendingHandoffs: [entry], managedThreads: [] };
     const input = join(dir, "entry.json");
     writeFileSync(input, JSON.stringify(entry));
     const run = (...args) => {
@@ -61,7 +87,7 @@ test("commit 保留交接队列；旧状态兼容，损坏状态报错而非清�
     run("handoff-resolve", "--file", input);
     assert.deepEqual(loadState(env).pendingHandoffs, []);
     writeFileSync(path, JSON.stringify({ lastRound: { tier: "old" } }));
-    assert.deepEqual(loadState(env), { lastRound: { tier: "old" }, pendingHandoffs: [] });
+    assert.deepEqual(loadState(env), { lastRound: { tier: "old" }, pendingHandoffs: [], managedThreads: [] });
     writeFileSync(path, "broken");
     assert.throws(() => loadState(env));
     assert.equal(readFileSync(path, "utf8"), "broken");
