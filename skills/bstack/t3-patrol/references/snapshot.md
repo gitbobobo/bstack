@@ -33,7 +33,7 @@
   - `needsRenameThreads`：标题是原文堆砌、超宽或缺 open PR 号（`reasons`），带 `prs`/`task`/`tail` 作为命名依据。
   - `convergenceAuditThreads`：PR 开着超过 `convergenceAudit.openHours` 或审查超过 `convergenceAudit.reviewRounds` 轮，且 24 小时内仍有 P0–P2（`prs` 带时长/轮次/条数，直接当审计题头）。
 - **计数** `checks`：巡检排除、候选、有事、静默与各清单条数。汇报「例行复核」只引用这里的数字。
-- **容量** `environments[].capacity`：绑定读取失败见 `unverifiedThreads`，该类无 PR 任务保守占位；重型/通用两池占用、项目池归属 `poolByRepo`、按仓库的可建数 `freeByRepo`、`blocked`（本机磁盘低于保底，或设备上有线程在等资源；非空时可建数全为 0），以及 `activeTopLevel` 与 `occupying`，完整快照与 `--capacity-only` 共用 [handoff.md](handoff.md) 第 3 步的计数与审查排除规则。`disk.freeGB` 只有本机有值，远程磁盘由在那里干活的线程自己查。
+- **容量** `environments[].capacity`：绑定读取失败见 `unverifiedThreads`，该类无 PR 任务保守占位；重型/通用两池占用、项目池归属 `poolByRepo`、按仓库的可建数 `freeByRepo`、`blocked`（本机磁盘低于保底，或设备上有线程在等资源；非空时可建数全为 0），以及 `activeTopLevel` 与 `occupying`，完整快照与 `--capacity-only` 共用 [handoff.md](handoff.md) 第 3 步的计数与审查排除规则。`decisions[]` 逐线程给出 `threadId`、`title`、`occupies` 与 `reason`，区分活跃执行与保守占位；本机释放时还带 `evidence`（核验凭据），摘要只保留判定不重复证据全文。待交接来源可按 [本机名额释放](handoff.md#本机段完成后的名额释放) 从实际容量释放，队列与线程仍保留。`disk.freeGB` 只有本机有值，远程磁盘由在那里干活的线程自己查。
 
 ## 分诊规则
 

@@ -58,9 +58,17 @@ export function putHandoff(state, entry) {
     if (typeof entry[key] !== "string" || !entry[key].trim()) throw new Error(`交接缺少 ${key}`);
   }
   if (!Number.isFinite(Date.parse(entry.waitingSince))) throw new Error("waitingSince 必须是日期");
+  if (entry.sourceRelease != null) {
+    for (const key of ["runId", "worktreePath", "verifiedAt", "deliveryRef", "idleRef"]) {
+      if (typeof entry.sourceRelease[key] !== "string" || !entry.sourceRelease[key].trim()) throw new Error(`sourceRelease 缺少 ${key}`);
+    }
+    if (!Number.isFinite(Date.parse(entry.sourceRelease.verifiedAt))) throw new Error("sourceRelease.verifiedAt 必须是日期");
+  }
   const pending = state.pendingHandoffs ??= [];
   const i = pending.findIndex((x) => x.sourceEnvironmentId === entry.sourceEnvironmentId && x.sourceThreadId === entry.sourceThreadId);
+  // 更新阻塞或目标时保留本机释放凭据；显式 sourceRelease:null 可撤回。
   const next = { ...entry, waitingSince: i < 0 ? entry.waitingSince : pending[i].waitingSince };
+  if (i >= 0 && !Object.hasOwn(entry, "sourceRelease") && Object.hasOwn(pending[i], "sourceRelease")) next.sourceRelease = pending[i].sourceRelease;
   if (i < 0) pending.push(next);
   else pending[i] = next;
   const target = handoffTarget(next);

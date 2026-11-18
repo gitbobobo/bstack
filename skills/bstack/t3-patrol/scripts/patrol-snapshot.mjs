@@ -19,7 +19,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { loadConfig, loadEnvironments } from "./patrol-config.mjs";
-import { capacityOf, countsCapacity, isReviewBot } from "./patrol-capacity.mjs";
+import { capacityOf, countsCapacity, isReviewBot, occupancyDecision } from "./patrol-capacity.mjs";
 export { isReviewBot } from "./patrol-capacity.mjs";
 import { call, connect, hasSession, NO_SESSION, pool } from "./t3-mcp.mjs";
 import { configure as configurePr, prLiveOf } from "./pr-live.mjs";
@@ -148,6 +148,24 @@ function waitOf(status, lastMsg) {
   return text.startsWith(WAIT_MARK) ? { at: lastMsg.updatedAt, line: clip(text.split("\n")[0], 200) } : null;
 }
 
+function executionStateOf(r) {
+  if (!r?.thread || typeof r.thread.status !== "string" || !Object.hasOwn(r.thread, "worktreePath")) throw new Error("线程详情缺少 status/worktreePath，无法核实容量");
+  const latest = r.thread?.latestRunId
+    ? (r.recentRuns ?? []).find((x) => x.runId === r.thread.latestRunId)
+    : r.recentRuns?.[0];
+  return {
+    status: r.thread?.status,
+    activeRunId: r.thread?.activeRunId ?? null,
+    pendingRequestCount: r.thread?.pendingRequestCount ?? 0,
+    capacityPrs: r.thread?.pullRequests ?? [],
+    lastRunId: r.thread?.latestRunId ?? latest?.runId ?? null,
+    lastRunStatus: latest?.status ?? null,
+    worktreePath: r.thread?.worktreePath ?? null,
+    hasWorktree: Boolean(r.thread?.worktreePath),
+    lastRunEndedAt: latest?.completedAt ?? latest?.startedAt ?? latest?.requestedAt ?? null,
+  };
+}
+
 // --capacity-only 复用一次停驻回读：等待资源、绑定工作树和最近 run 时间同源。
 async function idleStateOf(scope, t) {
   if (LIVE.has(t.status) || !countsCapacity(t, SELF)) return {};
@@ -155,8 +173,7 @@ async function idleStateOf(scope, t) {
     const r = await call("t3_thread_read", { threadId: t.threadId, afterPosition: Math.max(0, (t.itemCount ?? 0) - 20), limit: 50, maxCharsPerItem: 400, ...scope });
     const last = (r.items ?? []).filter((i) => i.type === "user_message" || i.type === "assistant_message").at(-1);
     return {
-      hasWorktree: Boolean(r.thread.worktreePath),
-      lastRunEndedAt: (r.recentRuns ?? []).map((x) => x.completedAt ?? x.startedAt ?? x.requestedAt).filter(Boolean).sort().at(-1) ?? null,
+      ...executionStateOf(r),
       waitingResources: waitOf(t.status, last),
     };
   } catch (e) {
@@ -189,10 +206,9 @@ async function tailOf(environmentId, t) {
   return {
     ...(await activityOf(environmentId, t, lastMsgAt)),
     // t3_thread_list 不带 worktreePath，只有 t3_thread_read 的 thread 有。
-    hasWorktree: Boolean(head.thread?.worktreePath),
+    ...executionStateOf(meta),
     task: clip(first?.text, 300),
     pendingRequestCount: meta.thread?.pendingRequestCount ?? 0,
-    lastRunEndedAt: (meta.recentRuns ?? []).map((r) => r.completedAt ?? r.startedAt ?? r.requestedAt).filter(Boolean).sort().at(-1) ?? null,
     runs: (meta.recentRuns ?? []).slice(0, 3).map((r) => `${r.ordinal}:${r.status}${r.startedAt ? "" : "(未启动)"}@${r.completedAt ?? r.startedAt ?? r.requestedAt}`),
     waitingResources: waitOf(t.status, msgs.at(-1)),
     tail: msgs.slice(-TAIL).map((i) => `[${i.updatedAt?.slice(5, 16)} ${i.type === "user_message" ? (i.createdBy === "user" ? "用户" : "注入") : "代理"}] ${clipEnds(i.text)}`),
@@ -260,7 +276,6 @@ function convergenceOf(health) {
 
 // 占用名额的实现线程：有活跃 run/子代理，或 PR 仍 open 且最近窗口内跑过。
 // 巡检、探测与 Fast Ship 只读审查在活动/PR 判定前统一排除；不用会被同步刷新的 updatedAt。
-const holdsOpenPr = (t) => countsCapacity(t, SELF) && !LIVE.has(t.status) && (t.pullRequests ?? []).some((p) => p.state === "open");
 
 // 父线程把活交给子代理后，自己的 run 会 completed，等子代理完成时唤醒；工作树仍在被子代理改写、编译，按占用算。
 async function liveSubagentRoots(environmentId, top) {
@@ -279,12 +294,21 @@ async function liveSubagentRoots(environmentId, top) {
     // 中间层子代理可能已 completed、不在活跃列表里，逐层回读找顶层。
     for (let depth = 0; depth < 6 && cur && !topIds.has(cur); depth++) {
       if (!parentOf.has(cur)) {
-        const r = await call("t3_thread_read", { threadId: cur, limit: 1, maxCharsPerItem: 1, ...scope }).catch(() => null);
-        parentOf.set(cur, r?.thread?.parentThreadId ?? null);
+        const readParent = async () => {
+          const r = await call("t3_thread_read", { threadId: cur, limit: 1, maxCharsPerItem: 1, ...scope });
+          if (!r?.thread || !Object.hasOwn(r.thread, "parentThreadId")) throw new Error(`子代理祖先 ${cur} 缺少 parentThreadId`);
+          return r.thread.parentThreadId;
+        };
+        const parent = await readParent().catch(async () => {
+          await new Promise((resolve) => setTimeout(resolve, 1500));
+          return readParent();
+        });
+        parentOf.set(cur, parent);
       }
       cur = parentOf.get(cur);
     }
-    if (cur && topIds.has(cur)) roots.add(cur);
+    if (!cur || !topIds.has(cur)) throw new Error(`活跃子代理 ${id} 的顶层归属无法核实，暂停本环境派活`);
+    roots.add(cur);
   }
   return roots;
 }
@@ -292,18 +316,17 @@ async function liveSubagentRoots(environmentId, top) {
 // rootsP 是提前发起的 liveSubagentRoots：它要列全部活跃子代理，较慢，与候选取证并行。
 // waiting：本设备上在等资源的线程标题，非空时这台设备不建新线程。
 async function occupancyOf(env, top, detailsOf, now, rootsP, waiting) {
-  const roots = await rootsP;
-  const occupying = top.filter((t) => {
-    if (!countsCapacity(t, SELF)) return false;
-    if (LIVE.has(t.status) || roots.has(t.threadId)) return true;
-    const details = detailsOf(t);
-    // 无 PR 的执行任务可能只把长验收放到后台；completed 只结束代理回合。
-    // 仍绑定工作树或读取不明时保守占位，交付核验后由 settle 释放。
-    if (!(t.pullRequests ?? []).length) return details?.hasWorktree !== false;
-    if (!holdsOpenPr(t)) return false;
-    const ended = Date.parse(details?.lastRunEndedAt ?? "");
-    return Number.isFinite(ended) && now - ended < CFG.capacity.occupyWindowHours * 3600 * 1000;
-  });
+  const { roots, error } = await rootsP;
+  if (error) throw error;
+  const decisions = top.filter((t) => countsCapacity(t, SELF)).map((t) => ({
+    threadId: t.threadId, title: t.title,
+    ...occupancyDecision({ thread: t, details: detailsOf(t), liveChild: roots.has(t.threadId),
+      managed: isManaged(env.environmentId, t.threadId),
+      handoff: STATE.pendingHandoffs.find((h) => h.sourceEnvironmentId === env.environmentId && h.sourceThreadId === t.threadId),
+      now, occupyWindowHours: CFG.capacity.occupyWindowHours }),
+  }));
+  const occupyingIdsNow = new Set(decisions.filter((d) => d.occupies).map((d) => d.threadId));
+  const occupying = top.filter((t) => occupyingIdsNow.has(t.threadId));
   // 项目清单取不到时归属不可信，暂停本设备派活并报告。
   let projects = new Map();
   let projectsError = null;
@@ -333,6 +356,7 @@ async function occupancyOf(env, top, detailsOf, now, rootsP, waiting) {
   });
   const capacity = {
     ...base,
+    decisions,
     ...(releasing.length ? { releasing: releasing.map((t) => ({ threadId: t.threadId, title: clip(t.title, 40) })) } : {}),
     ...(unverifiedThreads.length ? { unverifiedThreads } : {}),
     ...(projectsError ? { projectsError, blocked: [projectsError], freeByRepo: {}, freeOther: 0, ...(base.projectedFreeByRepo ? { projectedFreeByRepo: {}, projectedFreeOther: 0 } : {}) } : {}),
@@ -346,7 +370,7 @@ async function capacityEnv(env) {
   const now = Date.now();
   const scope = env.isLocal ? {} : { environmentId: env.environmentId };
   const top = (await listAll(env.isLocal ? null : env.environmentId)).filter((t) => !isSubagent(t));
-  const rootsP = liveSubagentRoots(env.isLocal ? null : env.environmentId, top);
+  const rootsP = liveSubagentRoots(env.isLocal ? null : env.environmentId, top).then((roots) => ({ roots }), (error) => ({ error }));
   const states = await pool(top, CONC, (t) => idleStateOf(scope, t));
   const byId = new Map(top.map((t, i) => [t.threadId, states[i]]));
   const waiting = top.filter((t, i) => states[i].waitingResources && countsCapacity(t, SELF)).map((t) => clip(t.title, 40));
@@ -371,7 +395,7 @@ async function snapshotEnv(env) {
   const now = Date.now();
   const all = await listAll(env.isLocal ? null : env.environmentId);
   const top = all.filter((t) => !isSubagent(t));
-  const rootsP = liveSubagentRoots(env.isLocal ? null : env.environmentId, top);
+  const rootsP = liveSubagentRoots(env.isLocal ? null : env.environmentId, top).then((roots) => ({ roots }), (error) => ({ error }));
   const eligible = top.filter((t) => !isReviewBot(t) && !isProbe(t) && t.threadId !== SELF);
   const owned = (t) => isManaged(env.environmentId, t.threadId);
   const patrolExcluded = eligible.filter((t) => !owned(t)).map((t) => ({

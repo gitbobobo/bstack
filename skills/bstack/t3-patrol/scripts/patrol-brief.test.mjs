@@ -37,6 +37,11 @@ test("摘要：有事候选留判定字段并截断尾部，静默一行，体�
   assert.equal(e.needsWatch, 1);
   assert.deepEqual(b.modelLadder, ["pi/x"]);
   assert.deepEqual(b.pendingHandoffs, []);
+  Object.assign(snap.environments[0].candidates[0], { activeRunId: "r", capacityPrs: [{ state: "open" }], lastRunId: "r", lastRunStatus: "completed", worktreePath: "/tree" });
+  const hot = briefOf(snap).environments[0].hot[0];
+  for (const key of ["activeRunId", "capacityPrs", "lastRunId", "lastRunStatus", "worktreePath"]) assert.equal(hot[key], undefined, `${key} 仅用于容量，不重复进入精简摘要`);
+  snap.environments[0].capacity.decisions = [{ threadId: "t1", occupies: false, reason: "本机段已交付且空闲，保留跨机交接", evidence: { idleRef: "完整记录" } }];
+  assert.deepEqual(briefOf(snap).environments[0].capacity.decisions, [{ threadId: "t1", occupies: false, reason: "本机段已交付且空闲，保留跨机交接" }], "摘要保留判定，证据全文从完整快照按需读取");
 });
 
 test("待交接队列独立展示：来源不在候选或环境不可达仍完整保留", () => {

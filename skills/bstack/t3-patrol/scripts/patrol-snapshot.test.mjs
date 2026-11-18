@@ -38,6 +38,8 @@ test("完整/容量快照一致排除 Fast Ship 审查，保留实现父线程�
   const records = top.map((tr) => ({ event: "launched", environmentId: "mini", threadId: tr.threadId, at: "2020-01-01T00:00:00Z" }));
   writeFileSync(ledger, records.map((r) => JSON.stringify(r)).join("\n"));
   const reads = [];
+  let malformedThread = null;
+  let middleFlakyReads = 0;
   const detailReads = [];
   const errors = [];
   const server = createServer(async (req, res) => {
@@ -59,15 +61,20 @@ test("完整/容量快照一致排除 Fast Ship 审查，保留实现父线程�
         else if (name === "t3_thread_read") {
           reads.push(a.threadId);
           if (a.view === "activity") detailReads.push(a.threadId);
-          if (a.threadId === "unreadable") {
+          if (a.threadId === malformedThread) {
+            res.end(JSON.stringify({ jsonrpc: "2.0", id: rpc.id, result: { structuredContent: {} } }));
+            return;
+          }
+          if (["unreadable", "middle-unreadable"].includes(a.threadId) || (a.threadId === "middle-flaky" && ++middleFlakyReads === 1)) {
             res.end(JSON.stringify({ jsonrpc: "2.0", id: rpc.id, result: { isError: true, content: [{ text: "fixture 绑定读取失败" }] } }));
             return;
           }
-          const tr = top.find((x) => x.threadId === a.threadId);
+          const tr = top.find((x) => x.threadId === a.threadId)
+            ?? (a.threadId === "middle-flaky" ? thread("middle-flaky", "已停中间子代理", "completed", { parentThreadId: "background" }) : null);
           assert.ok(tr, `未知线程 ${a.threadId}`);
           data = { thread: { ...tr, worktreePath: tr.threadId === "discussion" ? null : "/fixture/worktree" },
             items: [{ position: 0, type: "user_message", text: "实现这个问题", updatedAt: now }, { position: 1, type: "assistant_message", text: "有实际实现进展", updatedAt: now }],
-            recentRuns: [{ ordinal: 1, status: tr.status, startedAt: now, completedAt: now }], hasMore: false };
+            recentRuns: [{ runId: `run-${tr.threadId}`, ordinal: 1, status: tr.status, startedAt: now, completedAt: now }], hasMore: false };
         } else throw new Error(`未模拟的工具 ${name}`);
         result = { structuredContent: data };
       }
@@ -106,6 +113,60 @@ test("完整/容量快照一致排除 Fast Ship 审查，保留实现父线程�
       assert.equal(e.checks.candidates, 9);
     }
   }
+  // 本机段已交付仅等待异机交接：两种快照均释放，但既不 settle 也不销账。
+  const handoff = { sourceEnvironmentId: "mini", sourceThreadId: "background", targetEnvironmentId: "mbp",
+    sourceRelease: { runId: "run-background", worktreePath: "/fixture/worktree", verifiedAt: new Date().toISOString(), deliveryRef: "本机交付", idleRef: "无后台任务核验" } };
+  const stateFile = join(dir, "state", "t3-patrol.json");
+  const pending = [handoff, ...["impl4", "unreadable"].map((id) => ({ ...handoff, sourceThreadId: id, sourceRelease: { ...handoff.sourceRelease, runId: `run-${id}` } }))];
+  writeFileSync(stateFile, JSON.stringify({ pendingHandoffs: pending }));
+  for (const mode of [["--capacity-only"], []]) {
+    const { stdout } = await exec(process.execPath, [script, "--self", "self", ...mode], { env, timeout: 15000 });
+    const snap = JSON.parse(stdout);
+    assert.equal(snap.environments[0].capacity.used, 6);
+    assert.ok(!snap.environments[0].occupying.includes("INT-200 race后台验收"));
+    const d = snap.environments[0].capacity.decisions.find((x) => x.threadId === "background");
+    assert.equal(d.occupies, false);
+    assert.equal(d.evidence.idleRef, "无后台任务核验");
+    assert.equal(snap.pendingHandoffs.length, 3);
+    assert.equal(snap.environments[0].capacity.decisions.find((x) => x.threadId === "impl4").occupies, true, "有活跃子代理，凭据不能释放");
+    assert.equal(snap.environments[0].capacity.decisions.find((x) => x.threadId === "unreadable").occupies, true, "读取失败，凭据不能释放");
+    if (mode.length) assert.ok(snap.environments[0].openThreads.some((x) => x.id === "background"), "释放容量不丢失查重身份");
+  }
+  malformedThread = "background";
+  for (const mode of [["--capacity-only"], []]) {
+    const { stdout } = await exec(process.execPath, [script, "--self", "self", ...mode], { env, timeout: 15000 });
+    const c = JSON.parse(stdout).environments[0].capacity;
+    assert.equal(c.used, 7, "缺少 thread 的响应仍保守占位");
+    assert.ok(c.unverifiedThreads.some((x) => x.threadId === "background"));
+  }
+  malformedThread = null;
+  children.push(thread("flaky-grandchild", "祖先回读抖动的孙子代理", "running", { parentThreadId: "middle-flaky" }));
+  for (const mode of [["--capacity-only"], []]) {
+    middleFlakyReads = 0;
+    const { stdout } = await exec(process.execPath, [script, "--self", "self", ...mode], { env, timeout: 15000 });
+    const e = JSON.parse(stdout).environments[0];
+    assert.equal(e.error, undefined, "祖先瞬时错误重试成功不应停派");
+    assert.equal(middleFlakyReads, 2);
+    assert.equal(e.capacity.used, 7, "重试找回活跃孙子的来源后仍占位");
+  }
+  children.pop();
+  // 中间层已停而孙子仍活跃；祖先读取失败不得将已核验来源误放行。
+  children.push(thread("nested-child", "活跃孙子代理", "running", { parentThreadId: "middle-unreadable" }));
+  for (const mode of [["--capacity-only"], []]) {
+    const { stdout } = await exec(process.execPath, [script, "--self", "self", ...mode], { env, timeout: 15000 });
+    const e = JSON.parse(stdout).environments[0];
+    assert.match(e.error, /绑定读取失败/);
+    assert.equal(e.capacity, undefined, "祖先取证失败不得输出可派容量");
+  }
+  children.pop();
+  // 来源产生新回合后旧凭据失效，重新保守占位。
+  handoff.sourceRelease.runId = "old-run";
+  writeFileSync(stateFile, JSON.stringify({ pendingHandoffs: [handoff] }));
+  for (const mode of [["--capacity-only"], []]) {
+    const { stdout } = await exec(process.execPath, [script, "--self", "self", ...mode], { env, timeout: 15000 });
+    assert.equal(JSON.parse(stdout).environments[0].capacity.used, 7);
+  }
+  writeFileSync(stateFile, JSON.stringify({ pendingHandoffs: [] }));
   const { stdout } = await exec(process.execPath, [script, "--self", "self", "--capacity-only",
     "--expect-release", "impl0@mini", "--expect-release", "impl2@mini", "--expect-release", "background",
     "--expect-release", "impl1@other", "--expect-release", "ghost@mini"], { env, timeout: 15000 });

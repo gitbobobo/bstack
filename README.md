@@ -34,7 +34,7 @@ T3 Code 多 harness 编排：按固定规则选 harness 与模型，派活验收
 
 ### t3-patrol
 
-定时巡检各 T3 环境中巡检体系自行派出及交接创建的未结线程，用户手动线程保持只读，衔接派活结果回读、故障恢复与 PR 归属核验，后台验收按绑定保守占位（巡检、探测及 Fast Ship 只读审查不占位）。[SKILL.md](skills/bstack/t3-patrol/SKILL.md)
+定时巡检各 T3 环境中巡检体系自行派出及交接创建的未结线程，用户手动线程保持只读，衔接派活结果回读、故障恢复与 PR 归属核验，后台验收默认按绑定保守占位，已核实本机交付且空闲的跨机交接来源可释放执行名额而保留交接责任（巡检、探测及 Fast Ship 只读审查不占位）。[SKILL.md](skills/bstack/t3-patrol/SKILL.md)
 
 ### t3-dispatch
 

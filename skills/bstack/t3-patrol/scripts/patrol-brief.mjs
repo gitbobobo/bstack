@@ -7,7 +7,7 @@
 import { readFileSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 
-const HOT_DROP = new Set(["id", "createdBy", "updatedAt", "projectId", "model", "hasWorktree", "lastRunEndedAt", "needsWatch", "needsWatchPrs", "needsWatchUrls", "needsRename", "renameReasons", "needsConvergenceAudit", "triage", "sampleCommand", "recentToolCalls"]);
+const HOT_DROP = new Set(["activeRunId", "capacityPrs", "lastRunId", "lastRunStatus", "worktreePath", "id", "createdBy", "updatedAt", "projectId", "model", "hasWorktree", "lastRunEndedAt", "needsWatch", "needsWatchPrs", "needsWatchUrls", "needsRename", "renameReasons", "needsConvergenceAudit", "triage", "sampleCommand", "recentToolCalls"]);
 const EMPTY = (v) => v == null || v === 0 || v === false || (Array.isArray(v) && !v.length);
 const clip = (t, n) => (String(t).length > n ? `${String(t).slice(0, n)}…` : String(t));
 const slimPr = (h) => {
@@ -29,6 +29,7 @@ export function briefOf(snap) {
       capacity: {
         used: cap.used,
         pools: cap.pools,
+        ...(cap.decisions?.length ? { decisions: cap.decisions.map(({ evidence, ...d }) => d) } : {}),
         free: Object.fromEntries(Object.entries(cap.freeByRepo ?? {}).filter(([, n]) => n > 0)),
         ...(cap.blocked ? { blocked: cap.blocked } : {}),
         ...(cap.disk?.freeGB != null ? { diskFreeGB: cap.disk.freeGB } : {}),
