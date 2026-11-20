@@ -219,9 +219,9 @@ if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToP
       rmSync(dir, { recursive: true, force: true });
     }
     console.log(JSON.stringify(results, null, 1));
-    process.exit(results.some((r) => r.error) ? 1 : 0);
+    process.exitCode = results.some((r) => r.error) ? 1 : 0;
   } catch (e) {
     console.error(e.message);
-    process.exit(e.message?.startsWith("用法") ? 2 : 1);
+    process.exitCode = e.message?.startsWith("用法") ? 2 : 1;
   }
 }

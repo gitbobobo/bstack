@@ -98,9 +98,9 @@ if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToP
     if (watchFile) out.watch = await watchAll(watchFile);
     if (callsFile) out.calls = await runCalls(callsFile);
     console.log(JSON.stringify(out, null, 1));
-    process.exit((out.watch ?? []).some((w) => w.error) || (out.calls ?? []).some((c) => !c.ok) ? 1 : 0);
+    process.exitCode = (out.watch ?? []).some((w) => w.error) || (out.calls ?? []).some((c) => !c.ok) ? 1 : 0;
   } catch (e) {
     console.error(e.message);
-    process.exit(1);
+    process.exitCode = 1;
   }
 }

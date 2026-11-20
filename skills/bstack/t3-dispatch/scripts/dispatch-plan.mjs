@@ -280,6 +280,6 @@ if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToP
     console.log(JSON.stringify(plan, null, 1));
   } catch (e) {
     console.error(e.message);
-    process.exit(1);
+    process.exitCode = 1;
   }
 }

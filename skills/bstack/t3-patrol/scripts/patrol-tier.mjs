@@ -162,6 +162,6 @@ async function main() {
 if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url))) {
   main().catch((e) => {
     console.error(e.stack ?? String(e));
-    process.exit(1);
+    process.exitCode = 1;
   });
 }
