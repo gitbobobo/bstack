@@ -6,8 +6,8 @@
    "displayName": "Pi",
    "models": [
     {
-     "id": "cliproxyapi/gpt-6.1-sol",
-     "label": "GPT 6.1 Sol (Devin)",
+     "id": "cliproxyapi/gpt-6.2-sol",
+     "label": "GPT 6.2 Sol (Devin)",
      "options": [
       {
        "id": "thinking",
@@ -195,8 +195,8 @@
    "displayName": "Codex",
    "models": [
     {
-     "id": "gpt-6.1-sol",
-     "label": "GPT-6.1-Sol",
+     "id": "gpt-6.2-sol",
+     "label": "GPT-6.2-Sol",
      "options": [
       {
        "id": "reasoningEffort",
@@ -486,8 +486,8 @@
      ]
     },
     {
-     "id": "gpt-6.1-sol",
-     "label": "GPT-6.1 Sol",
+     "id": "gpt-6.2-sol",
+     "label": "GPT-6.2 Sol",
      "options": [
       {
        "id": "autonomy_level",

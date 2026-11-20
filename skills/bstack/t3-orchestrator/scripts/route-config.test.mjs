@@ -71,8 +71,8 @@ test("不合法的部分报警告并沿用默认值", () => {
 });
 
 test("删掉入口后默认路由行里引用它的候选会被点名", () => {
-  const r = buildRouteData({ models: { "gpt-6.1-sol": { entries: [{ provider: "pi", id: "cliproxyapi/gpt-6.1-sol", options: { thinking: "medium" } }] } } });
-  assert.ok(r.warnings.some((w) => w.includes("gpt-6.1-sol@acpRegistry_factory_droid")));
+  const r = buildRouteData({ models: { "gpt-6.2-sol": { entries: [{ provider: "pi", id: "cliproxyapi/gpt-6.2-sol", options: { thinking: "medium" } }] } } });
+  assert.ok(r.warnings.some((w) => w.includes("gpt-6.2-sol@acpRegistry_factory_droid")));
 });
 
 test("CLI：配置生效于 select，并在输出里报配置警告；损坏的文件回落默认值", () => {

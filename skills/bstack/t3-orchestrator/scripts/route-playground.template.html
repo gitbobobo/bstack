@@ -251,7 +251,7 @@ try{
     const line=a[0]?a[0].provider+'/'+a[0].id:'NONE';
     console.log('SELFTEST select',t,'→',line);
   }
-  for(const nm of ['swe-2','gpt-6.1-sol','grok-4.7']){
+  for(const nm of ['swe-2','gpt-6.2-sol','grok-4.7']){
     S.mode='named';S.named=nm;S.namedProvider='';
     const g=namedStream()[0];const a=g.stream.filter(i=>!gateEntry(i,true).length);
     console.log('SELFTEST named',nm,'→',a[0]?a[0].provider+'/'+a[0].id:'NONE');

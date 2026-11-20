@@ -1,6 +1,6 @@
 # 模型参考
 
-调研日期：2026-10-11；harness 收敛为 pi / codex / droid：2026-10-27；2026-11-04 cliproxyapi 的 devin 订阅移除，devin harness 回归，swe-2/opus 改走 devin（用户定）；2026-11-17 订阅削减，opus/grok 改为点名专用（用户定）。模型 ID 以 `orchestrator_capabilities` 实时返回为准，这里的 ID 只是当时的快照。更新方法见文末「更新来源与标准」。
+调研日期：2026-10-11；harness 收敛为 pi / codex / droid：2026-10-27；2026-11-04 cliproxyapi 的 devin 订阅移除，devin harness 回归，swe-2/opus 改走 devin（用户定）；2026-11-17 订阅削减，opus/grok 改为点名专用（用户定）；2026-11-20 gpt-6.1-sol 换为 gpt-6.2-sol（用户定；pi/codex 目录实时确认，FrontierCode 榜单同日换版，新分 43.8%，cost 与视觉分待复核）。模型 ID 以 `orchestrator_capabilities` 实时返回为准，这里的 ID 只是当时的快照。更新方法见文末「更新来源与标准」。
 
 基准说明：FrontierCode（Cognition 维护，按代码能否合并评分）和 CursorBench 是第三方统一 harness 的榜单；Terminal-Bench、DeepSWE 多为厂商自报，不同版本不能横比。
 
@@ -9,7 +9,7 @@
 | 实例 | 用途 | 说明 |
 |---|---|---|
 | `pi` | glm/deepseek/grok/gpt 系的首选入口 | 经 cliproxyapi（`~/.pi/agent/cliproxyapi.json`）调多个提供商，额度与渠道切换由 cliproxyapi 负责；模型 ID 形如 `cliproxyapi/<模型>`。2026-11-04 起 devin 订阅已移除，不再提供 opus/swe-2。pi 目录里的 `opencode-go/*`、`commandcode/*`、`opendesign/*` 不走 cliproxyapi，不进路由 |
-| `codex` | gpt-6.1-sol 的备用入口 | 仅跑 GPT；也经 cliproxyapi 向 pi 提供 gpt-6.1-sol |
+| `codex` | gpt-6.2-sol 的备用入口 | 仅跑 GPT；也经 cliproxyapi 向 pi 提供 gpt-6.2-sol |
 | `acpRegistry_devin` | swe-2 与 opus（点名）的主入口（用户定） | 模型 ID 自带档位后缀（`swe-2-high`、`claude-opus-5-5-medium`）；另有 `gpt-6-1-sol-medium` 可人工点名，不进自动路由 |
 | `acpRegistry_factory_droid` | 其余模型的备用入口 | 目录没有 SWE-2。需 droid ≥0.234.0（修复 acp-daemon `--mcp-servers`，[Factory-AI/factory#9](https://github.com/Factory-AI/factory/issues/9)） |
 
@@ -20,7 +20,7 @@
 | 模型 | 状态 | 定位 | 关键数据 | 擅长 | 短板 |
 |---|---|---|---|---|---|
 | Opus 5.5 | 点名（仅实现顾问） | 前沿，综合第一 | FrontierCode 第 1（medium 54.6%，$0.80）；CursorBench high 56.0% | 方案咨询、视觉判断、长时程规划意见 | 订阅额度受限，仅用户点名（用户定，2026-11-17）；点名时也不写实现、不做代码审查与安全复核，只做实现顾问（用户定，`tasks: ["design"]`）；安全、生物、ML kernel 类任务会被静默回退到旧模型 |
-| GPT-6.1 Sol | 顾问 | 审查与咨询主力 | FrontierCode medium 50.2%，$0.36，性价比最高 | 审查（首选）、方案咨询、调试思路 | 不写实现；输出比 6 Sol 多 10–30% |
+| GPT-6.2 Sol | 顾问 | 审查与咨询主力 | FrontierCode 43.8%（第 6，2026-11-20；榜单已换版，与旧版 medium 口径不可横比）；cost 待核 | 审查（首选）、方案咨询、调试思路 | 不写实现；输出量沿用 6.1 的记录（比 6 Sol 多 10–30%），待复核 |
 | SWE-2 | 自动 | 接近前沿，便宜 | FrontierCode max 50.0%（$1.18） | 端到端测试覆盖；被质疑时会重新推导；探索聚焦；基于 Kimi K3，原生看图 | 多小时级终端长任务弱于 Opus；无官方视觉数据 |
 | Grok 4.7 | 点名 | 前沿，长任务 | FrontierCode high 47.6%（$6.65）；CursorBench xhigh 46.3% | 审查（用户实测适合）、长时程任务、自我验证、文档类知识工作 | 订阅额度受限，仅用户点名（用户定，2026-11-17）；慢（小任务均 177s，Opus 34s），输出 token 约 4.5 倍；UI 口碑一般；500k 上下文双倍价 |
 | GLM 5.3 Flash | 自动，低难度优先 | 便宜 | CursorBench max 36.8%，$0.39 | 低难度、批量；原生多模态，能看截图 | 能力有上限 |
@@ -28,7 +28,7 @@
 | GLM 5.3（非 flash） | 不用 | 开源旗舰 | FrontierCode max 40.1%，但 $16.91 | 安全 | 没有视觉能力；max 档 token 极多 |
 | Composer 2.5 | 不用 | 便宜、快 | FrontierCode 25.6% | — | 已过时 |
 | MiniMax-M3 | 不用 | 便宜 | FrontierCode 14.7% | — | 能力太差 |
-| 其他旧模型 | 不用 | — | — | — | glm-5.2、gpt-6-sol、gpt-5.6 系列、gemini flash 系列（步数极多）；grok-4.6、claude-sonnet-5-5、gpt-6-luna、gpt-6-astra、claude-fable-5-1、kimi-k3（2026-10-18 用户移出路由） |
+| 其他旧模型 | 不用 | — | — | — | glm-5.2、gpt-6-sol、gpt-6.1-sol（2026-11-20 由 gpt-6.2-sol 替换）、gpt-5.6 系列、gemini flash 系列（步数极多）；grok-4.6、claude-sonnet-5-5、gpt-6-luna、gpt-6-astra、claude-fable-5-1、kimi-k3（2026-10-18 用户移出路由） |
 
 ## 路由规则在哪里
 
@@ -45,7 +45,7 @@
 | devin | `thought_level` | 取值 medium/high/max；另有 `mode`、`speed`，保持默认不设 |
 | droid | `reasoning_effort` | snake_case；取值 low/medium/high/xhigh/max（2026-11-04 目录新增 medium）；另有必传的 `autonomy_level`（调度一律 auto-high） |
 
-档位取值规则（用户定）：**主代理派发默认 `high`；Opus 5.5、GPT-6.1 Sol、Grok 4.7 用 `medium`**（`route-data.mjs` 的 `EFFORT_MEDIUM_MODELS`）。早期 droid 的 `reasoning_effort` 没有 medium，这三个模型的 droid 入口曾用 `high`；2026-11-04 目录新增 medium 后，droid 入口同样用 `medium`（用户确认）。每个入口显式声明一个档位选项，由 `route.test.mjs` 校验。
+档位取值规则（用户定）：**主代理派发默认 `high`；Opus 5.5、GPT-6.2 Sol、Grok 4.7 用 `medium`**（`route-data.mjs` 的 `EFFORT_MEDIUM_MODELS`）。早期 droid 的 `reasoning_effort` 没有 medium，这三个模型的 droid 入口曾用 `high`；2026-11-04 目录新增 medium 后，droid 入口同样用 `medium`（用户确认）。每个入口显式声明一个档位选项，由 `route.test.mjs` 校验。
 
 `fastMode` 不写进路由数据：`route.mjs` 只在目录规格里确实存在该选项时自动注入 `fastMode:false`。
 
