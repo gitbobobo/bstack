@@ -30,7 +30,6 @@
   "capacity": {
     "pools": { "heavy": 3, "general": 2 },
     "projects": [],
-    "occupyWindowHours": 2,
     "minFreeDiskGB": 20,
     "devices": []
   },

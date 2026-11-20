@@ -53,7 +53,7 @@ node <t3-patrol 技能目录>/scripts/patrol-snapshot.mjs --self <当前线程 t
   }
   ```
 
-  另问占用窗口 `occupyWindowHours` 与本机最低剩余磁盘 `minFreeDiskGB`；资源闸沿用交接容量规则。完成标准：每个项目的归属已确认，每台设备的两池名额已确认。
+  另问本机最低剩余磁盘 `minFreeDiskGB`；资源闸沿用交接容量规则。完成标准：每个项目的归属已确认，每台设备的两池名额已确认。
 - **阈值** `thresholds`：排队、沉默、审查等待、重发冷却等分钟数。多数用户沿用默认。
 - **分诊** `triage.fullEveryHours`：隔多少小时做一次全量巡检（其余轮次只深查有变化的线程）；`triage.resourceWakeHours`：停在「等待资源」的线程最多等几小时就叫醒它重查。多数用户沿用默认。
 - **久审审计** `convergenceAudit`：PR 打开小时数、审查轮数。

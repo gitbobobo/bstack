@@ -149,7 +149,7 @@ function waitOf(status, lastMsg) {
 }
 
 function executionStateOf(r) {
-  if (!r?.thread || typeof r.thread.status !== "string" || !Object.hasOwn(r.thread, "worktreePath")) throw new Error("线程详情缺少 status/worktreePath，无法核实容量");
+  if (!r?.thread || typeof r.thread.status !== "string") throw new Error("线程详情缺少 status，无法核实容量");
   const latest = r.thread?.latestRunId
     ? (r.recentRuns ?? []).find((x) => x.runId === r.thread.latestRunId)
     : r.recentRuns?.[0];
@@ -320,10 +320,7 @@ async function occupancyOf(env, top, detailsOf, now, rootsP, waiting) {
   if (error) throw error;
   const decisions = top.filter((t) => countsCapacity(t, SELF)).map((t) => ({
     threadId: t.threadId, title: t.title,
-    ...occupancyDecision({ thread: t, details: detailsOf(t), liveChild: roots.has(t.threadId),
-      managed: isManaged(env.environmentId, t.threadId),
-      handoff: STATE.pendingHandoffs.find((h) => h.sourceEnvironmentId === env.environmentId && h.sourceThreadId === t.threadId),
-      now, occupyWindowHours: CFG.capacity.occupyWindowHours }),
+    ...occupancyDecision({ thread: t, details: detailsOf(t), liveChild: roots.has(t.threadId) }),
   }));
   const occupyingIdsNow = new Set(decisions.filter((d) => d.occupies).map((d) => d.threadId));
   const occupying = top.filter((t) => occupyingIdsNow.has(t.threadId));

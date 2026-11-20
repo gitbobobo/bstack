@@ -9,7 +9,7 @@ description: 巡检、定案巡检体系自行派出的未结线程。仅定时�
 
 每轮都是新会话，看不到前几轮的对话：跨轮事实（上一轮时间、档位、额度失败、各设备占用数、待交接队列）存在状态文件里，由快照带出来；上一轮对某线程说过什么，读该线程里的 `【巡检】` 消息。
 
-工具延迟加载的 harness（如 pi）先用一次 `tool_search` 同时加载本轮直接调用的 T3 工具：`t3_environment_links`、`t3_thread_read`、`t3_thread_list`、`t3_thread_search`、`t3_pending_request`、`orchestrator_capabilities`、`delegate_task`、`task_status`。
+工具延迟加载的 harness（如 pi）按需用 `tool_search` 搜工具的准确名称，并核返回是否包含目标工具。批量快照与补读沿用脚本；仅直接调用缺席工具时加载它。
 
 调 `t3_environment_links`：返回里的 `environmentId` 是本机，`links` 是其他已连接环境。不可达的环境在报告里记一笔，本轮跳过。
 
@@ -38,7 +38,7 @@ description: 巡检、定案巡检体系自行派出的未结线程。仅定时�
 node <技能目录>/scripts/patrol-snapshot.mjs --self <thread.threadId> --brief /tmp/t3-patrol-brief.json > /tmp/t3-patrol-snapshot.json
 ```
 
-`--self` 从当前线程 `t3_thread_read` 返回的 `thread.threadId` 原样取。一轮只跑这一次全量快照；字段含义、失败与手工取证见 [快照与补读](references/snapshot.md)。
+先从 `t3_thread_list` 返回的 `currentThreadId` 取得本线程身份，再显式传给 `t3_thread_read.threadId`；`--self` 取回读的 `thread.threadId`。一轮只跑这一次全量快照；字段含义、失败与手工取证见 [快照与补读](references/snapshot.md)。
 
 1. 一次读完 `/tmp/t3-patrol-brief.json`（不用 jq 另裁）：顶层 `lastRound`、`pendingHandoffs`、`triage`、`modelLadder`、`config` 告警、`environmentsFile`；每个环境的 `checks`、`capacity`、`hot`（有事候选的判定字段）、`quiet`（每条一行）、`failedThreads`、`needsWatch` 计数、`needsRename`、`convergenceAudit`。摘要省掉的字段（完整 `tail`、`task`、清单原始条目）去 `/tmp/t3-patrol-snapshot.json` 按需查。
 2. 定档位：`lastRound.quotaFailure` 为假且本轮 `failedThreads` 没有额度失败，用首选档；其余按 [故障恢复](references/recovery.md#模型优先级) 判，全局判一次，任务书指定模型优先。
@@ -154,7 +154,7 @@ node <技能目录>/scripts/patrol-evidence.mjs --from /tmp/t3-patrol-snapshot.j
    - `config.mode` 是 `off`，或 `config.repos` 为空；
    - `~/.config/bstack/PAUSE` 存在；
    - 本轮模型阶梯已降到 `fallback` 档：额度紧张时只做恢复。
-2. **容量切点**：先处理待交接来源的假占位：本机段已交付却仍占位时，按 [本机名额释放](references/handoff.md#本机段完成后的名额释放) 核证并登记 `sourceRelease`，保留来源与队列。证据不足保守占位并记缺口，再取切点；切点后的新证据由建线前复核纳入。
+2. **容量切点**：按 [当前执行状态](references/handoff.md#有提示词时按顺序处理) 计数，停止线程释放名额，来源、工作树与待交接队列继续保留；状态读取失败列具体缺口。切点后的新状态由建线前复核纳入。
 
    ```bash
    node <技能目录>/scripts/patrol-snapshot.mjs --capacity-only --expect-release-from <本轮每批 patrol-batch 结果.json> ... [--expect-release <threadId>@<environmentId> ...] > /tmp/t3-dispatch-capacity.json
@@ -172,7 +172,7 @@ node <技能目录>/scripts/patrol-evidence.mjs --from /tmp/t3-patrol-snapshot.j
 
 按环境分组。有事候选每个一行：原样 link、仓库、具体任务、`triageReasons`、判定证据和动作验证状态；不打扰写明在途检查或活动时间及 HEAD。静默候选每个环境合成一行：「静默 N 个：<标题>…」。`patrolExcluded` 每环境汇总数量与原因，不为这些线程展开任务判定。
 
-开头写模型档位与依据，以及分诊结果（全量与否、有事/静默数，取 `checks`）。同时区分「线程处置完成」与「派活筛选完成」；有余位但筛选未完成时，在摘要直接列设备/池、余位、待核项及已安排动作或实际阻塞，不以报告已落盘、候选已入池或记账成功统称“本轮全部完成”。容量按 `capacity.decisions` 区分活跃执行、未结 PR、后台未核的保守占位及已释放但等待交接；后两类写明核验缺口或依据，不把“池满”等同机器忙。环境集合变化时附环境对照表。固定「例行复核」引用 checks：失败处理、监听、命名、久审清单各总数及成功/跳过/失败数；issue 编码回读与修复数。队列恢复附取消/保留/失败/剩余数，未知不写 0。
+开头写模型档位与依据，以及分诊结果（全量与否、有事/静默数，取 `checks`）。同时区分「线程处置完成」与「派活筛选完成」；有余位但筛选未完成时，在摘要直接列设备/池、余位、待核项及已安排动作或实际阻塞，不以报告已落盘、候选已入池或记账成功统称“本轮全部完成”。容量按 `capacity.decisions` 区分活跃执行、状态取证失败的保守占位与已停止释放；等待交接另列责任，不把绑定工作树或未结 PR 写成机器忙。环境集合变化时附环境对照表。固定「例行复核」引用 checks：失败处理、监听、命名、久审清单各总数及成功/跳过/失败数；issue 编码回读与修复数。队列恢复附取消/保留/失败/剩余数，未知不写 0。
 
 交接、等待空位、settle、久审审计单列，写来源与去向或依据；待交接队列逐条列出目标设备、当前阻塞与本轮结果，含历史遗留项；「本轮派活」按 t3-dispatch 第 4 步写，`dry-run` 标明「未执行」；已定案记结论、授权/规则来源与执行状态；规则缺口记「建议改技能」，不靠跨轮承诺补规则。
 

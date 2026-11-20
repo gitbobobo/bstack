@@ -58,30 +58,13 @@ export const countsCapacity = (t, self = null) => !isPatrol(t, self) && !isRevie
 
 const LIVE = new Set(["queued", "preparing", "starting", "running", "waiting"]);
 
-// 任务责任（settle/交接）与执行占用分离；只有与当前回合及绑定吻合的核验凭据能释放无 PR 的绑定来源。
-export function occupancyDecision({ thread, details, liveChild = false, handoff, managed = false, now, occupyWindowHours }) {
-  if (LIVE.has(thread.status) || LIVE.has(details?.status) || details?.activeRunId || liveChild) return { occupies: true, reason: "活跃 run/子代理" };
+// 执行占用按当前状态判定；工作树、PR 与交接责任独立保留。
+export function occupancyDecision({ thread, details, liveChild = false }) {
+  if (LIVE.has(thread.status) || LIVE.has(details?.status) || details?.activeRunId || LIVE.has(details?.lastRunStatus) || liveChild) {
+    return { occupies: true, reason: "活跃线程/run/子代理" };
+  }
   if (details?.error) return { occupies: true, reason: "容量取证失败，保守占位" };
-  const prs = [...(thread.pullRequests ?? []), ...(details?.capacityPrs ?? [])];
-  if (!prs.length) {
-    if (details?.hasWorktree === false) return { occupies: false, reason: "无工作树且无活跃执行" };
-    const r = handoff?.sourceRelease;
-    const checked = Date.parse(r?.verifiedAt ?? "");
-    const ended = Date.parse(details?.lastRunEndedAt ?? "");
-    if (managed && r && details?.status === "completed" && details?.lastRunStatus === "completed" && details?.lastRunId === r.runId
-      && details?.worktreePath === r.worktreePath && !details?.waitingResources && !details?.pendingRequestCount
-      && r.deliveryRef?.trim() && r.idleRef?.trim()
-      && Number.isFinite(checked) && Number.isFinite(ended) && checked >= ended && checked <= now) {
-      return { occupies: false, reason: "本机段已交付且空闲，保留跨机交接", evidence: r };
-    }
-    return { occupies: true, reason: r ? "本机释放凭据失效或未核实，保守占位" : "绑定工作树，后台状态未核，保守占位" };
-  }
-  if (prs.some((p) => p.state === "open")) {
-    const ended = Date.parse(details?.lastRunEndedAt ?? "");
-    const occupies = Number.isFinite(ended) && now - ended < occupyWindowHours * 3600 * 1000;
-    return { occupies, reason: occupies ? "未结 PR 最近运行" : "未结 PR 超出占用窗口" };
-  }
-  return { occupies: false, reason: "PR 已合并/关闭且无活跃执行" };
+  return { occupies: false, reason: "线程已停止且无活跃 run/子代理" };
 }
 
 // releasing：本轮动作完成后会释放、此刻仍占位的线程 id。只算进 projected，不改实际 free，

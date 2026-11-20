@@ -8,26 +8,34 @@ const sourceRelease = { runId: "r1", worktreePath: "/tree", verifiedAt, delivery
 const base = {
   thread: { status: "completed", pullRequests: [] },
   details: { status: "completed", lastRunStatus: "completed", hasWorktree: true, worktreePath: "/tree", lastRunId: "r1", lastRunEndedAt: "2026-11-18T16:39:00Z" },
-  handoff: { sourceRelease }, managed: true, now: Date.parse(verifiedAt), occupyWindowHours: 2,
+  handoff: { sourceRelease }, managed: true,
 };
 
-test("交接责任保留，只有匹配当前运行与绑定的核验才释放本机名额", () => {
+test("停止线程释放名额，与工作树、PR、交接凭据和待答请求无关", () => {
   const decide = (patch = {}) => occupancyDecision({ ...base, ...patch });
-  assert.equal(decide().occupies, false);
+  for (const status of ["completed", "failed", "interrupted", "cancelled"]) {
+    for (const prs of [[], [{ state: "open" }], [{ state: "merged" }]]) {
+      assert.equal(decide({ thread: { status, pullRequests: prs }, details: { ...base.details, status, lastRunStatus: status } }).occupies, false);
+    }
+  }
   for (const patch of [
-    { handoff: {} }, { managed: false }, { liveChild: true },
-    { thread: { ...base.thread, status: "running" } },
-    { thread: { ...base.thread, pullRequests: [{ state: "open" }] } },
-    ...[
-      { status: "running" }, { activeRunId: "r2" }, { lastRunStatus: "running" },
-      { capacityPrs: [{ state: "open" }] },
-      { error: "不可读" }, { lastRunId: "r2" }, { worktreePath: "/new-tree" },
-      { lastRunEndedAt: "2026-11-18T16:41:00Z" }, { lastRunEndedAt: null },
-      { waitingResources: { line: "等待磁盘" } }, { pendingRequestCount: 1 },
-    ].map((d) => ({ details: { ...base.details, ...d } })),
+    { handoff: {} }, { managed: false },
+    { details: { ...base.details, worktreePath: "/new-tree", lastRunId: "r2", pendingRequestCount: 1 } },
     { handoff: { sourceRelease: { ...sourceRelease, idleRef: "" } } },
-    { handoff: { sourceRelease: { ...sourceRelease, verifiedAt: "2026-11-19T00:00:00Z" } } },
-  ]) assert.equal(decide(patch).occupies, true, JSON.stringify(patch));
+  ]) assert.equal(decide(patch).occupies, false, JSON.stringify(patch));
+});
+
+test("活跃状态、run和后代仍占位；读取失败保留容量缺口", () => {
+  for (const status of ["queued", "preparing", "starting", "running", "waiting"]) {
+    for (const patch of [
+      { thread: { ...base.thread, status } },
+      { details: { ...base.details, status } },
+      { details: { ...base.details, lastRunStatus: status } },
+    ]) assert.equal(occupancyDecision({ ...base, ...patch }).occupies, true);
+  }
+  for (const patch of [{ liveChild: true }, { details: { ...base.details, activeRunId: "r2" } }, { details: { error: "不可读" } }]) {
+    assert.equal(occupancyDecision({ ...base, ...patch }).occupies, true);
+  }
 });
 
 test("交接更新只保留核验，其他字段沿用替换语义；允许撤回并拒绝不完整凭据", () => {

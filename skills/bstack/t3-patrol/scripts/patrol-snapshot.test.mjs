@@ -96,17 +96,17 @@ test("完整/容量快照一致排除 Fast Ship 审查，保留实现父线程�
     const { stdout, stderr } = await exec(process.execPath, [script, "--self", "self", ...mode], { env, timeout: 15000 });
     const e = JSON.parse(stdout).environments[0];
     assert.equal(e.error, undefined, stderr || e.error);
-    assert.equal(e.capacity.used, 7);
-    assert.equal(e.activeTopLevel, 7);
-    assert.equal(e.capacity.pools[0].used, 7);
+    assert.equal(e.capacity.used, 5);
+    assert.equal(e.activeTopLevel, 5);
+    assert.equal(e.capacity.pools[0].used, 5);
     assert.equal(e.capacity.unverifiedThreads[0].threadId, "unreadable", "读取失败不能悄悄释放名额");
-    assert.ok(e.occupying.includes("INT-200 race后台验收"), "无PR的后台验收在代理回合completed后仍占位");
+    assert.ok(!e.occupying.includes("INT-200 race后台验收"), "completed与绑定工作树不构成活跃执行");
     assert.ok(!e.occupying.includes("讨论备选方案"));
     assert.ok(!e.occupying.includes("已合并的交付"));
     assert.equal(e.capacity.freeByRepo[REPO], 0);
     assert.ok(!e.occupying.some((s) => /^(代码|视觉)审查 · PR #\d+$/.test(s)));
     assert.ok(e.occupying.includes("代码审查 · PR #208 重验证"), "带后缀的实现父线程等待子代理时仍占位");
-    assert.ok(e.occupying.includes("视觉审查 · PR #228 修复"), "带后缀的失败实现线程仍占位并进入恢复");
+    assert.ok(!e.occupying.includes("视觉审查 · PR #228 修复"), "失败线程不因open PR占位，但仍进入恢复");
     assert.ok(!reads.some((id) => id.startsWith("review")), "审查线程不为容量或失败恢复补读");
     if (!mode.length) {
       assert.deepEqual(e.failedThreads.map((x) => x.id), ["impl3"], "审查失败由 Fast Ship 处理，普通失败仍进恢复清单");
@@ -122,11 +122,11 @@ test("完整/容量快照一致排除 Fast Ship 审查，保留实现父线程�
   for (const mode of [["--capacity-only"], []]) {
     const { stdout } = await exec(process.execPath, [script, "--self", "self", ...mode], { env, timeout: 15000 });
     const snap = JSON.parse(stdout);
-    assert.equal(snap.environments[0].capacity.used, 6);
+    assert.equal(snap.environments[0].capacity.used, 5);
     assert.ok(!snap.environments[0].occupying.includes("INT-200 race后台验收"));
     const d = snap.environments[0].capacity.decisions.find((x) => x.threadId === "background");
     assert.equal(d.occupies, false);
-    assert.equal(d.evidence.idleRef, "无后台任务核验");
+    assert.match(d.reason, /线程已停止/);
     assert.equal(snap.pendingHandoffs.length, 3);
     assert.equal(snap.environments[0].capacity.decisions.find((x) => x.threadId === "impl4").occupies, true, "有活跃子代理，凭据不能释放");
     assert.equal(snap.environments[0].capacity.decisions.find((x) => x.threadId === "unreadable").occupies, true, "读取失败，凭据不能释放");
@@ -136,7 +136,7 @@ test("完整/容量快照一致排除 Fast Ship 审查，保留实现父线程�
   for (const mode of [["--capacity-only"], []]) {
     const { stdout } = await exec(process.execPath, [script, "--self", "self", ...mode], { env, timeout: 15000 });
     const c = JSON.parse(stdout).environments[0].capacity;
-    assert.equal(c.used, 7, "缺少 thread 的响应仍保守占位");
+    assert.equal(c.used, 6, "缺少 thread 的响应仍保守占位");
     assert.ok(c.unverifiedThreads.some((x) => x.threadId === "background"));
   }
   malformedThread = null;
@@ -147,7 +147,7 @@ test("完整/容量快照一致排除 Fast Ship 审查，保留实现父线程�
     const e = JSON.parse(stdout).environments[0];
     assert.equal(e.error, undefined, "祖先瞬时错误重试成功不应停派");
     assert.equal(middleFlakyReads, 2);
-    assert.equal(e.capacity.used, 7, "重试找回活跃孙子的来源后仍占位");
+    assert.equal(e.capacity.used, 6, "重试找回活跃孙子的来源后仍占位");
   }
   children.pop();
   // 中间层已停而孙子仍活跃；祖先读取失败不得将已核验来源误放行。
@@ -159,12 +159,12 @@ test("完整/容量快照一致排除 Fast Ship 审查，保留实现父线程�
     assert.equal(e.capacity, undefined, "祖先取证失败不得输出可派容量");
   }
   children.pop();
-  // 来源产生新回合后旧凭据失效，重新保守占位。
+  // 旧凭据失效不改变当前已停止状态。
   handoff.sourceRelease.runId = "old-run";
   writeFileSync(stateFile, JSON.stringify({ pendingHandoffs: [handoff] }));
   for (const mode of [["--capacity-only"], []]) {
     const { stdout } = await exec(process.execPath, [script, "--self", "self", ...mode], { env, timeout: 15000 });
-    assert.equal(JSON.parse(stdout).environments[0].capacity.used, 7);
+    assert.equal(JSON.parse(stdout).environments[0].capacity.used, 5);
   }
   writeFileSync(stateFile, JSON.stringify({ pendingHandoffs: [] }));
   const { stdout } = await exec(process.execPath, [script, "--self", "self", "--capacity-only",
@@ -173,9 +173,9 @@ test("完整/容量快照一致排除 Fast Ship 审查，保留实现父线程�
   const snap = JSON.parse(stdout);
   const c = snap.environments[0].capacity;
   assert.equal(c.freeByRepo[REPO], 0, "预计释放不改实际空位");
-  assert.equal(c.projectedFreeByRepo[REPO], 1, "7 占 5 位，三个预计释放后余 1");
-  assert.deepEqual(c.releasing.map((x) => x.threadId).sort(), ["background", "impl0", "impl2"]);
-  assert.deepEqual(snap.expectReleaseUnmatched.map((x) => x.threadId).sort(), ["ghost", "impl1"], "别的环境或不占位的线程要报出来核对");
+  assert.equal(c.projectedFreeByRepo[REPO], 2, "5 占 5 位，两个活跃线程预计释放后余 2");
+  assert.deepEqual(c.releasing.map((x) => x.threadId).sort(), ["impl0", "impl2"]);
+  assert.deepEqual(snap.expectReleaseUnmatched.map((x) => x.threadId).sort(), ["background", "ghost", "impl1"], "别的环境或不占位的线程要报出来核对");
 
   writeFileSync(join(dir, "state", "t3-patrol.json"), JSON.stringify({ pendingHandoffs: [
     { sourceEnvironmentId: "mini", sourceThreadId: "impl2", launchedThreadLink: "<t3-thread://x>" },
@@ -184,7 +184,7 @@ test("完整/容量快照一致排除 Fast Ship 审查，保留实现父线程�
   const batch = join(dir, "batch.json");
   writeFileSync(batch, JSON.stringify({ calls: [
     { label: "收尾指令（无模板）", tool: "t3_thread_send", threadId: "impl0", environmentId: "mini", releases: true, ok: true },
-    { label: "M9 未标", tool: "t3_thread_send", threadId: "background", environmentId: "mini", ok: true },
+    { label: "M9 未标", tool: "t3_thread_send", threadId: "impl1", environmentId: "mini", ok: true },
     { label: "M10 发送失败", tool: "t3_thread_send", threadId: "impl4", environmentId: "mini", releases: true, ok: false },
     { label: "改名", tool: "t3_thread_update", threadId: "impl3", environmentId: "mini", ok: true },
   ] }));
@@ -192,7 +192,7 @@ test("完整/容量快照一致排除 Fast Ship 审查，保留实现父线程�
   const snap2 = JSON.parse(out2);
   const c2 = snap2.environments[0].capacity;
   assert.deepEqual(c2.releasing.map((x) => x.threadId).sort(), ["impl0", "impl2"], "带 releases 的成功调用与已建线交接来源记为预计释放");
-  assert.deepEqual(snap2.expectReleaseUnflagged.map((x) => x.threadId), ["background"], "发过消息、仍占位却没标 releases 的要报出来");
+  assert.deepEqual(snap2.expectReleaseUnflagged.map((x) => x.threadId), ["impl1"], "发过消息、仍占位却没标 releases 的要报出来");
   assert.equal(snap2.expectReleaseUnmatched, undefined);
   // 没有派出归属的线程保留实际容量，但失败兜底、全量与独立体检都不能将它们捞回。
   const protectedIds = ["impl0", "impl3", "background", "discussion"];
@@ -204,7 +204,7 @@ test("完整/容量快照一致排除 Fast Ship 审查，保留实现父线程�
     detailReads.length = 0;
     const { stdout } = await exec(process.execPath, [script, "--self", "self", ...mode], { env, timeout: 15000 });
     const e = JSON.parse(stdout).environments[0];
-    assert.equal(e.capacity.used, 7, "归属排除不释放实际占用");
+    assert.equal(e.capacity.used, 5, "归属排除不释放实际占用");
     assert.ok(!detailReads.some((id) => protectedIds.includes(id)), "排除项仅可读容量元数据，不取活动或PR实况");
     if (mode.includes("--capacity-only")) {
       assert.ok(e.openThreads.some((x) => x.id === "impl0"), "派活查重仍保留非巡检线程");
