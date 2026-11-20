@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 const exec = promisify(execFile);
 const REPO = "host/owner/fast_ship";
 
@@ -76,11 +77,11 @@ console.log(JSON.stringify({code:0,data:issue}));`);
   const plan = (projectId, environmentId = "remote") => ({ launches: [{ repo: REPO, ids: ["issue"], environmentId, projectId, title: "INT-200 race验收", reason: "原任务验收" }] });
   const run = async (data) => {
     writeFileSync(file, JSON.stringify(data));
-    try { return { code: 0, ...(await exec(process.execPath, [new URL("./dispatch-launch.mjs", import.meta.url).pathname, "--plan", file], { env, timeout: 10000 })) }; }
+    try { return { code: 0, ...(await exec(process.execPath, [fileURLToPath(new URL("./dispatch-launch.mjs", import.meta.url)), "--plan", file], { env, timeout: 10000 })) }; }
     catch (e) { return { code: e.code, stdout: e.stdout, stderr: e.stderr }; }
   };
   writeFileSync(file, JSON.stringify(plan("wrong")));
-  const dry = await exec(process.execPath, [new URL("./dispatch-launch.mjs", import.meta.url).pathname, "--plan", file, "--dry-run"], { env, timeout: 10000 });
+  const dry = await exec(process.execPath, [fileURLToPath(new URL("./dispatch-launch.mjs", import.meta.url)), "--plan", file, "--dry-run"], { env, timeout: 10000 });
   assert.equal(JSON.parse(dry.stdout).projectBinding, "not-checked");
   assert.equal(calls.length, 0, "dry-run只校验格式，无MCP或认领副作用");
   for (const environmentId of ["remote", "local"]) {
@@ -141,7 +142,7 @@ console.log(JSON.stringify({code:0,data:issue}));`);
   assert.ok(readFileSync(trace, "utf8").includes('"method":"PUT"'));
   const results = join(dir, "launched.json");
   writeFileSync(results, good.stdout);
-  const readback = await exec(process.execPath, [new URL("../../t3-patrol/scripts/patrol-evidence.mjs", import.meta.url).pathname, "--from", results], { env, timeout: 10000 });
+  const readback = await exec(process.execPath, [fileURLToPath(new URL("../../t3-patrol/scripts/patrol-evidence.mjs", import.meta.url)), "--from", results], { env, timeout: 10000 });
   assert.equal(JSON.parse(readback.stdout).threads[0].threadId, "launched");
   assert.equal(JSON.parse(readback.stdout).threads[0].environmentId, "remote");
 });

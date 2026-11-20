@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { applyPatch, cachedReview, MAX_PER_REPO, poolPath, readPool, validateCandidate } from "./candidate-pool.mjs";
 
 const REPO = "host/owner/app";
@@ -71,7 +72,7 @@ test("未知源码显式为 null，仅未就绪条目可落盘和离线预检", 
   const patch = { upsert: [pending, blocked], remove: [] };
   const file = join(env.BSTACK_CONFIG_DIR, "suggestions.json");
   writeFileSync(file, JSON.stringify(patch));
-  const script = new URL("./candidate-pool.mjs", import.meta.url).pathname;
+  const script = fileURLToPath(new URL("./candidate-pool.mjs", import.meta.url));
   const call = () => spawnSync(process.execPath, [script, "validate", "--file", file], { env, encoding: "utf8" });
   assert.equal(call().status, 0);
   assert.equal(existsSync(poolPath(env)), false, "预检不创建共享池");
@@ -121,7 +122,7 @@ console.log(JSON.stringify({code:0,data}));`);
   const before = readFileSync(poolPath(base), "utf8");
   // 不继承任何真实 MCP 会话或凭据，所有 API 请求只进本测试脚本。
   const env = { PATH: process.env.PATH, HOME: dir, BSTACK_CONFIG_DIR: dir, FAST_SHIP_API: api };
-  const call = (...args) => spawnSync(process.execPath, [new URL("./dispatch-plan.mjs", import.meta.url).pathname, "--capacity", cap, ...args], { env, encoding: "utf8" });
+  const call = (...args) => spawnSync(process.execPath, [fileURLToPath(new URL("./dispatch-plan.mjs", import.meta.url)), "--capacity", cap, ...args], { env, encoding: "utf8" });
   let result = call();
   assert.equal(result.status, 0, result.stderr);
   let plan = JSON.parse(result.stdout);
@@ -168,8 +169,8 @@ console.log(JSON.stringify({code:0,data}));`);
 
 test("CLI 使用隔离配置目录，list 不写文件；apply 错误非零退出", (t) => {
   const env = fixture(t);
-  const script = new URL("./candidate-pool.mjs", import.meta.url);
-  const call = (...args) => spawnSync(process.execPath, [script.pathname, ...args], { env, encoding: "utf8" });
+  const script = fileURLToPath(new URL("./candidate-pool.mjs", import.meta.url));
+  const call = (...args) => spawnSync(process.execPath, [script, ...args], { env, encoding: "utf8" });
   const r = call("list", "--repo", REPO);
   assert.equal(r.status, 0, r.stderr);
   assert.deepEqual(JSON.parse(r.stdout).state.repos[REPO], []);

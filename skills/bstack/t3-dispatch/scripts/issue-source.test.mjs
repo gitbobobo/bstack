@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { ensureLabels, claim, list, release, repoKeyOf, resolveProject, sourceBlock } from "./sources/fast-ship.mjs";
 import { ledgerSummary, readLedger, renderMessage, run } from "./issue-source.mjs";
 import { loadConfig, validateRepos } from "./dispatch-config.mjs";
@@ -273,7 +274,7 @@ test("--help 不读配置直接给出各子命令用法，并说明 --id 取 lis
   const { spawnSync } = await import("node:child_process");
   const dir = mkdtempSync(join(tmpdir(), "issue-source-help-"));
   try {
-    const script = new URL("./issue-source.mjs", import.meta.url).pathname;
+    const script = fileURLToPath(new URL("./issue-source.mjs", import.meta.url));
     const r = spawnSync(process.execPath, [script, "--help"], { env: { PATH: process.env.PATH, HOME: dir, BSTACK_CONFIG_DIR: dir }, encoding: "utf8" });
     assert.equal(r.status, 0, r.stderr);
     for (const cmd of ["list", "show", "claim", "release", "render", "record", "ledger"]) assert.match(r.stdout, new RegExp(`issue-source\\.mjs ${cmd}\\b`));

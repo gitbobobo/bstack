@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
+import { fileURLToPath } from "node:url";
 import { parseArgs, threadInputs } from "./patrol-evidence.mjs";
 
 function fixture(t) {
@@ -40,7 +41,7 @@ test("CLI 参数合并文件与单条输入，空选集正常返回，拼错参�
   assert.deepEqual(opts.threads, ["mcp:launch:t@e"]);
   for (const args of [["--from"], ["--select", "typo"], ["--items", "NaN"], ["--typo"]]) assert.throws(() => parseArgs(args));
   const empty = put("empty.json", { threads: [] });
-  const r = spawnSync(process.execPath, [new URL("./patrol-evidence.mjs", import.meta.url).pathname, "--from", empty], { env: { PATH: process.env.PATH }, encoding: "utf8" });
+  const r = spawnSync(process.execPath, [fileURLToPath(new URL("./patrol-evidence.mjs", import.meta.url)), "--from", empty], { env: { PATH: process.env.PATH }, encoding: "utf8" });
   assert.equal(r.status, 0, r.stderr);
   assert.deepEqual(JSON.parse(r.stdout), { threads: [], prs: [] });
 });
@@ -49,7 +50,7 @@ test("恢复直接读取取证，dry-run 不要求会话且跳过用户取消", 
   const put = fixture(t);
   const snapshot = put("snapshot.json", { modelLadder: [{ instanceId: "pi", model: "test", fallback: true }], environments: [] });
   const from = put("evidence.json", { threads: [...evidence.threads, { threadId: "cancelled", thread: { status: "cancelled" } }] });
-  const r = spawnSync(process.execPath, [new URL("./patrol-tier.mjs", import.meta.url).pathname, "--snapshot", snapshot, "--evidence", from, "--dry-run"], { env: { PATH: process.env.PATH }, encoding: "utf8" });
+  const r = spawnSync(process.execPath, [fileURLToPath(new URL("./patrol-tier.mjs", import.meta.url)), "--snapshot", snapshot, "--evidence", from, "--dry-run"], { env: { PATH: process.env.PATH }, encoding: "utf8" });
   assert.equal(r.status, 0, r.stderr);
   const plan = JSON.parse(r.stdout);
   assert.equal(plan.count, 1);
@@ -58,7 +59,7 @@ test("恢复直接读取取证，dry-run 不要求会话且跳过用户取消", 
   assert.equal(plan.skipped[0].reason, "cancelled");
   const unknown = put("unknown.json", { threads: [{ threadId: "unknown", environmentId: null, error: "unreachable" }] });
   for (const extra of [[], ["--dry-run"]]) {
-    const failed = spawnSync(process.execPath, [new URL("./patrol-tier.mjs", import.meta.url).pathname, "--snapshot", snapshot, "--evidence", unknown, ...extra], { env: { PATH: process.env.PATH }, encoding: "utf8" });
+    const failed = spawnSync(process.execPath, [fileURLToPath(new URL("./patrol-tier.mjs", import.meta.url)), "--snapshot", snapshot, "--evidence", unknown, ...extra], { env: { PATH: process.env.PATH }, encoding: "utf8" });
     assert.equal(failed.status, 1);
     assert.equal(JSON.parse(failed.stdout).unresolved[0].threadId, "unknown");
     assert.equal(JSON.parse(failed.stdout).count, 0);
@@ -92,7 +93,7 @@ test("恢复刷新后保留已运行线程；回读仅认发送返回的 run", a
     { threadId: "local-pr", environmentId: null, thread: { status: "failed", pullRequests: ["https://forge.test/owner/repo/pulls/42:open"] } },
     { threadId: "unknown", environmentId: "e", error: "取证失败" },
     ...["active", "bad-refresh", "bad-configure", "bad-send"].map((threadId) => ({ threadId, environmentId: "e", thread: { status: "failed" } }))] });
-  const child = spawn(process.execPath, [new URL("./patrol-tier.mjs", import.meta.url).pathname, "--snapshot", snapshot, "--evidence", from], { env: { PATH: process.env.PATH, T3_MCP_URL: `http://127.0.0.1:${server.address().port}`, T3_MCP_BEARER_TOKEN: "test-only" } });
+  const child = spawn(process.execPath, [fileURLToPath(new URL("./patrol-tier.mjs", import.meta.url)), "--snapshot", snapshot, "--evidence", from], { env: { PATH: process.env.PATH, T3_MCP_URL: `http://127.0.0.1:${server.address().port}`, T3_MCP_BEARER_TOKEN: "test-only" } });
   t.after(() => { if (child.exitCode === null) child.kill(); });
   let stdout = "", stderr = "";
   child.stdout.on("data", (b) => stdout += b);
@@ -113,7 +114,7 @@ test("恢复刷新后保留已运行线程；回读仅认发送返回的 run", a
   assert.ok(!calls.some((c) => c.name === "t3_thread_configure" && c.a.threadId === "active"));
 
   const batchFile = put("calls.json", [{ label: "先成功发送", tool: "t3_thread_send", args: { environmentId: "e", threadId: "active" } }, { tool: "t3_thread_read", args: null }, null]);
-  const batch = spawn(process.execPath, [new URL("./patrol-batch.mjs", import.meta.url).pathname, "--calls", batchFile], { env: { PATH: process.env.PATH, T3_MCP_URL: `http://127.0.0.1:${server.address().port}`, T3_MCP_BEARER_TOKEN: "test-only" } });
+  const batch = spawn(process.execPath, [fileURLToPath(new URL("./patrol-batch.mjs", import.meta.url)), "--calls", batchFile], { env: { PATH: process.env.PATH, T3_MCP_URL: `http://127.0.0.1:${server.address().port}`, T3_MCP_BEARER_TOKEN: "test-only" } });
   t.after(() => { if (batch.exitCode === null) batch.kill(); });
   let batchOut = "", batchErr = "";
   batch.stdout.on("data", (b) => batchOut += b);

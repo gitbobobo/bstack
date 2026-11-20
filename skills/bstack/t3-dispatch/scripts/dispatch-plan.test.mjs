@@ -234,7 +234,7 @@ test("子代理输入只含本仓库切片：设备池占用与预计释放、�
   assert.deepEqual(brief.ledger.active.map((e) => e.id), ["a"]);
   assert.equal(brief.openThreads[0].title, "GH-360 下载目录");
   assert.equal(brief.shortlist[0].ref, "INT-1");
-  assert.match(brief.commands.show, /^node \/s\/issue-source\.mjs show --repo .+ --id /);
+  assert.match(brief.commands.show, /^node [\/\\]s[\/\\]issue-source\.mjs show --repo .+ --id /);
   assert.equal(briefName(MUS), "fj.frp.musiver.cn_fjbobo_musiver.json");
 });
 

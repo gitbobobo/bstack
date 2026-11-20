@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const exec = promisify(execFile);
 const REPO = "host/owner/heavy";
@@ -90,7 +91,7 @@ test("完整/容量快照一致排除 Fast Ship 审查，保留实现父线程�
   t.after(() => { server.closeAllConnections(); server.close(); });
   const env = { PATH: process.env.PATH, HOME: dir, BSTACK_CONFIG_DIR: dir,
     T3_MCP_URL: `http://127.0.0.1:${server.address().port}`, T3_MCP_BEARER_TOKEN: "fixture-only" };
-  const script = new URL("./patrol-snapshot.mjs", import.meta.url).pathname;
+  const script = fileURLToPath(new URL("./patrol-snapshot.mjs", import.meta.url));
   for (const mode of [["--capacity-only"], []]) {
     reads.length = 0;
     const { stdout, stderr } = await exec(process.execPath, [script, "--self", "self", ...mode], { env, timeout: 15000 });
