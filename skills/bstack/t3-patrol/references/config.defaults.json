@@ -47,7 +47,8 @@
     "convergenceResendHours": 24
   },
   "subagents": {
-    "judgeBatch": 4
+    "judgeBatch": 4,
+    "maxConcurrent": 3
   },
   "convergenceAudit": {
     "openHours": 12,

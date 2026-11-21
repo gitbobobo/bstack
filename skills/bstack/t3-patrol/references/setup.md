@@ -55,7 +55,7 @@ node <t3-patrol 技能目录>/scripts/patrol-snapshot.mjs --self <当前线程 t
 
   另问本机最低剩余磁盘 `minFreeDiskGB`，低于它本机停派。完成标准：每个项目的归属已确认，每台设备的两池名额已确认。
 - **阈值** `thresholds`：排队、沉默、审查等待、重发冷却等分钟数。多数用户沿用默认。
-- **研判批量** `subagents.judgeBatch`：每个研判子代理处理几条线程，多数用户沿用默认。
+- **子代理** `subagents.judgeBatch`：每个研判子代理处理几条线程；`subagents.maxConcurrent`：巡检同时在跑的子代理上限，并发太多会撞模型额度。多数用户沿用默认。
 - **分诊** `triage.fullEveryHours`：隔多少小时做一次全量巡检（其余轮次只深查有变化的线程）；`triage.resourceWakeHours`：停在「等待资源」的线程最多等几小时就叫醒它重查。多数用户沿用默认。
 - **久审审计** `convergenceAudit`：PR 打开小时数、审查轮数。
 - **频率** `schedule.everyMinutes`：巡检间隔，最少 1 分钟。

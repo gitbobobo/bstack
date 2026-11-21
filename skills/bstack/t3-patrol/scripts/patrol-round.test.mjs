@@ -53,6 +53,7 @@ test("决策包只给计数、批次与派活状态，不含候选详情", () =>
   assert.equal(pack.environments[0].hot, 3);
   assert.deepEqual(pack.watch, { added: 1, skipped: 1, failed: ["u：e"] });
   assert.equal(pack.judge[0].file, "/d/judge-1.json");
+  assert.equal(pack.maxConcurrent, 3, "未配置时同时最多 3 个子代理");
   assert.ok(pack.warnings.some((w) => /设备对照/.test(w)));
   assert.ok(!JSON.stringify(pack).includes("triageReasons"));
 });

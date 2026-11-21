@@ -95,6 +95,7 @@ export function packOf(snap, { dir, batches, watch = [], dispatch }) {
     unreachable: (snap.unreachable ?? []).map((u) => u.alias ?? u.label),
     environments: envs,
     watch: { added: watch.filter((w) => w.result).length, skipped: watch.filter((w) => w.skipped).length, failed: failedWatch.map((w) => `${w.url}：${w.error}`) },
+    maxConcurrent: snap.config?.subagents?.maxConcurrent ?? 3,
     judge: batches.map((b, i) => ({ file: join(dir, `judge-${i + 1}.json`), out: join(dir, `judge-${i + 1}.out.json`), env: b.alias, items: b.items.length })),
     handoffs: (snap.pendingHandoffs ?? []).map((h) => ({ source: h.sourceLink, target: h.targetEnvironmentId, blocker: h.blocker, launched: h.launchedThreadLink ?? null })),
     dispatch,
