@@ -67,28 +67,21 @@ export function occupancyDecision({ thread, details, liveChild = false }) {
   return { occupies: false, reason: "线程已停止且无活跃 run/子代理" };
 }
 
-// releasing：本轮动作完成后会释放、此刻仍占位的线程 id。只算进 projected，不改实际 free，
-// 派活据此提前挑题，建线仍按复核后的实际空位。
-export function capacityOf({ threads, projects, device, cfg, diskFreeGB = null, waiting = [], self = null, releasing = new Set() }) {
+export function capacityOf({ threads, projects, device, cfg, diskFreeGB = null, waiting = [], self = null }) {
   const limits = { ...cfg.pools, ...device?.pools };
-  const pools = POOLS.map((name) => ({ name, max: limits[name], used: 0, free: 0, occupying: [], releasing: [] }));
+  const pools = POOLS.map((name) => ({ name, max: limits[name], used: 0, free: 0, occupying: [] }));
   const counted = threads.filter((t) => countsCapacity(t, self));
   for (const t of counted) {
     const p = pools.find((p) => p.name === poolOf(projects.get(t.projectId), cfg));
     p.used++;
     p.occupying.push(t.title);
-    if (releasing.has(t.threadId)) p.releasing.push(t.title);
   }
-  for (const p of pools) {
-    p.free = Math.max(0, p.max - p.used);
-    p.projected = Math.max(0, p.max - p.used + p.releasing.length);
-  }
+  for (const p of pools) p.free = Math.max(0, p.max - p.used);
   const blocked = [];
   if (diskFreeGB !== null && diskFreeGB < cfg.minFreeDiskGB) blocked.push(`本机磁盘剩 ${diskFreeGB} GB，低于保底 ${cfg.minFreeDiskGB} GB`);
   if (waiting.length) blocked.push(`有线程在等资源：${waiting.join("、")}`);
   const at = (key) => (identity) => blocked.length ? 0 : pools.find((p) => p.name === poolOf(identity, cfg))[key];
   const byRepo = (f) => Object.fromEntries([...projects.values()].filter((id) => id?.canonicalKey).map((id) => [id.canonicalKey, f(id)]));
-  const anyReleasing = pools.some((p) => p.releasing.length);
   return {
     device: device?.device ?? null,
     used: counted.length,
@@ -98,6 +91,5 @@ export function capacityOf({ threads, projects, device, cfg, diskFreeGB = null, 
     freeByRepo: byRepo(at("free")),
     poolByRepo: byRepo((id) => poolOf(id, cfg)),
     freeOther: at("free")(null),
-    ...(anyReleasing ? { projectedFreeByRepo: byRepo(at("projected")), projectedFreeOther: at("projected")(null) } : {}),
   };
 }

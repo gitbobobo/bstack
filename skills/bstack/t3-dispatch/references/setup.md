@@ -33,10 +33,11 @@ version: 1
 - **运行模式** `runtimeMode`：默认 `full-access`。
 - **节流** `limits`：每次最多派几个（`perRun`）、最近 24 小时最多派几个（`perDay`，缺省 0 即不限，并发只由各设备名额约束）、同一问题最多派几次（`maxAttempts`，线程没交付就结束时归还重派，到上限后交给用户）。
 - **可信作者** `trustedUsers`：GitHub 导入问题的默认作者准入名单，默认为空；用户标签的覆盖规则见[派活标签](labels.md)。
+- **题库** `stock`：每仓库备题数为可派设备所属池名额之和的 `multiplier` 倍（默认 3），研判超过 `maxAgeHours`（默认 72）的题目需重核才能出队。
 - **档位** `mode`：巡检调用时 `off` / `dry-run` / `auto`，先用 `dry-run`。用户当面要求派活不受它限制。
 
 ## 4. 写配置并试跑
 
 1. 按 bstack-setup「写配置」规则写 `t3-dispatch.json`，跑 `node <技能目录>/scripts/dispatch-config.mjs`：退出码 0，`warnings` 为空。
 2. 安装初始化或新增仓库后，按[派活标签](labels.md)核实问题所属仓库与 GitHub / Forgejo 服务类型，检查并补齐标签目录；核对问题标签确实进入 `list` / `show`。完成标准：每个配置仓库都有检查结果，权限或来源能力缺口已记录。
-3. 试跑：按 SKILL.md 走到第 2 步，只出计划不认领，交给用户过目。用户对挑选有异议时，把规则缺口记成「建议改技能」，或调整 `statuses`、`devices`。
+3. 试跑：按 SKILL.md 第 2 步补一次货，再跑 `dispatch-queue.mjs --dry-run` 只出计划不认领，交给用户过目。用户对挑选有异议时，把规则缺口记成「建议改技能」，或调整 `statuses`、`devices`。

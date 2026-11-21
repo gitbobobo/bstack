@@ -68,7 +68,7 @@ GitHub 与 Forgejo 合为一个托管平台适配器，底层分别走 `gh` 与 
 
 ## 容量池
 
-每台设备只有重型与通用两个独立任务池。项目归属由用户在添加时指定；配置、占用与交接优先规则统一见 [交接容量](../skills/bstack/t3-patrol/references/handoff.md)，初始化见 [巡检初始化](../skills/bstack/t3-patrol/references/setup.md)。计算入口为 `t3-patrol/scripts/patrol-capacity.mjs`。
+每台设备只有重型与通用两个独立任务池。项目归属由用户在添加时指定；只有执行中的线程占位，待交接占住目标池；初始化见 [巡检初始化](../skills/bstack/t3-patrol/references/setup.md)。计算入口为 `t3-patrol/scripts/patrol-capacity.mjs`。
 
 配置迁移：Musiver、TMA 归重型，其余归通用；同设备原重型仓库池名额合并。设备总上限移除，巡检线程排除计数。容量约束自动新建，用户手动线程照常计入所属池。
 
@@ -87,7 +87,7 @@ GitHub 与 Forgejo 合为一个托管平台适配器，底层分别走 `gh` 与 
 1. 收尾已有线程（现有 A→D）。
 2. 按池计算空位，以第 1 步动作回读后的状态为准。
 3. 空位先分给等待空位的交接。
-4. 调 `t3-dispatch`：列候选 → 过滤（已关联 PR、已认领、信息不足、需产品决策）→ 按问题引用号在目标环境查重 → 排优先级并按仓库文档的设备分工匹配设备 → 认领 → 建线程 → 回读确认开工；开工失败则归还。
+4. 调 `t3-dispatch`：题库低于目标库存（池名额 × 倍数）时，补货子代理按仓库研判候选（准入、切片、设备、查重）后写入题库；有空位时 `dispatch-queue` 按题库顺序出队，复核来源 → 查重 → 认领 → 建线程 → 回读确认开工，开工失败则归还。
 5. 报告新增「本轮派活」：选了什么、为什么跳过某些。
 
 `t3-dispatch` 是独立技能，允许模型主动调用，手动「给 pc 再分两个任务」也走同一套规则。派活档位是 `t3-dispatch.json` 的 `mode`（`off` / `dry-run` / `auto`），只约束巡检调用，先 dry-run 观察再切 auto。空位用 `patrol-snapshot.mjs --capacity-only` 现算（同时给出各环境项目与未 settle 线程标题），以巡检第 1 步动作之后的状态为准。
@@ -106,7 +106,7 @@ GitHub 与 Forgejo 合为一个托管平台适配器，底层分别走 `gh` 与 
 
 ## 快照通道
 
-T3 向 ACP 类 harness（droid、devin 等）的进程环境注入 `T3_ACP_MCP_ENDPOINT` 与 `T3_ACP_MCP_AUTHORIZATION`，向 pi 注入 `T3_MCP_URL` 与 `T3_MCP_BEARER_TOKEN`（裸 token，2026-11-08 实测 pi 的 shell 里可见），脚本两组都认。Codex 自 T3 `7394d73abb`（2026-10-27）起改为在每线程配置里接收 T3 MCP，shell 拿不到会话。巡检线程要用快照脚本，需运行在 ACP 类 harness 或 pi 上；否则按 `snapshot.md` 手工取证。
+T3 向 ACP 类 harness（droid、devin 等）的进程环境注入 `T3_ACP_MCP_ENDPOINT` 与 `T3_ACP_MCP_AUTHORIZATION`，向 pi 注入 `T3_MCP_URL` 与 `T3_MCP_BEARER_TOKEN`（裸 token，2026-11-08 实测 pi 的 shell 里可见），脚本两组都认。Codex 自 T3 `7394d73abb`（2026-10-27）起改为在每线程配置里接收 T3 MCP，shell 拿不到会话。巡检线程需运行在 ACP 类 harness 或 pi 上。
 
 ## 推进顺序
 

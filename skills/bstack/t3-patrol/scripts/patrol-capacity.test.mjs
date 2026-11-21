@@ -65,16 +65,6 @@ test("设备只覆盖两池名额；缺身份进入通用池，显式general可�
   const fork = new Map([["f", { canonicalKey: LIU, origin: { canonicalKey: MUS } }]]);
   assert.equal(calc({ projects: fork, cfg: { ...cfg, projects: [{ repo: LIU, pool: "general" }, ...cfg.projects] } }).poolByRepo[LIU], "general");
 });
-test("预计释放只抬高同池 projected，不改实际 free；闸住时两者都是 0", () => {
-  const threads = heavy.map((t, i) => ({ ...t, threadId: `h${i}` }));
-  const c = calc({ threads, releasing: new Set(["h0", "h1", "ghost"]) });
-  assert.equal(c.freeByRepo[MUS], 0);
-  assert.equal(c.projectedFreeByRepo[MUS], 1, "4 占 3 位，释放 2 个后余 1");
-  assert.equal(c.projectedFreeByRepo[LIU], 2, "通用池不受重型释放影响");
-  assert.deepEqual(c.pools[0].releasing, ["重型0", "重型1"]);
-  assert.equal(calc({ threads }).projectedFreeByRepo, undefined, "没有预计释放时不输出 projected");
-  assert.equal(calc({ threads, releasing: new Set(["h0", "h1"]), waiting: ["构建"] }).projectedFreeByRepo[MUS], 0);
-});
 test("磁盘/等待资源仍闸住两池", () => {
   for (const args of [{ diskFreeGB: 19 }, { waiting: ["构建"] }]) {
     const c = calc(args);

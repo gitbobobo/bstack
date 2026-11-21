@@ -5,11 +5,10 @@
 //   node patrol-batch.mjs --watch <快照>      给快照里全部 needsWatchThreads 代挂监听（PR 已合并/关闭的跳过），再回读 watching
 //   node patrol-batch.mjs --calls <文件>      按文件逐条执行任意 MCP 调用（发消息、改名、settle、interrupt……）
 // 两者可同时给。calls 文件（UTF-8 JSON，消息正文写在里面，不进命令行）：
-//   [ { "label": "M10 #28", "tool": "t3_thread_send", "args": { "environmentId": "…", "threadId": "…", "mode": "auto", "message": "【巡检】…" } }, … ]
-//   要求对方收尾后结束的调用加 "releases": true（与 tool 同级），结果原样带出，供 patrol-snapshot --expect-release-from 登记预计释放。
-// 输出 { watch: [{ threadId, environmentId, url, result|skipped|error, watching }], calls: [{ label, tool, ok, releases?, result|error }] }；
+//   [ { "label": "send #28", "tool": "t3_thread_send", "args": { "environmentId": "…", "threadId": "…", "mode": "auto", "message": "【巡检】…" } }, … ]
+// 输出 { watch: [{ threadId, environmentId, url, result|skipped|error, watching }], calls: [{ label, tool, threadId, environmentId, ok, result|error }] }；
 // result 只留判定字段（messageId、runId、threadId、status、title 等），有失败时退出码 1。
-// 只负责执行与即时返回值；预期动作有没有发生（目标线程是否接手）仍用 patrol-evidence.mjs 回读对应 run。
+// 只负责执行与即时返回值；对应 run 是否启动由 patrol-round.mjs verify 回读。
 
 import { readFileSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -23,8 +22,7 @@ export function brief(v) {
   return Object.keys(out).length ? out : JSON.stringify(v).slice(0, 300);
 }
 
-async function watchAll(snapshotFile) {
-  const snap = JSON.parse(readFileSync(snapshotFile, "utf8"));
+export async function watchAll(snap) {
   const out = [];
   for (const env of snap.environments ?? []) {
     for (const t of env.needsWatchThreads ?? []) {
@@ -49,9 +47,8 @@ async function watchAll(snapshotFile) {
   return out;
 }
 
-async function runCalls(file) {
-  const list = JSON.parse(readFileSync(file, "utf8").replace(/^\uFEFF/, ""));
-  if (!Array.isArray(list)) throw new Error("calls 文件须是数组");
+export async function runCalls(list) {
+  if (!Array.isArray(list)) throw new Error("calls 须是数组");
   const out = [];
   for (const [i, c] of list.entries()) {
     const label = c?.label ?? `#${i}`;
@@ -60,13 +57,6 @@ async function runCalls(file) {
       continue;
     }
     const scope = c.args.threadId ? { threadId: c.args.threadId, environmentId: c.args.environmentId } : {};
-    if (c.releases) {
-      if (!c.args.threadId) {
-        out.push({ label, tool: c.tool, ok: false, error: "releases 需要 args.threadId" });
-        continue;
-      }
-      scope.releases = true;
-    }
     try {
       out.push({ label, tool: c.tool, ...scope, ok: true, result: brief(await call(c.tool, c.args)) });
     } catch (e) {
@@ -95,8 +85,8 @@ if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToP
   try {
     await connect("t3-patrol-batch");
     const out = {};
-    if (watchFile) out.watch = await watchAll(watchFile);
-    if (callsFile) out.calls = await runCalls(callsFile);
+    if (watchFile) out.watch = await watchAll(JSON.parse(readFileSync(watchFile, "utf8")));
+    if (callsFile) out.calls = await runCalls(JSON.parse(readFileSync(callsFile, "utf8").replace(/^\uFEFF/, "")));
     console.log(JSON.stringify(out, null, 1));
     process.exitCode = (out.watch ?? []).some((w) => w.error) || (out.calls ?? []).some((c) => !c.ok) ? 1 : 0;
   } catch (e) {

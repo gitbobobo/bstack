@@ -46,6 +46,9 @@
     "resendCooldownMinutes": 30,
     "convergenceResendHours": 24
   },
+  "subagents": {
+    "judgeBatch": 4
+  },
   "convergenceAudit": {
     "openHours": 12,
     "reviewRounds": 5

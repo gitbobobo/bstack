@@ -1,21 +1,23 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { briefName, buildPlan, rankOf, repoBriefOf, selectionOf } from "./dispatch-plan.mjs";
-import { validateCandidate } from "./candidate-pool.mjs";
+import { briefName, buildPlan, rankOf, repoBriefOf } from "./dispatch-plan.mjs";
+import { refillStatus, validateCandidate } from "./candidate-pool.mjs";
 import { capacityErrors, validatePlan, launchConfigFor } from "./dispatch-launch.mjs";
 
 const MUS = "fj.frp.musiver.cn/fjbobo/musiver";
 const TMA = "fj.frp.musiver.cn/fjbobo/tma";
 const config = {
   limits: { perRun: 5, perDay: 20, maxAttempts: 2 },
+  stock: { multiplier: 3, maxAgeHours: 72 },
   repos: [{ repo: MUS }, { repo: TMA, devices: ["mini"] }],
 };
 const environments = { pc: { environmentId: "e-pc" }, mini: { environmentId: "e-mini" } };
-const env = (id, free, extra = {}) => ({
+// max 是所属池名额：MUS 在 heavy，TMA 在 general。
+const env = (id, max = [1, 1], extra = {}) => ({
   environmentId: id,
   label: id,
   projects: [{ id: `${id}-mus`, canonicalKey: MUS }, { id: `${id}-tma`, canonicalKey: TMA }],
-  capacity: { freeByRepo: { [MUS]: free[0], [TMA]: free[1] } },
+  capacity: { freeByRepo: { [MUS]: max[0], [TMA]: max[1] }, poolByRepo: { [MUS]: "heavy", [TMA]: "general" }, pools: [{ name: "heavy", max: max[0] }, { name: "general", max: max[1] }] },
   openThreads: [],
   ...extra,
 });
@@ -41,40 +43,39 @@ test("粗排：崩溃先于构建先于体验，同类按高中低；未分类�
   assert.equal(rankOf(cand("K", "清理未读的注入与死代码")).category, "架构重构");
 });
 
-test("没有空位时不列候选", () => {
-  let listed = 0;
-  const plan = buildPlan({
-    capacity: { environments: [env("e-pc", [0, 0]), env("e-mini", [0, 0], { capacity: { freeByRepo: { [MUS]: 0, [TMA]: 0 }, blocked: ["有线程在等资源：x"] } })] },
-    config,
-    environments,
-    ledger: [],
-    listOf: () => (listed++, { candidates: [], skipped: [] }),
-  });
-  assert.equal(plan.slots, 0);
-  assert.equal(listed, 0);
-  assert.ok(plan.skipped.some((s) => /等资源/.test(s.reason)));
+test("库存目标 = 倍数 × 可派设备所属池名额；devices 限定设备，不可达设备单列", () => {
+  const status = refillStatus({ repos: config.repos, pool: { repos: { [MUS]: [saved(cand("INT-1", "x"))] } },
+    envs: [env("e-pc", [3, 2]), env("e-mini", [2, 2]), { environmentId: "e-x", error: "离线", projects: [{ id: "p", canonicalKey: MUS }] }], environments, now: NOW });
+  const mus = status.find((s) => s.repo === MUS);
+  assert.deepEqual([mus.capacity, mus.target, mus.stock, mus.deficit, mus.pool], [5, 15, 1, 14, "heavy"]);
+  assert.deepEqual(mus.unknownDevices, ["e-x"]);
+  const tma = status.find((s) => s.repo === TMA);
+  assert.deepEqual([tma.devices, tma.target], [["mini"], 6]);
+  const stale = refillStatus({ repos: [{ repo: MUS }], pool: { repos: { [MUS]: [saved(cand("INT-1", "x"), { checkedAt: "2026-10-01T00:00:00Z" })] } }, envs: [env("e-pc")], environments, now: NOW });
+  assert.equal(stale[0].stock, 0, "过期 ready 不计库存");
 });
 
-test("只为有空位的仓库列候选；devices 限定设备；标题命中仅作线索，台账在派仍排除；表长按空位", () => {
-  const listCalls = [];
+test("库存够就不列候选；缺口仓库只列不在库存里的题目，表长按缺口", () => {
+  let listed = [];
+  const full = { [MUS]: [1, 2, 3].map((i) => saved(cand(`INT-${i}`, "x"))), [TMA]: [4, 5, 6].map((i) => saved(cand(`INT-${i}`, "x"), { devices: ["mini"] })) };
+  const none = buildPlan({ capacity: { environments: [env("e-pc"), env("e-mini")] }, config: { ...config, stock: { multiplier: 1 } }, environments, ledger: [], candidatePool: full, now: NOW,
+    listOf: (repo) => (listed.push(repo), { candidates: [], skipped: [] }) });
+  assert.deepEqual(none.repos, []);
+  assert.deepEqual(listed, []);
+
   const many = Array.from({ length: 12 }, (_, i) => cand(`INT-${100 + i}`, `第 ${i} 个功能错误`));
   const plan = buildPlan({
-    capacity: {
-      environments: [
-        env("e-pc", [1, 3], { openThreads: [{ title: "INT-100 正在做", link: "<l>" }] }),
-        env("e-mini", [0, 0]),
-      ],
-    },
-    config,
-    environments,
-    ledger: [{ at: new Date().toISOString(), event: "launched", repo: MUS, id: "id-INT-101" }],
-    listOf: (repo) => (listCalls.push(repo), { candidates: [cand("INT-99", "启动崩溃"), ...many], skipped: [{ ref: "x" }] }),
+    capacity: { environments: [env("e-pc", [1, 0], { openThreads: [{ title: "INT-100 正在做", link: "<l>" }] })] },
+    config, environments, now: NOW,
+    candidatePool: { [MUS]: [saved(cand("INT-1", "旧题"))] },
+    ledger: [{ at: new Date(NOW).toISOString(), event: "launched", repo: MUS, id: "id-INT-101" }],
+    listOf: () => ({ candidates: [cand("INT-1", "旧题"), cand("INT-99", "启动崩溃"), ...many], skipped: [{ ref: "x" }] }),
   });
-  assert.deepEqual(listCalls, [MUS], "TMA 只允许 mini，mini 没空位，不列 TMA");
-  const mus = plan.repos.find((r) => r.repo === MUS);
-  assert.equal(plan.slots, 1);
-  assert.deepEqual(mus.devices.map((d) => [d.environmentId, d.projectId, d.free]), [["e-pc", "e-pc-mus", 1]]);
-  assert.deepEqual(mus.excluded.map((e) => e.ref).sort(), ["INT-101"]);
+  assert.deepEqual(plan.repos.map((r) => r.repo), [MUS], "TMA 只允许 mini，mini 不在快照里，目标为 0");
+  const mus = plan.repos[0];
+  assert.equal(mus.deficit, 2);
+  assert.ok(!mus.shortlist.some((c) => c.ref === "INT-1"), "库存里的题不重复研判");
+  assert.deepEqual(mus.excluded.map((e) => e.ref), ["INT-101"]);
   assert.equal(mus.shortlist.find((c) => c.ref === "INT-100").threadMatch.link, "<l>");
   assert.equal(mus.shortlist[0].ref, "INT-99", "崩溃排第一");
   assert.equal(mus.shortlist.length, 5);
@@ -82,88 +83,42 @@ test("只为有空位的仓库列候选；devices 限定设备；标题命中仅
   assert.equal(mus.sourceSkipped, 1);
 });
 
-test("perDay 余量封顶本轮可派数", () => {
-  const ledger = Array.from({ length: 19 }, () => ({ at: new Date().toISOString(), event: "launched", repo: MUS, id: "z" }));
-  const plan = buildPlan({ capacity: { environments: [env("e-pc", [4, 0])] }, config, environments, ledger, listOf: () => ({ candidates: [], skipped: [] }) });
-  assert.equal(plan.slots, 1);
-  const unlimited = buildPlan({ capacity: { environments: [env("e-pc", [4, 0])] }, config: { ...config, limits: { ...config.limits, perDay: 0 } }, environments, ledger, listOf: () => ({ candidates: [], skipped: [] }) });
-  assert.equal(unlimited.slots, 4, "perDay 为 0 不限，只受名额与 perRun 约束");
-});
-
-test("旧候选依据单列，新高优先问题仍进入初筛；保留版本供跨轮复核", () => {
+test("过期、阻塞或待核的旧条目带 pooled 回到研判；池里有、列表没了的进 poolMissing", () => {
   const old = cand("INT-1", "播放失败");
-  const urgent = cand("INT-2", "启动崩溃", { labels: ["bstack:priority"] });
-  const p = buildPlan({ capacity: { environments: [env("e-pc", [1, 0])] }, config, environments, ledger: [],
-    candidatePool: { [MUS]: [saved(old)] }, now: NOW,
-    listOf: () => ({ candidates: [old, urgent], skipped: [] }),
+  const gone = cand("INT-9", "已关闭");
+  const p = buildPlan({ capacity: { environments: [env("e-pc")] }, config, environments, ledger: [], now: NOW,
+    candidatePool: { [MUS]: [saved(old, { state: "pending", deferredBy: "evidence" }), saved(gone)] },
+    listOf: () => ({ candidates: [old], skipped: [] }) });
+  assert.equal(p.repos[0].shortlist[0].pooled.state, "pending");
+  assert.deepEqual(p.repos[0].poolMissing, [{ id: gone.id, ref: "INT-9" }]);
+});
+
+test("用户优先项在截表前提升，暂缓排除", () => {
+  const ordinary = Array.from({ length: 10 }, (_, i) => cand(`INT-${i}`, "启动崩溃"));
+  const plan = buildPlan({
+    capacity: { environments: [env("e-pc", [1, 0])] }, config, environments, ledger: [],
+    listOf: () => ({ candidates: [...ordinary,
+      cand("INT-90", "架构重构", { labels: ["bstack:priority"] }),
+      cand("INT-91", "启动崩溃", { labels: ["bstack:priority", "bstack:defer"] }),
+    ], skipped: [] }),
   });
-  assert.equal(p.repos[0].reviewed[0].id, old.id);
-  assert.equal(p.repos[0].reviewed[0].cachedReview.reuseEvidence, true);
-  assert.deepEqual(p.repos[0].shortlist.map((c) => c.id), [urgent.id]);
-  assert.equal(p.repos[0].shortlist[0].updatedAt, urgent.updatedAt);
-  assert.equal(p.slots, 1, "缓存不增加容量");
+  const r = plan.repos[0];
+  assert.equal(r.shortlist[0].ref, "INT-90");
+  assert.ok(r.shortlist.slice(1).every((c) => !c.priority));
+  assert.ok(r.excluded.some((c) => c.ref === "INT-91"));
 });
 
-test("变化、过期、阻塞、证据不足或设备不匹配的缓存回到初筛", () => {
-  const old = cand("INT-1", "播放失败");
-  for (const extra of [
-    { issueUpdatedAt: "2026-10-01" }, { checkedAt: "2026-10-01" },
-    { state: "blocked", deferredBy: "dependency" }, { state: "pending", deferredBy: "evidence" },
-    { devices: ["mini"] },
-  ]) {
-    const p = buildPlan({ capacity: { environments: [env("e-pc", [1, 0])] }, config, environments, ledger: [],
-      candidatePool: { [MUS]: [saved(old, extra)] }, now: NOW,
-      listOf: () => ({ candidates: [old], skipped: [] }),
-    });
-    assert.equal(p.repos[0].reviewed.length, 0);
-    assert.equal(p.repos[0].shortlist[0].cachedReview.reuseEvidence, false);
-  }
-});
-
-test("缓存仍保留标题线索，不能绕过实时准入、台账和暂缓标签", () => {
-  const cs = [1, 2, 3, 4, 5].map((i) => cand(`INT-${i}`, "播放失败"));
-  cs[2].labels = ["bstack:defer"];
-  const p = buildPlan({ capacity: { environments: [env("e-pc", [1, 0], { openThreads: [{ title: "INT-1 已在做" }] })] }, config, environments,
-    ledger: [{ event: "launched", at: new Date(NOW).toISOString(), repo: MUS, id: cs[1].id }],
-    candidatePool: { [MUS]: cs.map((c) => saved(c)) }, now: NOW,
-    listOf: () => ({ candidates: cs.slice(0, 4), skipped: [] }),
-  });
-  assert.deepEqual(p.repos[0].reviewed.map((c) => c.ref), ["INT-1", "INT-4"]);
-  assert.equal(p.repos[0].reviewed[0].threadMatch.title, "INT-1 已在做");
-  assert.equal(p.repos[0].excluded.length, 2);
-  assert.deepEqual(p.repos[0].poolMissing, [{ id: cs[4].id, ref: "INT-5" }]);
-});
-
-test("挑题前分工：多个待筛项目都委派，单项目大批也委派，小批与仅复用留主代理", () => {
-  const repo = (name, count, slots = 1, reused = 0) => ({ repo: name, slots, devices: [{ alias: "pc" }],
-    shortlist: Array.from({ length: Math.min(5, count) }, (_, i) => ({ id: `${name}-${i}` })), more: Math.max(0, count - 5),
-    reviewed: Array.from({ length: reused }, (_, i) => ({ id: `${name}-old-${i}` })),
-  });
-  const choose = (repos, slots = 3) => selectionOf({ slots, repos }, "snapshot-before-selection");
-  const multi = choose([repo(MUS, 6), repo(TMA, 5)]);
-  assert.equal(multi.capacityAt, "snapshot-before-selection");
-  assert.ok(multi.assignments.every((a) => a.mode === "delegate" && a.reason === "multiple_repos"));
-  const large = choose([repo(MUS, 8)]).assignments[0];
-  assert.equal(large.mode, "delegate");
-  assert.equal(large.pendingCount, 8, "表外待筛项也决定工作量");
-  assert.equal(choose([repo(MUS, 4)]).assignments[0].mode, "lead");
-  assert.equal(choose([repo(MUS, 5)]).assignments[0].mode, "delegate", "批量阈值边界");
-  const reused = choose([repo(MUS, 0, 1, 3)]).assignments[0];
-  assert.equal(reused.reason, "reuse_evidence");
-  assert.equal(reused.mode, "lead");
-  assert.equal(choose([repo(MUS, 8, 0)]).assignments[0].mode, "skip");
-  assert.equal(choose([repo(MUS, 8)], 0).assignments[0].mode, "skip");
-  assert.equal(choose([repo(MUS, 0)]).assignments[0].reason, "no_candidates");
-});
-
-test("第182轮计划回放：读取计划即给出逐项目委派，不能等串行填满后再判", () => {
-  const first = buildPlan({ capacity: { generatedAt: "2026-11-14T16:47:00Z", environments: [env("e-mini", [1, 1])] },
-    config, environments, ledger: [], listOf: () => ({ candidates: [cand("INT-1", "修复功能错误")], skipped: [] }) });
-  assert.equal(first.selection.capacityAt, "2026-11-14T16:47:00Z");
-  assert.ok(first.selection.assignments.every((a) => a.mode === "delegate"));
-  const after = buildPlan({ capacity: { environments: [env("e-mini", [0, 0])] }, config, environments, ledger: [], listOf: () => { throw new Error("池满不读来源"); } });
-  assert.ok(after.selection.assignments.every((a) => a.mode === "skip"));
-  assert.ok(first.selection.assignments.every((a) => a.mode === "delegate"), "后续计划不覆盖前段分工事实");
+test("补货切片只含本仓库：缺口、设备、相关台账与写池命令", () => {
+  const ledger = [{ at: new Date().toISOString(), event: "launched", repo: MUS, id: "a" }, { at: new Date().toISOString(), event: "launched", repo: TMA, id: "b" }];
+  const capacity = { environments: [env("e-pc", [1, 1], { openThreads: [{ title: "GH-360 下载目录", id: "t1" }] })] };
+  const plan = buildPlan({ capacity, config, environments, ledger, listOf: () => ({ candidates: [cand("INT-1", "播放失败")], skipped: [] }) });
+  const brief = repoBriefOf(plan, MUS, { capacity, ledger, scripts: "/s" });
+  assert.deepEqual([brief.need, brief.target, brief.stock, brief.devices], [3, 3, 0, ["pc"]]);
+  assert.deepEqual(brief.ledger.active.map((e) => e.id), ["a"]);
+  assert.equal(brief.openThreads[0].title, "GH-360 下载目录");
+  assert.match(brief.commands.apply, /candidate-pool\.mjs apply --repo /);
+  assert.match(brief.commands.show, /^node [\/\\]s[\/\\]issue-source\.mjs show --repo .+ --id /);
+  assert.equal(briefName(MUS), "fj.frp.musiver.cn_fjbobo_musiver.json");
 });
 
 test("计划校验", () => {
@@ -189,58 +144,9 @@ test("本轮模型覆盖：保留完整档位选项与运行模式，不改配�
   }
 });
 
-test("用户优先项在截表前提升，暂缓排除，无标签仍参与技术排序", () => {
-  const ordinary = Array.from({ length: 10 }, (_, i) => cand(`INT-${i}`, "启动崩溃"));
-  const plan = buildPlan({
-    capacity: { environments: [env("e-pc", [1, 0])] }, config, environments, ledger: [],
-    listOf: () => ({ candidates: [...ordinary,
-      cand("INT-90", "架构重构", { labels: ["bstack:priority"] }),
-      cand("INT-91", "启动崩溃", { labels: ["bstack:priority", "bstack:defer"] }),
-    ], skipped: [] }),
-  });
-  const r = plan.repos[0];
-  assert.equal(r.shortlist[0].ref, "INT-90");
-  assert.equal(r.shortlist[0].priority, true);
-  assert.equal(r.shortlist.length, 5);
-  assert.ok(r.shortlist.slice(1).every((c) => !c.priority));
-  assert.ok(r.excluded.some((c) => c.ref === "INT-91"));
-});
-
-test("预计名额：实际满但有预计释放时照常列候选与分工，slots 仍按实际空位", () => {
-  const pc = env("e-pc", [0, 0]);
-  pc.capacity.projectedFreeByRepo = { [MUS]: 1, [TMA]: 0 };
-  const plan = buildPlan({ capacity: { generatedAt: "cut", environments: [pc] }, config, environments, ledger: [],
-    listOf: () => ({ candidates: [cand("INT-1", "播放失败"), cand("INT-2", "保存失败")], skipped: [] }) });
-  const mus = plan.repos.find((r) => r.repo === MUS);
-  assert.equal(plan.slots, 0);
-  assert.equal(plan.projectedSlots, 1);
-  assert.deepEqual(mus.devices.map((d) => [d.alias, d.free, d.projected]), [["pc", 0, 1]]);
-  assert.equal(mus.shortlist.length, 2);
-  assert.equal(plan.selection.assignments.find((a) => a.repo === MUS).mode, "lead");
-  const none = buildPlan({ capacity: { environments: [env("e-pc", [0, 0])] }, config, environments, ledger: [], listOf: () => { throw new Error("没有预计名额不读来源"); } });
-  assert.equal(none.projectedSlots, 0);
-});
-
-test("子代理输入只含本仓库切片：设备池占用与预计释放、相关台账、命令用法", () => {
-  const pc = env("e-pc", [0, 1], { openThreads: [{ title: "GH-360 下载目录", id: "t1" }] });
-  Object.assign(pc.capacity, { projectedFreeByRepo: { [MUS]: 1, [TMA]: 1 }, poolByRepo: { [MUS]: "heavy", [TMA]: "general" },
-    pools: [{ name: "heavy", occupying: ["#233 设置弹框"], releasing: ["#233 设置弹框"] }, { name: "general", occupying: [], releasing: [] }] });
-  const ledger = [{ at: new Date().toISOString(), event: "launched", repo: MUS, id: "a" }, { at: new Date().toISOString(), event: "launched", repo: TMA, id: "b" }];
-  const capacity = { generatedAt: "cut", environments: [pc] };
-  const plan = buildPlan({ capacity, config, environments, ledger, listOf: () => ({ candidates: [cand("INT-1", "播放失败")], skipped: [] }) });
-  const brief = repoBriefOf(plan, MUS, { capacity, ledger, scripts: "/s" });
-  assert.equal(brief.capacityAt, "cut");
-  assert.deepEqual(brief.devices.map((d) => [d.pool, d.free, d.projected, d.releasing]), [["heavy", 0, 1, ["#233 设置弹框"]]]);
-  assert.deepEqual(brief.ledger.active.map((e) => e.id), ["a"]);
-  assert.equal(brief.openThreads[0].title, "GH-360 下载目录");
-  assert.equal(brief.shortlist[0].ref, "INT-1");
-  assert.match(brief.commands.show, /^node [\/\\]s[\/\\]issue-source\.mjs show --repo .+ --id /);
-  assert.equal(briefName(MUS), "fj.frp.musiver.cn_fjbobo_musiver.json");
-});
-
-test("建线复核：同设备同池合计不超实际空位，预计名额不能建线", () => {
+test("建线复核：同设备同池合计不超实际空位", () => {
   const capacity = { environments: [{ environmentId: "e", projects: [{ id: "p-mus", canonicalKey: MUS }, { id: "p-tma", canonicalKey: TMA }],
-    capacity: { freeByRepo: { [MUS]: 1, [TMA]: 1 }, projectedFreeByRepo: { [MUS]: 2, [TMA]: 2 }, poolByRepo: { [MUS]: "heavy", [TMA]: "heavy" } } }] };
+    capacity: { freeByRepo: { [MUS]: 1, [TMA]: 1 }, poolByRepo: { [MUS]: "heavy", [TMA]: "heavy" } } }] };
   const l = (projectId, title) => ({ repo: MUS, ids: ["x"], environmentId: "e", projectId, title, reason: "r" });
   assert.deepEqual(capacityErrors({ launches: [l("p-mus", "A")] }, capacity), []);
   const over = capacityErrors({ launches: [l("p-mus", "A"), l("p-tma", "B")] }, capacity);

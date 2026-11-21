@@ -167,34 +167,14 @@ test("完整/容量快照一致排除 Fast Ship 审查，保留实现父线程�
     const { stdout } = await exec(process.execPath, [script, "--self", "self", ...mode], { env, timeout: 15000 });
     assert.equal(JSON.parse(stdout).environments[0].capacity.used, 5);
   }
-  writeFileSync(stateFile, JSON.stringify({ pendingHandoffs: [] }));
-  const { stdout } = await exec(process.execPath, [script, "--self", "self", "--capacity-only",
-    "--expect-release", "impl0@mini", "--expect-release", "impl2@mini", "--expect-release", "background",
-    "--expect-release", "impl1@other", "--expect-release", "ghost@mini"], { env, timeout: 15000 });
-  const snap = JSON.parse(stdout);
-  const c = snap.environments[0].capacity;
-  assert.equal(c.freeByRepo[REPO], 0, "预计释放不改实际空位");
-  assert.equal(c.projectedFreeByRepo[REPO], 2, "5 占 5 位，两个活跃线程预计释放后余 2");
-  assert.deepEqual(c.releasing.map((x) => x.threadId).sort(), ["impl0", "impl2"]);
-  assert.deepEqual(snap.expectReleaseUnmatched.map((x) => x.threadId).sort(), ["background", "ghost", "impl1"], "别的环境或不占位的线程要报出来核对");
-
-  writeFileSync(join(dir, "state", "t3-patrol.json"), JSON.stringify({ pendingHandoffs: [
-    { sourceEnvironmentId: "mini", sourceThreadId: "impl2", launchedThreadLink: "<t3-thread://x>" },
-    { sourceEnvironmentId: "mini", sourceThreadId: "impl1" },
-  ] }));
-  const batch = join(dir, "batch.json");
-  writeFileSync(batch, JSON.stringify({ calls: [
-    { label: "收尾指令（无模板）", tool: "t3_thread_send", threadId: "impl0", environmentId: "mini", releases: true, ok: true },
-    { label: "M9 未标", tool: "t3_thread_send", threadId: "impl1", environmentId: "mini", ok: true },
-    { label: "M10 发送失败", tool: "t3_thread_send", threadId: "impl4", environmentId: "mini", releases: true, ok: false },
-    { label: "改名", tool: "t3_thread_update", threadId: "impl3", environmentId: "mini", ok: true },
-  ] }));
-  const { stdout: out2 } = await exec(process.execPath, [script, "--self", "self", "--capacity-only", "--expect-release-from", batch], { env, timeout: 15000 });
-  const snap2 = JSON.parse(out2);
-  const c2 = snap2.environments[0].capacity;
-  assert.deepEqual(c2.releasing.map((x) => x.threadId).sort(), ["impl0", "impl2"], "带 releases 的成功调用与已建线交接来源记为预计释放");
-  assert.deepEqual(snap2.expectReleaseUnflagged.map((x) => x.threadId), ["impl1"], "发过消息、仍占位却没标 releases 的要报出来");
-  assert.equal(snap2.expectReleaseUnmatched, undefined);
+  // 线程状态表的复查时间压住持续条件：impl3 失败仍有事，completed 的 merged 线程本就静默。
+  writeFileSync(stateFile, JSON.stringify({ pendingHandoffs: [], threads: { "mini/background": { kind: "等门禁", waitFor: "门禁结果", recheckAt: new Date(Date.now() + 3600000).toISOString() } } }));
+  {
+    const { stdout } = await exec(process.execPath, [script, "--self", "self"], { env, timeout: 15000 });
+    const e = JSON.parse(stdout).environments[0];
+    assert.deepEqual(e.projects, [{ id: "p", canonicalKey: REPO }], "完整快照带项目清单，供题库算各仓库可用池");
+    assert.equal(e.candidates.find((x) => x.id === "background").hold.waitFor, "门禁结果");
+  }
   // 没有派出归属的线程保留实际容量，但失败兜底、全量与独立体检都不能将它们捞回。
   const protectedIds = ["impl0", "impl3", "background", "discussion"];
   writeFileSync(ledger, records.filter((r) => !protectedIds.includes(r.threadId)).concat([

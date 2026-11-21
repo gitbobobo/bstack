@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { loadState, statePath, putHandoff, resolveHandoff, managedThreadsOf } from "./patrol-state.mjs";
+import { loadState, statePath, putHandoff, recordDecisions, resolveHandoff, managedThreadsOf } from "./patrol-state.mjs";
 
 const entry = { sourceEnvironmentId: "mbp", sourceThreadId: "ios", sourceLink: "t3-thread://ios", targetEnvironmentId: "mini", canonicalKey: "host/repo", task: "Android 后续", handoffRef: "来源收尾消息", waitingSince: "2026-11-09T04:00:00Z", blocker: "Musiver 池 4/4" };
 
@@ -55,9 +55,9 @@ test("commit 保留交接队列；旧状态兼容，损坏状态报错而非清�
   const dir = mkdtempSync(join(tmpdir(), "patrol-state-"));
   const env = { ...process.env, BSTACK_CONFIG_DIR: dir };
   try {
-    assert.deepEqual(loadState(env), { lastRound: null, pendingHandoffs: [], managedThreads: [] });
+    assert.deepEqual(loadState(env), { lastRound: null, pendingHandoffs: [], managedThreads: [], threads: {} });
     const path = statePath(env);
-    const state = { lastRound: null, pendingHandoffs: [entry], managedThreads: [] };
+    const state = { lastRound: null, pendingHandoffs: [entry], managedThreads: [], threads: {} };
     const input = join(dir, "entry.json");
     writeFileSync(input, JSON.stringify(entry));
     const run = (...args) => {
@@ -87,11 +87,33 @@ test("commit 保留交接队列；旧状态兼容，损坏状态报错而非清�
     run("handoff-resolve", "--file", input);
     assert.deepEqual(loadState(env).pendingHandoffs, []);
     writeFileSync(path, JSON.stringify({ lastRound: { tier: "old" } }));
-    assert.deepEqual(loadState(env), { lastRound: { tier: "old" }, pendingHandoffs: [], managedThreads: [] });
+    assert.deepEqual(loadState(env), { lastRound: { tier: "old" }, pendingHandoffs: [], managedThreads: [], threads: {} });
     writeFileSync(path, "broken");
     assert.throws(() => loadState(env));
     assert.equal(readFileSync(path, "utf8"), "broken");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("线程状态表：同 kind 写动作连发计数，不打扰清零，复查时间按分钟，消失的线程丢弃", () => {
+  const state = {};
+  const now = Date.parse("2026-11-09T07:00:00Z");
+  const d = { environmentId: "mini", threadId: "a", kind: "收尾", action: "send", waitFor: "pr-finish 收尾", recheckMinutes: 90 };
+  recordDecisions(state, [d, { environmentId: "mini", threadId: "gone", kind: "x", action: "send" }], { now });
+  recordDecisions(state, [d], { now, alive: new Set(["mini/a"]) });
+  assert.deepEqual(state.threads["mini/a"], { kind: "收尾", action: "send", at: "2026-11-09T07:00:00.000Z", count: 2, waitFor: "pr-finish 收尾", recheckAt: "2026-11-09T08:30:00.000Z" });
+  assert.equal(state.threads["mini/gone"], undefined);
+  recordDecisions(state, [{ ...d, kind: "预算收口" }], { now });
+  assert.equal(state.threads["mini/a"].count, 1, "换了动作重新计数");
+  recordDecisions(state, [{ ...d, action: "none", kind: "不打扰", recheckMinutes: 0 }], { now });
+  assert.equal(state.threads["mini/a"].count, 0);
+  assert.equal(state.threads["mini/a"].recheckAt, undefined);
+});
+
+test("交接可带启动信息，缺字段拒绝", () => {
+  const state = { pendingHandoffs: [] };
+  putHandoff(state, { ...entry, launch: { projectId: "p", title: "#46 歌词-Android", message: "交接提示词" } });
+  assert.equal(state.pendingHandoffs[0].launch.projectId, "p");
+  assert.throws(() => putHandoff(state, { ...entry, launch: { projectId: "p" } }), /launch 缺少 title/);
 });

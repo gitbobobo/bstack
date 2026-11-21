@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { applyPatch, cachedReview, MAX_PER_REPO, poolPath, readPool, validateCandidate } from "./candidate-pool.mjs";
+import { applyPatch, MAX_PER_REPO, poolPath, readPool, removeIds, validateCandidate } from "./candidate-pool.mjs";
 
 const REPO = "host/owner/app";
 const NOW = Date.parse("2026-11-14T10:00:00Z");
@@ -78,24 +78,11 @@ test("未知源码显式为 null，仅未就绪条目可落盘和离线预检", 
   assert.equal(existsSync(poolPath(env)), false, "预检不创建共享池");
   const saved = applyPatch({ repo: REPO, env, patch: { ...patch, revision: readPool(env).revision } });
   assert.equal(saved.state.repos[REPO][0].source, null);
-  assert.equal(cachedReview(pending, { updatedAt: pending.issueUpdatedAt }, NOW).reuseEvidence, false);
   writeFileSync(file, JSON.stringify({ upsert: [entry("bad", { source: null })], remove: [] }));
   assert.equal(call().status, 1);
 });
 
-test("问题变化、未知版本、过期或未来核查不可跳过全文筛选；就绪仍待源码复核", () => {
-  const issue = { updatedAt: entry().issueUpdatedAt };
-  assert.equal(cachedReview(entry(), issue, NOW).reuseEvidence, true);
-  for (const [saved, current, now] of [
-    [entry(), { updatedAt: "2026-11-14T09:00:00Z" }, NOW],
-    [entry(), {}, NOW], [entry("a", { issueUpdatedAt: null }), issue, NOW],
-    [entry(), issue, NOW + 8 * 86400000], [entry(), issue, NOW - 1],
-    [entry("a", { state: "blocked", deferredBy: "dependency" }), issue, NOW],
-    [entry("a", { state: "pending", deferredBy: "evidence" }), issue, NOW],
-  ]) assert.equal(cachedReview(saved, current, now).reuseEvidence, false);
-});
-
-test("真实计划 CLI：旧依据跳过详情读取、新急事照常初筛，dry-run 与损坏池均不写共享状态", (t) => {
+test("真实补货 CLI：库存里的题不再研判，只读元数据，不写共享状态；池损坏照常补货", (t) => {
   const base = fixture(t);
   const dir = base.BSTACK_CONFIG_DIR;
   const api = join(dir, "fake-api.mjs");
@@ -110,61 +97,43 @@ const data=path.startsWith('/api/projects/p/issues?') ? {items:issues} : issues.
 if(!data) throw new Error('未模拟的查询 '+path);
 console.log(JSON.stringify({code:0,data}));`);
   const issues = ["a", "b"].map((id) => ({ id, reference: `INT-${id}`, title: id === "b" ? "启动崩溃" : "功能错误",
-    state: "open", source: "internal", updated_at: entry().issueUpdatedAt, body: "完整正文", collab: { consensus: "已确认需求" },
+    state: "open", source: "internal", updated_at: entry().issueUpdatedAt, body: "完整正文",
     internal_meta: { labels: id === "b" ? [{ name: "bstack:priority" }] : [] },
   }));
   writeFileSync(dataFile, JSON.stringify(issues));
   writeFileSync(join(dir, "t3-dispatch.json"), JSON.stringify({ mode: "dry-run", repos: [{ repo: REPO, source: "fast-ship", project: "p", statuses: ["unset"] }] }));
   writeFileSync(join(dir, "environments.json"), JSON.stringify({ environments: { pc: { environmentId: "e", device: "pc", os: "windows" } } }));
   const cap = join(dir, "capacity.json");
-  writeFileSync(cap, JSON.stringify({ environments: [{ environmentId: "e", projects: [{ id: "p", canonicalKey: REPO }], capacity: { freeByRepo: { [REPO]: 1 } }, openThreads: [] }] }));
+  writeFileSync(cap, JSON.stringify({ environments: [{ environmentId: "e", projects: [{ id: "p", canonicalKey: REPO }], capacity: { freeByRepo: { [REPO]: 1 }, poolByRepo: { [REPO]: "general" }, pools: [{ name: "general", max: 1 }] }, openThreads: [] }] }));
   applyPatch({ repo: REPO, env: base, patch: { revision: readPool(base).revision, upsert: [entry("a", { checkedAt: new Date().toISOString() })], remove: [] } });
   const before = readFileSync(poolPath(base), "utf8");
   // 不继承任何真实 MCP 会话或凭据，所有 API 请求只进本测试脚本。
   const env = { PATH: process.env.PATH, HOME: dir, BSTACK_CONFIG_DIR: dir, FAST_SHIP_API: api };
-  const call = (...args) => spawnSync(process.execPath, [fileURLToPath(new URL("./dispatch-plan.mjs", import.meta.url)), "--capacity", cap, ...args], { env, encoding: "utf8" });
+  const call = () => spawnSync(process.execPath, [fileURLToPath(new URL("./dispatch-plan.mjs", import.meta.url)), "--capacity", cap], { env, encoding: "utf8" });
   let result = call();
   assert.equal(result.status, 0, result.stderr);
   let plan = JSON.parse(result.stdout);
-  assert.equal(plan.repos[0].reviewed[0].id, "a");
-  assert.equal(plan.repos[0].shortlist[0].id, "b");
-  assert.equal(plan.repos[0].shortlist[0].body, undefined);
-  assert.equal(plan.selection.assignments[0].mode, "lead");
-  assert.equal(plan.selection.assignments[0].pendingCount, 1);
-  assert.ok(!readFileSync(trace, "utf8").includes('/api/issues/'), "默认先分工，不在计划阶段逐条读全文");
-  result = call("--detail", "800");
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(JSON.parse(result.stdout).repos[0].shortlist[0].body, "完整正文");
-  const requests = readFileSync(trace, "utf8");
-  assert.ok(!requests.includes('/api/issues/a'), "复用候选不重复读全文");
-  assert.ok(requests.includes('/api/issues/b'), "已分给主代理的小批可显式补读详情");
+  assert.deepEqual([plan.refill[0].target, plan.refill[0].stock, plan.refill[0].deficit], [3, 1, 2]);
+  assert.deepEqual(plan.repos[0].shortlist.map((c) => c.id), ["b"]);
+  assert.ok(!readFileSync(trace, "utf8").includes("/api/issues/"), "补货清单只读元数据，正文留给补货子代理");
   assert.equal(readFileSync(poolPath(base), "utf8"), before);
   assert.equal(existsSync(join(dir, "state", "t3-dispatch.jsonl")), false);
-  issues[0].updated_at = "2026-11-14T09:00:00Z";
-  writeFileSync(dataFile, JSON.stringify(issues));
-  result = call("--detail", "800");
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(JSON.parse(result.stdout).repos[0].reviewed.length, 0);
-  assert.ok(readFileSync(trace, "utf8").includes('/api/issues/a'), "版本变化后恢复详情读取");
   applyPatch({ repo: REPO, env: base, patch: { revision: readPool(base).revision, upsert: [entry("a", { state: "pending", deferredBy: "evidence", source: null })], remove: [] } });
-  result = call();
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(JSON.parse(result.stdout).repos[0].shortlist.find((c) => c.id === "a").cachedReview.entry.source, null);
-  assert.equal(JSON.parse(result.stdout).repos[0].reviewed.length, 0, "未知源码不能提升为复用就绪项");
+  plan = JSON.parse(call().stdout);
+  assert.equal(plan.repos[0].shortlist.find((c) => c.id === "a").pooled.state, "pending");
   writeFileSync(poolPath(base), "broken");
   result = call();
   assert.equal(result.status, 0, result.stderr);
-  plan = JSON.parse(result.stdout);
-  assert.ok(plan.warnings.some((w) => w.includes("候选池读取失败")));
+  assert.ok(JSON.parse(result.stdout).warnings.some((w) => w.includes("候选池读取失败")));
   assert.equal(readFileSync(poolPath(base), "utf8"), "broken");
-  writeFileSync(dataFile, JSON.stringify(Array.from({ length: 8 }, (_, i) => ({ ...issues[0], id: `batch-${i}`, reference: `INT-${100 + i}` }))));
-  writeFileSync(trace, "");
-  result = call("--detail", "800");
-  assert.equal(result.status, 0, result.stderr);
-  const assignment = JSON.parse(result.stdout).selection.assignments[0];
-  assert.equal(assignment.mode, "delegate");
-  assert.equal(assignment.pendingCount, 8);
-  assert.ok(!readFileSync(trace, "utf8").includes('/api/issues/'), "待委派项目即使传 --detail 也不提前串行深读");
+});
+
+test("removeIds 只删存在的条目，保留顺序与其他仓库", (t) => {
+  const env = fixture(t);
+  applyPatch({ repo: REPO, env, patch: { revision: readPool(env).revision, upsert: [entry("a"), entry("b"), entry("c")], remove: [] } });
+  assert.deepEqual(removeIds({ repo: REPO, env, ids: ["b", "x"] }).removed, ["b"]);
+  assert.deepEqual(readPool(env).state.repos[REPO].map((e) => e.id), ["a", "c"]);
+  assert.deepEqual(removeIds({ repo: REPO, env, ids: ["x"] }).removed, []);
 });
 
 test("CLI 使用隔离配置目录，list 不写文件；apply 错误非零退出", (t) => {

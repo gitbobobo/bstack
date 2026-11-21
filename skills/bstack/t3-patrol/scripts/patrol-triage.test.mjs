@@ -133,3 +133,15 @@ test("后台进程随超时被杀：上一轮以来出现过就叫醒，在跑�
   assert.equal(tri({ ...stopped, bgKills: { count: 3, lastAt: ago(120) } }).triage, "quiet");
   assert.deepEqual(tri({ status: "running", recentToolCalls: 30, distinctRecentCommands: 12, minutesSinceLastMessage: 10, bgKills: { count: 1, lastAt: ago(10) } }).triageReasons, ["后台进程随超时被杀"]);
 });
+
+test("线程状态表的复查时间只压住持续条件，新变化与全量照常叫醒", () => {
+  const c = { status: "completed", lastMsgAt: ago(107), lastRunEndedAt: ago(107), prs: ["o/r#21:open"],
+    prHealth: [{ pr: "#21", headAt: ago(900), checks: [{ name: "gate", state: "pending", at: ago(139) }] }] };
+  const hold = { kind: "核验门禁", waitFor: "门禁结果", recheckAt: new Date(NOW + 30 * 60000).toISOString() };
+  const held = triageOf(c, { since, thresholds, now: NOW, hold });
+  assert.equal(held.triage, "quiet");
+  assert.match(held.triageReasons[0], /^等待中：门禁结果/);
+  assert.equal(triageOf(c, { since, thresholds, now: NOW, hold: { ...hold, recheckAt: ago(1) } }).triage, "hot", "到期重新复核");
+  assert.deepEqual(triageOf({ ...c, lastMsgAt: ago(5) }, { since, thresholds, now: NOW, hold }).triageReasons, ["上轮后有新活动"]);
+  assert.equal(triageOf(c, { since: null, thresholds, now: NOW, hold }).triage, "hot");
+});

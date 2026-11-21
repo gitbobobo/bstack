@@ -11,7 +11,7 @@ version: 1
 
 - 在打算长驻巡检的线程里运行：`schedule_task` 默认绑定当前线程，以后每轮巡检都发到这里。不是这样的线程就停下，请用户在巡检宿主上新开一个线程再运行本技能。
 - 宿主设备要常开，并且能连到所有环境。向用户确认这台设备适合当宿主。
-- 线程须跑在 ACP 类 harness（droid、devin 等）或 pi 上，快照脚本才拿得到 T3 MCP 会话；Codex 只能按 [snapshot.md](snapshot.md) 手工取证。
+- 线程须跑在 ACP 类 harness（droid、devin 等）或 pi 上，巡检脚本才拿得到 T3 MCP 会话；Codex 拿不到，不能当巡检宿主。
 
 ## 1. 认设备，写 `environments.json`
 
@@ -36,14 +36,14 @@ version: 1
 node <t3-patrol 技能目录>/scripts/patrol-snapshot.mjs --self <当前线程 threadId> > /tmp/t3-patrol-snapshot.json
 ```
 
-退出码为 0，且 `environmentsFile` 的 `unlisted`、`missing`、`errors` 都为空才算通过。写完容量池后重跑一次，核对各环境 `capacity.device` 已对上别名、`config.warnings` 为空、`freeByRepo` 里目标仓库的可建数符合用户预期。退出码 2 说明当前 harness 没有注入 T3 MCP 会话，告诉用户需要切换到 ACP 类 harness 或 pi，或接受手工取证。
+退出码为 0，且 `environmentsFile` 的 `unlisted`、`missing`、`errors` 都为空才算通过。写完容量池后重跑一次，核对各环境 `capacity.device` 已对上别名、`config.warnings` 为空、`freeByRepo` 里目标仓库的可建数符合用户预期。退出码 2 说明当前 harness 没有注入 T3 MCP 会话，告诉用户需要切换到 ACP 类 harness 或 pi。
 
 ## 3. 询问偏好
 
 先展示默认值，再按组问，用户说「默认」就跳过该组：
 
 - **模型阶梯** `modelLadder`：巡检代回话时依次尝试的 harness 与模型，最后一档标 `fallback`。用户的 harness 或模型不同才需要改，整组替换。
-- **任务池** `capacity`：按 [交接容量](handoff.md) 的两池规则，先列 `t3_project_list` 的项目，请用户指定每个项目归重型还是通用；归属跨设备共用，以完整 `canonicalKey` 写入 `projects`。再问各设备两池名额，未覆盖的沿用 `pools` 默认值。新增项目同样先问归属；未配置项目归通用。
+- **任务池** `capacity`：每台设备有重型 `heavy` 与通用 `general` 两个独立池，只有执行中的线程占位。先列 `t3_project_list` 的项目，请用户指定每个项目归重型还是通用；归属跨设备共用，以完整 `canonicalKey` 写入 `projects`。再问各设备两池名额，未覆盖的沿用 `pools` 默认值。新增项目同样先问归属；未配置项目归通用。
 
   ```json
   {
@@ -53,17 +53,18 @@ node <t3-patrol 技能目录>/scripts/patrol-snapshot.mjs --self <当前线程 t
   }
   ```
 
-  另问本机最低剩余磁盘 `minFreeDiskGB`；资源闸沿用交接容量规则。完成标准：每个项目的归属已确认，每台设备的两池名额已确认。
+  另问本机最低剩余磁盘 `minFreeDiskGB`，低于它本机停派。完成标准：每个项目的归属已确认，每台设备的两池名额已确认。
 - **阈值** `thresholds`：排队、沉默、审查等待、重发冷却等分钟数。多数用户沿用默认。
+- **研判批量** `subagents.judgeBatch`：每个研判子代理处理几条线程，多数用户沿用默认。
 - **分诊** `triage.fullEveryHours`：隔多少小时做一次全量巡检（其余轮次只深查有变化的线程）；`triage.resourceWakeHours`：停在「等待资源」的线程最多等几小时就叫醒它重查。多数用户沿用默认。
 - **久审审计** `convergenceAudit`：PR 打开小时数、审查轮数。
 - **频率** `schedule.everyMinutes`：巡检间隔，最少 1 分钟。
-- **派活**：巡检第 5 步按 t3-dispatch 派新任务。`t3-dispatch.json` 还没写时，按 [t3-dispatch 初始化](../../t3-dispatch/references/setup.md) 配置可派活仓库、模板与档位，`mode` 先用 `dry-run`；用户不要巡检派活就写 `mode: "off"`。
+- **派活**：巡检第 5 步按 t3-dispatch 从题库出队派新任务。`t3-dispatch.json` 还没写时，按 [t3-dispatch 初始化](../../t3-dispatch/references/setup.md) 配置可派活仓库、模板与档位，`mode` 先用 `dry-run`；用户不要巡检派活就写 `mode: "off"`。
 
 ## 4. 写配置并试跑
 
 1. 按 bstack-setup「写配置」规则写 `t3-patrol.json`，然后跑 `node <t3-patrol 技能目录>/scripts/patrol-config.mjs`：退出码 0，`warnings` 与 `environments.warnings` 为空。
-2. 试跑：按 SKILL.md 第 1–3 步走一轮（首轮没有状态记录，是全量），只列每个候选拟采取的动作，不发送消息、不改线程；再按第 5 步出一份派活计划（不论 `mode`，只到 t3-dispatch 第 2 步），一并交给用户过目。用户对某类判定有异议时，回到第 3 步调整对应阈值。
+2. 试跑：按 SKILL.md 第 1–3 步走一轮（首轮没有状态记录，是全量），只列 review 的审批表，不跑 run；再跑一次 `dispatch-queue.mjs --dry-run` 出派活计划，一并交给用户过目。用户对某类判定有异议时，回到第 3 步调整对应阈值。
 
 ## 5. 定时任务
 

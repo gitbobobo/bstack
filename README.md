@@ -34,11 +34,11 @@ T3 Code 多 harness 编排：按固定规则选 harness 与模型，派活验收
 
 ### t3-patrol
 
-定时巡检各 T3 环境中巡检体系自行派出及交接创建的未结线程，用户手动线程保持只读，衔接派活结果回读、故障恢复与 PR 归属核验，容量按当前线程、run 与子代理状态计数，停止后释放名额并保留工作树与交接责任（巡检、探测及 Fast Ship 只读审查不占位）。[SKILL.md](skills/bstack/t3-patrol/SKILL.md)
+定时巡检各 T3 环境中巡检体系自行派出及交接创建的未结线程：一条脚本出决策包，研判子代理并行逐线程定案，主代理审批后由脚本执行、回读并记下线程状态表，用户手动线程保持只读。[SKILL.md](skills/bstack/t3-patrol/SKILL.md)
 
 ### t3-dispatch
 
-挑题前按项目分工并核最新基线，缺当前执行证据时可派验证先行任务，查重回读线程状态与执行范围，派出前核目标仓库身份，再按设备共享池建工作树线程。[SKILL.md](skills/bstack/t3-dispatch/SKILL.md)
+补货子代理把候选研判进跨轮题库（按池名额的倍数备货），有空位时按题库顺序出队，复核来源、查重、核仓库身份后建工作树线程。[SKILL.md](skills/bstack/t3-dispatch/SKILL.md)
 
 ## 通用技能
 

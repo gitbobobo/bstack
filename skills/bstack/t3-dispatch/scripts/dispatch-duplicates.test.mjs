@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { findOpenThread } from "./dispatch-duplicates.mjs";
-import { searchDupes, selectionOf } from "./dispatch-plan.mjs";
+import { searchDupes } from "./dispatch-plan.mjs";
 
 const scope = { environmentId: "pc", projectId: "mus" };
 const hit = (threadId, extra = {}) => ({ threadId, title: "INT-1827 桌面设置共识", source: "title", link: `<${threadId}>`, ...extra });
@@ -29,15 +29,12 @@ test("INT-1827 回放：历史搜索命中已 settle 的共识线程，候选保
   assert.equal(calls.filter((c) => c.name === "t3_thread_read").length, 1);
 });
 
-test("仅有未结命中也必须进入挑题分工复核范围", async () => {
+test("未结命中移出待研判表，列入 excluded 待复核", async () => {
   const { call } = fixture([hit("discussion")], { discussion: { settled: false, archived: false } });
-  const plan = { slots: 1, repos: [{ repo: "host/mus", slots: 1, shortlist: [{ id: "issue", ref: "INT-1827" }], reviewed: [], excluded: [] }] };
+  const plan = { repos: [{ repo: "host/mus", shortlist: [{ id: "issue", ref: "INT-1827" }], excluded: [] }] };
   await searchDupes(plan, { environments: [{ environmentId: "pc", projects: [{ id: "mus", canonicalKey: "host/mus" }] }] }, call);
   assert.equal(plan.repos[0].excluded[0].duplicateReview, true);
   assert.equal(plan.repos[0].shortlist.length, 0);
-  const assignment = selectionOf(plan).assignments[0];
-  assert.equal(assignment.pendingCount, 1);
-  assert.equal(assignment.mode, "lead", "不能把待复核项当成无候选跳过");
 });
 
 test("跳过终结命中后继续查，保留真正未结线程及环境身份", async () => {

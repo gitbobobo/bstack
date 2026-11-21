@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// 巡检跨轮状态：上一轮的快照时间、模型档位、额度失败、各环境占用数与待交接队列。
+// 巡检跨轮状态：上一轮的快照时间、模型档位、额度失败、各环境占用数、待交接队列与线程状态表。
 // 存进文件而不是靠巡检线程的对话记忆：分诊要知道「上一轮以来有没有变化」「设备是否空出了名额」，
 // 档位判定要知道「上一轮有没有额度失败」，这些事实留在上下文里会随线程变长而越来越贵，换新线程就全丢。
 //
@@ -9,6 +9,7 @@
 //   node patrol-state.mjs commit --snapshot <快照> --tier <档位 name> [--quota-failure]   一轮结束时记账
 //   node patrol-state.mjs handoff-put --file <JSON>                                     交接入账/更新
 //   node patrol-state.mjs handoff-resolve --file <JSON>                                 有接手/撤销证据后销账
+// 线程状态表 threads 由 patrol-round finish 按本轮研判写入：上次动作、在等什么、下次复查时间、同一动作连发次数。
 // 交接文件可以是单项或数组；数组先全部校验，任一项不合格就整批不写。
 
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
@@ -21,11 +22,40 @@ export const statePath = (env = process.env) => join(configDir(env), "state", "t
 export function loadState(env = process.env) {
   try {
     const saved = JSON.parse(readFileSync(statePath(env), "utf8"));
-    return { lastRound: saved.lastRound ?? null, pendingHandoffs: saved.pendingHandoffs ?? [], managedThreads: saved.managedThreads ?? [] };
+    return { lastRound: saved.lastRound ?? null, pendingHandoffs: saved.pendingHandoffs ?? [], managedThreads: saved.managedThreads ?? [], threads: saved.threads ?? {} };
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
-    return { lastRound: null, pendingHandoffs: [], managedThreads: [] };
+    return { lastRound: null, pendingHandoffs: [], managedThreads: [], threads: {} };
   }
+}
+
+export const threadKey = (environmentId, threadId) => `${environmentId ?? ""}/${threadId}`;
+
+// 同一 kind 的写动作连发计数：重复推进无效时升级为阻塞，而不是每轮重判再发一遍。
+// alive 是本轮快照里仍存在的线程键，其余条目丢弃，状态表不随历史线程膨胀。
+export function recordDecisions(state, decisions, { now = Date.now(), alive = null } = {}) {
+  const threads = state.threads ??= {};
+  for (const d of decisions) {
+    const key = threadKey(d.environmentId, d.threadId);
+    const prev = threads[key];
+    const acted = d.action !== "none";
+    const count = acted ? (prev?.kind === d.kind && prev.count ? prev.count + 1 : 1) : 0;
+    threads[key] = {
+      kind: d.kind, action: d.action, at: new Date(now).toISOString(), count,
+      ...(d.waitFor ? { waitFor: d.waitFor } : {}),
+      ...(d.recheckMinutes > 0 ? { recheckAt: new Date(now + d.recheckMinutes * 60000).toISOString() } : {}),
+    };
+  }
+  if (alive) for (const key of Object.keys(threads)) if (!alive.has(key)) delete threads[key];
+  return threads;
+}
+
+export function commitRound(state, snap, { tier, quotaFailure = false, now = Date.now() }) {
+  const lastFullAt = snap.triage?.full ? snap.generatedAt : (state.lastRound?.lastFullAt ?? null);
+  // 各环境占用数：下一轮据此判断设备是否空出了名额，叫醒在等资源的线程。
+  const occupancy = Object.fromEntries((snap.environments ?? []).filter((e) => e.capacity).map((e) => [e.environmentId, e.capacity.used]));
+  state.lastRound = { at: new Date(now).toISOString(), snapshotAt: snap.generatedAt, lastFullAt, tier, quotaFailure, occupancy, handoffQueueVersion: 1 };
+  return state.lastRound;
 }
 
 // 持久归属：派活台账全部 launched 记录 + 巡检交接目标；不按标题、创建者或近期时间推断。
@@ -58,6 +88,11 @@ export function putHandoff(state, entry) {
     if (typeof entry[key] !== "string" || !entry[key].trim()) throw new Error(`交接缺少 ${key}`);
   }
   if (!Number.isFinite(Date.parse(entry.waitingSince))) throw new Error("waitingSince 必须是日期");
+  if (entry.launch != null) {
+    for (const key of ["projectId", "title", "message"]) {
+      if (typeof entry.launch[key] !== "string" || !entry.launch[key].trim()) throw new Error(`launch 缺少 ${key}`);
+    }
+  }
   if (entry.sourceRelease != null) {
     for (const key of ["runId", "worktreePath", "verifiedAt", "deliveryRef", "idleRef"]) {
       if (typeof entry.sourceRelease[key] !== "string" || !entry.sourceRelease[key].trim()) throw new Error(`sourceRelease 缺少 ${key}`);
@@ -93,7 +128,7 @@ export function resolveHandoff(state, entry) {
   state.pendingHandoffs = (state.pendingHandoffs ?? []).filter((x) => x.sourceEnvironmentId !== entry.sourceEnvironmentId || x.sourceThreadId !== entry.sourceThreadId);
 }
 
-function saveState(state, env = process.env) {
+export function saveState(state, env = process.env) {
   const file = statePath(env);
   mkdirSync(dirname(file), { recursive: true });
   writeFileSync(file, `${JSON.stringify({ version: 1, ...state }, null, 2)}\n`);
@@ -128,11 +163,7 @@ if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToP
       console.error("用法：node patrol-state.mjs commit --snapshot <快照> --tier <档位 name> [--quota-failure]");
       process.exit(2);
     }
-    const snap = JSON.parse(readFileSync(file, "utf8"));
-    const lastFullAt = snap.triage?.full ? snap.generatedAt : (state.lastRound?.lastFullAt ?? null);
-    // 各环境占用数：下一轮据此判断设备是否空出了名额，叫醒在等资源的线程。
-    const occupancy = Object.fromEntries((snap.environments ?? []).filter((e) => e.capacity).map((e) => [e.environmentId, e.capacity.used]));
-    state.lastRound = { at: new Date().toISOString(), snapshotAt: snap.generatedAt, lastFullAt, tier, quotaFailure: args.includes("--quota-failure"), occupancy, handoffQueueVersion: 1 };
+    commitRound(state, JSON.parse(readFileSync(file, "utf8")), { tier, quotaFailure: args.includes("--quota-failure") });
     saveState(state);
     console.log(JSON.stringify(state.lastRound));
   } else {

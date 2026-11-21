@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// 派出：按计划文件逐条认领、渲染提示词、建工作树线程、记账、回读，失败归还。取代每轮现写的派活脚本。
+// 派出：按计划文件逐条认领、渲染提示词、建工作树线程、记账、回读，失败归还。dispatch-queue 出队后复用 launchOne；
+// 用户当面点名问题时直接写计划文件调用。
 //
 // 用法：node dispatch-launch.mjs --plan <计划 JSON> [--capacity <建线前复核的 capacity-only 快照>] [--dry-run]
 // 计划 JSON（UTF-8 文件，推荐理由写在里面，不进命令行）：
@@ -9,7 +10,7 @@
 //   ids 第一个是主问题（提示词按它渲染），其余是合并进同一线程的重复问题，一并认领、记账。
 // 逐条执行，一条做完再做下一条：
 //   0. 按实时项目清单校验目标环境/projectId 的 canonicalKey，再查重：按主问题编号在各可达环境该仓库的项目里 t3_thread_search，标题或任务书命中未结线程就跳过整条
-//      （挑选可能越出 dispatch-plan 的备选表，表外问题没查过重）；
+//      （题库研判到派出之间可能已有人接手）；
 //   1. 认领 ids（主问题认领失败就跳过整条；附带问题失败只记下）；
 //   2. 推荐理由写临时文件，按主问题渲染提示词；
 //   3. t3_thread_launch：模型取计划 modelSelection（缺省取配置），runtimeMode 取配置，workspaceStrategy 为 worktree（repos[].baseRef，startFromOrigin），
@@ -18,7 +19,7 @@
 //   5. 回读：每 10 秒读一次，最多 90 秒，直到 run 进入 starting/running 且有 worktreePath。
 // 建线程报错、或线程/run 已失败时归还本条认领的全部问题。90 秒后仍在 preparing/queued 不算失败（大仓库建工作树就要这么久）：
 // 认领与台账保留，输出 pending，下一轮巡检按候选核对；归还会把已经开工的问题状态改回去。
-// --capacity 先按复核快照的实际空位（同设备同池合计，不看 projected）校验整份计划，超额就整份不执行。
+// --capacity 先按快照的实际空位（同设备同池合计）校验整份计划，超额就整份不执行。
 // --dry-run 只校验计划格式（仓库在配置里、字段齐全）与 --capacity 名额，不认领不建线程。
 // 输出 [{ title, ids, claimed, link, threadId, status, worktreePath, pending, duplicate, error, released }]；有失败时退出码 1。
 
@@ -52,7 +53,7 @@ export function validatePlan(plan, config) {
   return errors;
 }
 
-// 挑题可按预计名额覆盖，建线只认实际空位：同设备同池的仓库共享 freeByRepo 给出的池余位。
+// 同设备同池的仓库共享 freeByRepo 给出的池余位。
 export function capacityErrors(plan, capacity) {
   const errors = [];
   const used = new Map();
@@ -67,7 +68,7 @@ export function capacityErrors(plan, capacity) {
     const free = e.capacity?.freeByRepo?.[key] ?? 0;
     const n = (used.get(pool) ?? 0) + 1;
     used.set(pool, n);
-    if (n > free) errors.push(`launches[${i}]（${l.title}）：${pool} 实际空位 ${free}，计划占到第 ${n} 个；未释放的预计名额不能建线，该项转入候选池`);
+    if (n > free) errors.push(`launches[${i}]（${l.title}）：${pool} 实际空位 ${free}，计划占到第 ${n} 个`);
   }
   return errors;
 }
@@ -111,7 +112,7 @@ export async function openThreadFor(ref, repo) {
 const READBACK_STEP_MS = Number(process.env.T3_DISPATCH_READBACK_STEP_MS ?? 10000);
 const READBACK_MAX_MS = Number(process.env.T3_DISPATCH_READBACK_MAX_MS ?? 90000);
 
-async function launchOne(l, config, dir) {
+export async function launchOne(l, config, dir) {
   const repoCfg = config.repos.find((r) => r.repo === l.repo.toLowerCase());
   const out = { title: l.title, ids: l.ids, claimed: [], environmentId: l.environmentId };
   const releaseAll = () => {

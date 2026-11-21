@@ -5,95 +5,57 @@ description: 从问题来源挑问题，在各 T3 环境建工作树线程派活
 
 # T3 派活
 
-把问题来源里待做的问题挑出来，按各设备的空位建工作树线程。下文 `<技能目录>` 指本技能目录；t3-patrol 与 fast-ship 技能须同级安装，容量沿用 t3-patrol 的规则。派活只看名额：磁盘与内存由新线程在重验证前自己查（t3-orchestrator「资源不足时」）。
+派活分两段，中间隔着一个**题库**（`~/.config/bstack/state/t3-dispatch-candidates.json`，每仓库按顺序排好的已研判题目）：
 
-## 0. 前提
+- **补货**：题库低于目标库存（可派设备所属池名额之和 × `stock.multiplier`）时，每个缺货仓库派一个补货子代理挑题入库。
+- **出队**：有空位时按题库顺序弹出题目、复核来源后建线，不再现场挑题。
 
-1. 读配置：`node <技能目录>/scripts/dispatch-config.mjs`。`errors` 非空就停下，把文件路径与报错交给用户；`warnings` 写进报告。`repos` 为空时请用户先经 bstack-setup 配置派活（[setup.md](references/setup.md)）。
-2. 定档位：
-   - 用户当面要求派活（如「给 pc 再分两个任务」）就是授权，按用户给的设备与数量执行，档位不看 `mode`。
-   - 巡检调用时按 `mode`：`off` 不派；`dry-run` 走到第 2 步写出计划为止，全程只读（第 0 步该 `record`、`release` 的只列出来）；`auto` 全程执行。`~/.config/bstack/PAUSE` 存在时同样不派。
-3. 按[派活标签](references/labels.md)检查各仓库标签目录，补齐缺失标签；`dry-run` 只检查。完成标准：每个仓库已检查，缺口与失败原因已记录；Forgejo 标签读取缺口按该文停派对应仓库。
-4. 对账台账：`node <技能目录>/scripts/issue-source.mjs ledger`。
-   - `pending` 是认领后没记下线程的问题：按问题编号在各环境 `t3_thread_search`，按[查重](references/duplicates.md)核当前状态与执行范围，找到承担该切片的执行线程才补 `record`；确认没有则 `release` 归还，证据不足保留待核。
-   - `active` 是已派出、还没了结的问题：对每条在其 `environmentId` 上 `t3_thread_read`（`limit` 1）。线程不存在、已 settle 或已归档时 `release`：问题还在进行中且没有 PR 就归还，已推进或有 PR 的只了结台账。线程还开着就不动，它归巡检管。
-   - 归还的问题会重新进候选；派过 `limits.maxAttempts` 次的，`list` 会把它放进 `skipped`，报告里列出来交给用户看。
+下文 `<技能目录>` 指本技能目录，`<t3-patrol>` 指同级的 t3-patrol 技能目录；容量计数沿用 t3-patrol。派活只看名额，磁盘与内存由新线程在重验证前自己查（t3-orchestrator「资源不足时」）。
+
+## 1. 前提
+
+1. `node <技能目录>/scripts/dispatch-config.mjs`：`errors` 非空就停下，把路径与报错交给用户；`warnings` 写进报告；`repos` 为空时请用户先经 bstack-setup 配置（[setup.md](references/setup.md)）。
+2. **档位**：巡检调用按 `mode`（`off` 不派、`dry-run` 只出计划、`auto` 执行），`~/.config/bstack/PAUSE` 存在时不派，脚本自动判。用户当面要求派活（如「给 pc 再分两个任务」）就是授权，出队加 `--user`，按用户给的设备与数量执行。
 
 ### 派活模型
 
-默认用配置的 `model`。额度失败时复用 [t3-patrol 故障恢复「模型优先级」](../t3-patrol/references/recovery.md#模型优先级) 的归因、当轮证据、阶梯与回升规则；巡检调用直接沿用本轮证据与已恢复运行的档位，独立调用则读取生效的 `modelLadder` 并按该规则判定。配置的默认模型不是任务书点名；用户或项目明确指定模型时仍以其约束为准。
+默认用配置的 `model`。巡检调用沿用本轮档位（`--model-tier`）；独立调用时额度失败按 [t3-patrol 故障恢复「模型优先级」](../t3-patrol/references/recovery.md#模型优先级) 判档。仅剩 `fallback` 档或普通档均已证实不可用时暂停新问题，只做恢复；单个默认模型额度不足本身不足以停派。用户或项目明确指定模型时以其为准。
 
-- 配置模型未证实额度耗尽时照常使用；已证实耗尽时，从阶梯取本轮可用的非 `fallback` 档，完整保留 `instanceId`、`model`、`options`。还有普通档可用就继续新问题派活；仅剩 `fallback` 或普通档均已证实不可用时暂停新问题，只做恢复。选项被拒先走 [参数兼容](../t3-patrol/references/recovery.md#参数兼容)，只调整本轮请求，不将拒参当成额度失败。
-- 在第 2 步计划顶层写 `modelSelection` 传递本轮所选模型；省略时脚本使用配置模型。持久配置保持原样。`dry-run` 只列选择与证据，不建探测线程。
-- 派出后才发现额度失败：按第 3 步处理已建线程与认领，不重建同一问题；恢复后的普通档用于本轮剩余计划。
+## 2. 补货
 
-完成标准：所用模型及证据已记录；暂停时列明普通档不可用或已到兜底档的依据，单个默认模型额度不足本身不足以停派。
-
-## 1. 空位与备选
-
-1. `node <t3-patrol 技能目录>/scripts/patrol-snapshot.mjs --capacity-only > /tmp/t3-dispatch-capacity.json`；巡检调用时改用 t3-patrol 第 5 步含预计释放的容量切点快照，不另取。每个环境带 `capacity`、`projects`（项目 id 与 `canonicalKey`）和 `openThreads`（未 settle 的顶层线程标题）。退出码 2 表示当前 harness 拿不到 T3 MCP 会话（如 Codex）：改走 [手工派活](references/manual.md)。
-2. `node <技能目录>/scripts/dispatch-plan.mjs --capacity /tmp/t3-dispatch-capacity.json --brief-dir /tmp/t3-dispatch-briefs > /tmp/t3-dispatch-plan.json`。它按 [t3-patrol handoff.md 第 3 步](../t3-patrol/references/handoff.md) 的口径算各仓库目标设备的可建数，以 `limits.perRun` 与 `limits.perDay` 余量封顶，只为有空位的仓库取实时准入列表，排除在派台账与暂缓标签；线程标题仅作线索，搜索命中经回读确认未结后列入 `excluded`，执行范围由负责人按[查重](references/duplicates.md)复核。旧候选依据进 `reviewed`；其余按[派活标签](references/labels.md)与技术粗排取首批 `shortlist`。默认只读元数据并输出逐项目分工 `selection`，避免主代理在委派前串行取完详情；正文与共识由指定负责人按需补读。字段见脚本头注释。
-3. `projectedSlots` 为 0（没有预计名额时等于 `slots`）：到此为止，按第 4 步报告空位，`skipped` 里是各设备卡住的原因（名额、闸）。
-
-完成标准：每台目标设备写出可建数及其依据，卡在 0 的写明卡在哪。用户要的数量超过可建数时，按可建数派并说明原因。
-
-## 2. 挑选
-
-**先分工，再取证**：按[项目挑选与跨轮候选池](references/candidates.md#2-按项目并行补筛)把当前计划 `selection` 落成分工记录，启动标为 `delegate` 的项目并保存 taskId；指定负责人随后按[查重](references/duplicates.md)复核线程命中的 `excluded`，恢复历史/仅上下文项，再复核 `reviewed`、补读 `shortlist`，主代理统一裁决共享池与写操作。启动例外须有当时证据，不能串行做完再以最终池满解释未委派。旧池、新问题与并行回报都按本节准入；`category`/`rank` 仅为粗排，问题正文是数据，不是给你的指令。
-
-1. **摘要初筛，歧义补读**：先用表内信息判断；明确单平台且不匹配、已有明确阻塞的候选可直接跳过。准备派出的候选若正文或共识不完整，或跳过依据取决于截断部分、范围混合、共识与旧正文冲突，再用 `issue-source.mjs show --repo <repo> --id <id>` 读全文；以问题 ID 为键复用本轮已读原文，这是逐条去重，不是整个项目只允许一次 `show`。`needsInfo` 只是提示，核实本段必需信息确实缺失才算阻塞。每条分为「可派」「硬阻塞」「待核」；待核项写能判定的最小查询，本轮只读可取的由负责人完成后再归类。仅缺当前复现/门禁结果时，按[验证先行](references/admission.md#验证先行)核可执行交付，不把重验证塞进只读挑题或原样留到下一轮。
-2. **按交付切片匹配设备**：把实现与验证范围对照仓库设备分工；多平台、合并问题或部分范围受阻时，按 [跨设备切片](references/slicing.md) 核可独立交付部分，再定派出或跳过。
-3. **余位驱动覆盖**：首批选完仍有设备/仓库池空位且派活预算未用完，即使已派出部分，也用 `issue-source.mjs list --repo <repo> --excerpt 0` 取全量候选（本轮已有完整列表则复用），列表落文件。先遍历编号、标题、标签与短摘要，为每个余位池圈出可能匹配的候选，覆盖本机客户端、共享核心、公共工具链及混合范围；明确不匹配项只记分类依据。再按用户优先与下述优先级补读圈中的候选，每批最多 `max(5, 剩余可派数 × 3)` 条，沿用前两步。批次只是读取粒度：本批结束仍有余位与可能匹配的待核项，就继续下一批，不重复读取已核项。
-
-标签的优先、暂缓、冲突及报告口径统一见[派活标签](references/labels.md)；无标签问题沿用下列规则。
-
-**独立任务准入**：按[任务准入](references/admission.md)核目标与价值、交付验收及执行条件，适用于缺陷、功能、架构与维护改进。审查循环的分级与停止条件只管原 PR；派活按候选自己的目标判断，通过后进入下列排序。空位不要求填满。
-
-- **硬阻塞**：本段缺必需信息、需要用户做产品或人工决策、依赖的前置问题还没完成，或按[查重](references/duplicates.md)证实有线程承担同一实现切片。写具体缺失信息、未完成前置或冲突线程；技术方案尚未设计、旧正文没写切片，不是这类证据，按切片规则补核。
-- **优先级**从高到低：用户无法使用或丢数据（崩溃、无法启动、数据误删）→ 阻塞开发验证或发版（门禁、构建、供应链、发版前置）→ 安全 → 功能错误 → 性能 → 体验与文案 → 架构重构。同级先挑范围明确、能独立验证的；粗排分错类时以你的判断为准。
-- **重复**：几条问题描述同一故障时合进一个线程，推荐理由里写明一并核对的编号。
-- **设备**：读取仓库 `AGENTS.md` 及其指向的设备分工文档，按本次交付切片所需能力，在该仓库 `devices` 里有空位的设备中选；通用核心与跨端部分也按文档核对，不能从设备的主要客户端分工推断它只做该客户端。分工未覆盖的范围记证据缺口。
-- **同机并行**：同一设备上两个线程可能改同一处（如同一依赖 pin）时，在各自推荐理由里写清分工与集成顺序，或只派一个。
-
-写计划文件（UTF-8）：
-
-```json
-{ "launches": [ { "repo": "<repo>", "ids": ["<主问题 ID>", "<合并的重复问题 ID>"], "environmentId": "<devices[].environmentId>",
-                  "projectId": "<devices[].projectId>", "title": "INT-1234 主题", "reason": "为什么优先、范围边界、并行分工" } ],
-  "modelSelection": { "instanceId": "<本轮实例>", "model": "<本轮模型>", "options": {} } }
-```
-
-`title` 按 [t3-patrol naming.md](../t3-patrol/references/naming.md)。`dry-run` 到此为止：列出计划，报告标明「未执行」。
-
-**停止条件**：派活预算用完、可派池已满，或全量列表里对该余位池可能匹配的候选均已复核处置。只有最后一种才能写「没有合适任务」，并给候选覆盖范围与阻塞分类；空位不降低准入标准。工具失败或本轮执行预算耗尽导致提前结束时，标「筛选未完成」，列剩余可能匹配项的编号、最小待查动作与断点；未核项不能计入硬阻塞或无合适任务。候选有限且每条只核一次，不对同一缺口反复查询。主代理否决推荐后，对仍有预算与空位的池继续处理备选；仅缺执行证据的先核「验证先行」。把缺口写入候选池只是保存断点，不满足停止条件。
-
-完成标准：每份计划的项目分工已对账（taskId/结果、主代理处理原因或失败/接管证据）；每台设备选中的数不超过它的 `projected` 与 `projectedSlots`，建线按第 3 步复核的实际空位裁剪；同设备同池的所有仓库合计占用不超过该池余位（以 `poolByRepo` 分组）；每条选中项有目标、价值与执行条件的依据，切片项附交接边界；被跳过的高优先级与歧义项留编号及关键依据，其余按原因合并计数；每个余位池有停止依据、已核/待核数；仍有派活预算与空位的池，可能匹配的待核项为零才算筛选完成。仍有预算与空位时，每个可能匹配但缺技术证据的未派项都有本轮查询结果、已安排验证的线程 link，或确实无法推进的工具/资源依据与恢复条件；“下轮再核”不算处置。
-
-## 3. 派出
-
-**绑定身份**：认领前用目标环境的 `t3_project_list`（翻完分页）核 `projectId` 的 `repositoryIdentity.canonicalKey` 与计划 `repo` 完全一致；环境、项目、仓库是一组身份，从同一条记录取。清单不可读或身份不符就停该项，保留未认领状态。`dispatch-launch` 执行时自动核；手工派活与跨设备交接按同一规则核实，问题来源的项目 ID 不能替代 T3 项目身份。
+巡检的 `patrol-round start` 已代跑这一步并给出切片路径。独立调用时：
 
 ```bash
-node <t3-patrol 技能目录>/scripts/patrol-snapshot.mjs --capacity-only > /tmp/t3-dispatch-capacity-final.json   # 巡检调用时用 t3-patrol 第 5 步的复核快照
-node <技能目录>/scripts/dispatch-launch.mjs --plan <计划文件> --capacity /tmp/t3-dispatch-capacity-final.json > /tmp/t3-dispatch-launched.json
+node <t3-patrol>/scripts/patrol-snapshot.mjs --capacity-only > /tmp/t3-dispatch-capacity.json
+node <技能目录>/scripts/dispatch-plan.mjs --capacity /tmp/t3-dispatch-capacity.json --brief-dir /tmp/t3-dispatch-briefs > /tmp/t3-dispatch-plan.json
 ```
 
-`--capacity` 按复核快照的实际空位校验整份计划，同设备同池合计超额就整份不执行；把超出的项（通常是预计名额未释放）移出计划、按[候选池](references/candidates.md#3-持久化未派项)存为 `ready` 后重跑。
+`refill` 是各仓库的目标、库存与缺口；`briefs` 给每个缺货仓库一份切片。每份切片并行派一个补货子代理（`delegate_task`，`role:"research"`，`mode:"async"`），任务书：`派活补货：按 <技能目录>/references/refill.md 处理 <brief>。不再派子代理。` 子代理自己写题库，不需要你合并。
 
-逐条核绑定身份、按主问题编号跨环境查重并回读当前状态（表外挑的问题也覆盖；范围判定按[查重](references/duplicates.md)）、认领、按 `repos[].template` 渲染提示词、`t3_thread_launch` 建工作树线程（模型取计划的 `modelSelection`，省略则取配置；`runtimeMode` 取配置，`clientRequestId` 防重建）、记账、回读 run 与 `worktreePath`（最多等 90 秒）。结果按字段读：
+**完成标准**：每个缺货仓库都有 taskId，或写明启动失败的原因。
 
-- `pending`：工作树还在准备，认领与台账已保留，这算派出成功，下一轮巡检按候选核对；不要手工归还或重新认领。
-- `duplicate`：回读确认有未结命中，尚未认领；按[查重](references/duplicates.md)核执行范围后决定沿用原线程或手工继续派出，报告附状态与范围证据。
-- `error`：身份核验或查重失败时尚未认领；主问题认领失败通常是已被认领或状态改变。建线程失败或 run 已失败时，脚本归还已认领项，结果见 `released`。线程已建但失败时补读对应 run 报错：代理额度失败按「派活模型」换档，复用已建线程按 t3-patrol 故障恢复续跑并验证；工作区准备失败走其专门分支。额度恢复成功后，对已归还的问题重新认领并 `record` 到原线程，恢复失败则保留 link 与归还结果。建线程请求报错且无法确认是否已创建时，先按编号查重。已确认重复执行的问题从重试计划中移除，剩余计划才可换档再派。
+## 3. 出队
 
-结果可直接用 `patrol-evidence.mjs --from /tmp/t3-dispatch-launched.json` 回读已建线项；无线程的 error/duplicate 留在原派出结果对账。退出码 1 表示有 `error`。`--dry-run` 仅校验计划格式，输出 `projectBinding: "not-checked"`，不能当作已核仓库身份或已派出。
+```bash
+node <t3-patrol>/scripts/patrol-snapshot.mjs --capacity-only > /tmp/t3-dispatch-capacity.json
+node <技能目录>/scripts/dispatch-queue.mjs --capacity /tmp/t3-dispatch-capacity.json [--model-tier <name>] [--user] > /tmp/t3-dispatch-queue.json
+```
 
-完成标准：每条计划都有结果（`link` 与回读状态，或 `error` 与归还情况）；额度失败项已完成一次原线程补救与回读，或记录无法补救的证据；恢复成功项的认领与台账已对回原线程，剩余计划已用普通可用档派出或有明确暂停依据。按[候选池持久化](references/candidates.md#3-持久化未派项)保存本轮已筛未派项、移除已派/已解决项并回读；`dry-run` 只列拟更新。
+脚本先给待交接建线，再各仓库轮流弹出题目，按快照实际空位与 `limits.perRun`、`limits.perDay` 余量封顶；每条派出都经绑定身份核验、跨环境查重、认领、渲染模板、建工作树线程、记账与回读。用户点名具体问题时，改写计划文件直接跑 `dispatch-launch.mjs --plan <文件>`（格式见脚本头注释）。
+
+### 出队结果
+
+- `launched[].pending`：工作树还在准备，认领与台账已保留，算派出成功，下一轮巡检核对。
+- `launched[].duplicate`：已有未结线程，题目已移出题库，报告附该线程 link。
+- `launched[].error`：身份核验或查重失败时未认领；主问题认领失败说明已被认领。建线失败或 run 已失败时脚本已归还认领（见 `released`），题目留在题库；代理额度失败按「派活模型」换档，已建线程按 t3-patrol 故障恢复续跑，恢复后对归还的问题重新认领并 `record` 到原线程。建线请求报错且无法确认是否已创建时，先按编号查重。
+- `dropped`：来源已关闭、出了 PR、离开准入或加了暂缓，已移出题库；`recheck`：来源有更新，已改回待核等下次补货。
+- `idle`：还有空位但题库没有适配题目，按第 2 步补货。
+
+**完成标准**：每条交接与派出都有 link 与回读状态，或 error 与归还情况；额度失败项已补救一次或记了无法补救的证据。
 
 ## 4. 报告
 
-- **本轮派活**：写所用模型与选择依据；每条写问题编号、标题、设备、线程 link 和一句推荐理由。
-- **跳过**：因线程命中未派的逐条附[查重证据](references/duplicates.md)，高优先级问题逐条写原因；其余只给计数：`skipped` 多少，挑选阶段硬性跳过（缺信息、要决策、重叠等）多少、因优先级或空位暂缓多少。
-- **空位**：按设备的重型/通用任务池写可建数、本轮用掉的数及余位（`dry-run` 写计划占用）；余位按第 2 步给停止依据与已核/未核数。其他设备无空位或另一个仓库已派出任务，都不能代替本池的停止依据。
-- **候选池与并行**：复用、失效补核、新增、移除与待核数；按挑题时点逐项目列分工模式/原因、taskId/子线程 link、实际结果或接管证据、所用模型与换路。没有委派时明确当时为何全部 `lead`/`skip`，或列“委派未执行”与卡点；未完成筛选不得写成无合适任务。
-- **待办**：归还失败、准备失败的线程、配置警告及候选池读写失败。
+- **本轮派活**：所用模型与依据；每条写问题编号、标题、设备、线程 link 与推荐理由。`dry-run` 标明「未执行」。
+- **题库**：各仓库库存/目标、本轮移出与转重核数，补货任务的 taskId。
+- **空位**：按设备的重型/通用池写余位与去向（派出、交接占用、题库无适配题目）。
+- **待办**：归还失败、准备失败的线程、配置警告、题库读写失败。

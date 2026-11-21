@@ -4,6 +4,7 @@
 // 却不改变动作。分诊按「上一轮以来的变化」与「跨过阈值」判定：线程有新活动、PR 有新事件、某个等待在两轮之间超时，
 // 都会让它变成有事；巡检发出的消息会触发目标线程的新 run，下一轮自然回到有事，动作验证不会漏。
 // 未结 PR 的停驻与 pending 超时是持续条件，每轮复核；fullEveryHours 全量只兜住其余漏项。
+// 上一轮研判写下 recheckAt（线程状态表 hold）且未到期时，只压住这些持续条件；新变化照常叫醒。
 
 const FAILED = new Set(["failed", "interrupted", "cancelled"]);
 const QUEUED = new Set(["preparing", "queued", "starting"]);
@@ -43,7 +44,9 @@ export const WAIT_MARK = "【等待资源】";
 
 // c 是快照候选（含 prHealth 判定字段、waitingResources）；since 是上一轮快照时间（全量时为 null）；
 // deviceFreed 表示这台设备的占用比上一轮少了（有线程结束，资源可能已释放）。
-export function triageOf(c, { since, thresholds, now = Date.now(), deviceFreed = false, resourceWakeHours = 3 }) {
+const PERSISTENT = /^(?:未结 PR 停驻超时|消息沉默|久审)$|久未出结论$|HEAD 无审查与检查$/;
+
+export function triageOf(c, { since, thresholds, now = Date.now(), deviceFreed = false, resourceWakeHours = 3, hold = null }) {
   const reasons = [];
   const s = since ? ms(since) : null;
   const after = (iso) => s !== null && ms(iso) > s;
@@ -92,7 +95,10 @@ export function triageOf(c, { since, thresholds, now = Date.now(), deviceFreed =
 
   // 久审本身不叫醒线程：M2 有重发窗口，上一轮已审计且没有新变化时再看一遍只是重复。有别的变化或全量时才一并审。
   if (c.needsConvergenceAudit && reasons.length) reasons.push("久审");
-  const uniq = [...new Set(reasons)];
+  let uniq = [...new Set(reasons)];
+  const held = hold?.recheckAt && ms(hold.recheckAt) > now && uniq.some((r) => PERSISTENT.test(r));
+  if (held) uniq = uniq.filter((r) => !PERSISTENT.test(r));
   if (uniq.length) return { triage: "hot", triageReasons: uniq };
+  if (held) return { triage: "quiet", triageReasons: [`等待中：${hold.waitFor ?? hold.kind ?? "上轮已处置"}（${hold.recheckAt.slice(5, 16)} 复查）`] };
   return { triage: "quiet", triageReasons: [RUNNING.has(c.status) || QUEUED.has(c.status) ? "在跑，信号正常" : c.waitingResources ? "等待资源" : "上轮后无变化"] };
 }
