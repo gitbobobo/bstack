@@ -7,7 +7,7 @@
 // 顺序：
 //   1. 闸：config.mode 为 off、repos 为空或 ~/.config/bstack/PAUSE 存在时不出队；mode 为 dry-run 等同 --dry-run。
 //   2. 交接：pendingHandoffs 中带 launch 且未建线的，按 waitingSince 占目标设备同池空位建线，并回写 launchedThreadLink；
-//      没有 launch 或没空位的交接占住该池，同池不派新问题。
+//      没有 launch 或没空位的交接占住该池，同池不派新问题；带 needsUser（等用户授权）的不建线也不占池，即使写了 launch。
 //   3. 题库：各仓库轮流弹出未过期 ready 条目，设备取条目 devices 与配置 devices 的交集里第一个有空位的；
 //      弹出前复核来源：已关闭、出了 PR、离开准入状态或加了暂缓标签的移出题库，正文有更新的改回 pending 待重核，都不占空位。
 //   4. 派出复用 dispatch-launch（查重、认领、建线、记账、回读）；派出、已有线程或已被认领的从题库移除。
@@ -59,6 +59,10 @@ export function queuePlan({ capacity, config, environments, pool, ledger, handof
   const slots = slotsOf(capacity);
   const handoffPlan = [];
   for (const h of [...handoffs].filter((x) => !x.launchedThreadLink).sort((a, b) => Date.parse(a.waitingSince) - Date.parse(b.waitingSince))) {
+    if (h.needsUser) {
+      handoffPlan.push({ handoff: h, blocked: `等你授权：${h.needsUser}` });
+      continue;
+    }
     const hit = slotFor(capacity, slots, h.targetEnvironmentId, h.canonicalKey);
     if (!hit) {
       handoffPlan.push({ handoff: h, blocked: "目标环境不可达或没有该仓库项目" });
@@ -68,7 +72,7 @@ export function queuePlan({ capacity, config, environments, pool, ledger, handof
     if (h.launch && hit.slot.free - hit.slot.used > 0) {
       hit.slot.used++;
       handoffPlan.push({ handoff: h, slot: hit.slot });
-    } else handoffPlan.push({ handoff: h, blocked: h.launch ? `${hit.slot.alias}/${hit.slot.pool} 没有空位` : "缺 launch 提示词，等巡检补齐" });
+    } else handoffPlan.push({ handoff: h, blocked: h.launch ? `${hit.slot.alias}/${hit.slot.pool} 没有空位` : "未写 launch：研判确认可执行后补" });
   }
   const active = new Set(summary.active.map((e) => e.id));
   const queues = config.repos.map((r) => {

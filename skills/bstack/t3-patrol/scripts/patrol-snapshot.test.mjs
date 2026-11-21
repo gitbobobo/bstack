@@ -175,8 +175,9 @@ test("完整/容量快照一致排除 Fast Ship 审查，保留实现父线程�
     assert.deepEqual(e.projects, [{ id: "p", canonicalKey: REPO }], "完整快照带项目清单，供题库算各仓库可用池");
     assert.equal(e.candidates.find((x) => x.id === "background").hold.waitFor, "门禁结果");
   }
-  // 没有派出归属的线程保留实际容量，但失败兜底、全量与独立体检都不能将它们捞回。
-  const protectedIds = ["impl0", "impl3", "background", "discussion"];
+  // 没有派出归属、也没建过 PR 的线程保留实际容量，但失败兜底、全量与独立体检都不能将它们捞回。
+  // impl3 不在台账里，但挂着 PR，照样纳管。
+  const protectedIds = ["impl0", "background", "discussion"];
   writeFileSync(ledger, records.filter((r) => !protectedIds.includes(r.threadId)).concat([
     { event: "launched", environmentId: "other", threadId: "impl3" }, // 同名异环境不能冒认
     { event: "claimed", environmentId: "mini", threadId: "impl0" }, // 认领不等于派出
@@ -191,9 +192,10 @@ test("完整/容量快照一致排除 Fast Ship 审查，保留实现父线程�
       assert.ok(e.openThreads.some((x) => x.id === "impl0"), "派活查重仍保留非巡检线程");
       continue;
     }
-    assert.equal(e.checks.candidates, 5);
-    assert.equal(e.checks.patrolExcluded, 4);
-    assert.deepEqual(e.patrolExcluded.map((x) => [x.id, x.reason]), protectedIds.map((id) => [id, "非巡检派出"]));
+    assert.ok(e.candidates.some((x) => x.id === "impl3"), "建过 PR 的线程纳管");
+    assert.equal(e.checks.candidates, 6);
+    assert.equal(e.checks.patrolExcluded, 3);
+    assert.deepEqual(e.patrolExcluded.map((x) => [x.id, x.reason]), protectedIds.map((id) => [id, "非巡检派出且未建 PR"]));
     for (const key of ["candidates", "failedTopLevel", "failedThreads", "needsWatchThreads", "needsRenameThreads", "convergenceAuditThreads"]) {
       assert.ok(!e[key].some((x) => protectedIds.includes(x.id)), `${key} 不得包含排除项`);
     }

@@ -38,6 +38,14 @@ export function tierOf(snap) {
   return { suggest: first, reason: "上一轮与本轮均无额度失败" };
 }
 
+// 报告开头的档位依据：本轮出过额度失败时以它为准，否则沿用开局建议。
+export function tierReasonOf(snap, tier, quotaFailure) {
+  const first = snap.modelLadder?.[0]?.name ?? null;
+  if (quotaFailure) return tier === first ? "本轮出现额度失败，失败任务已按阶梯换档重派，首选档保持" : `本轮出现额度失败，按阶梯改用 ${tier}`;
+  const { suggest, reason } = tierOf(snap);
+  return suggest && suggest !== tier ? `${reason}；按 recovery.md 改用 ${tier}` : reason;
+}
+
 // 研判输入：每批同一环境，最多 size 条；有事候选、过滤外失败、静默线程的命名、来源不在候选里的待交接。
 export function judgeBatches(snap, { size = 4 } = {}) {
   const batches = [];
@@ -140,7 +148,7 @@ async function verify(c, result) {
   }
 }
 
-export function reportOf(snap, decisions, { tier, tierReason = "<依据>", dispatch = null }) {
+export function reportOf(snap, decisions, { tier, tierReason = tierReasonOf(snap, tier, false), dispatch = null }) {
   const lines = [`## 巡检 ${snap.generatedAt}`, "", `档位：${tier}（${tierReason}）｜分诊：${snap.triage?.full ? `全量（${snap.triage.reason}）` : "增量"}`];
   for (const e of snap.environments ?? []) {
     lines.push("", `### ${e.alias ?? e.label}`);
@@ -264,10 +272,11 @@ if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToP
       const state = loadState();
       const alive = new Set((snap.environments ?? []).flatMap((e) => (e.candidates ?? []).map((c) => threadKey(e.environmentId, c.id))));
       recordDecisions(state, decisions, { alive });
-      commitRound(state, snap, { tier, quotaFailure: args.includes("--quota-failure") });
+      const quotaFailure = args.includes("--quota-failure");
+      commitRound(state, snap, { tier, quotaFailure });
       saveState(state);
       const dispatchFile = opt("dispatch");
-      process.stdout.write(reportOf(snap, decisions, { tier, dispatch: dispatchFile ? readJson(dispatchFile) : null }));
+      process.stdout.write(reportOf(snap, decisions, { tier, tierReason: tierReasonOf(snap, tier, quotaFailure), dispatch: dispatchFile ? readJson(dispatchFile) : null }));
     } else {
       console.error("用法：node patrol-round.mjs start --self <id> | review <judge 输出…> | run | finish --tier <name> [--quota-failure] [--dispatch <文件>]  （均可加 --dir）");
       process.exitCode = 2;

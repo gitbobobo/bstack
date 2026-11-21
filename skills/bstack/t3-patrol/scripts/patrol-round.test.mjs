@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { judgeBatches, judgeInput, mergeDecisions, packOf, reportOf, tierOf } from "./patrol-round.mjs";
+import { judgeBatches, judgeInput, mergeDecisions, packOf, reportOf, tierOf, tierReasonOf } from "./patrol-round.mjs";
 
 const ladder = [{ name: "glm" }, { name: "swe" }, { name: "ds", fallback: true }];
 const cand = (id, triage, extra = {}) => ({ id, link: `<${id}>`, title: `T${id}`, triage, triageReasons: [], ...extra });
@@ -77,4 +77,11 @@ test("报告骨架：按环境列研判与回读、静默合一行、派活结�
   assert.match(md, /空位 pc\/heavy 余 1/);
   assert.match(md, /### 需要你决定\n- <4>：选 A 或 B/);
   assert.match(md, /### 阻塞\n- <5>：quota/);
+  assert.match(md, /档位：glm（上一轮与本轮均无额度失败）/, "档位依据不留占位");
+});
+
+test("档位依据：本轮额度失败优先，其次开局建议与实际档位的差异", () => {
+  assert.match(tierReasonOf(snap(), "glm", true), /换档重派，首选档保持/);
+  assert.match(tierReasonOf(snap(), "swe", true), /改用 swe/);
+  assert.match(tierReasonOf(snap(), "swe", false), /无额度失败；按 recovery.md 改用 swe/);
 });

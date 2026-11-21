@@ -50,7 +50,7 @@ test("#21 回归：代理已结束、旧 pending 无更新，连续两轮均有�
     assert.deepEqual(tri(c, s).triageReasons, ["未结 PR 停驻超时", "#21 musiver/pr-check 久未出结论"]);
   }
   assert.equal(tri({ ...c, prHealth: [] }).triage, "hot"); // 仅关联信息也能触发。
-  assert.equal(tri({ ...c, prs: ["o/r#21:merged"], prHealth: [] }).triage, "quiet");
+  assert.deepEqual(tri({ ...c, prs: ["o/r#21:merged"], prHealth: [] }).triageReasons, ["PR 已合并未收结"]);
   assert.equal(tri({ ...c, prHealth: [], lastRunEndedAt: ago(5) }).triageReasons.includes("未结 PR 停驻超时"), false);
 });
 
@@ -72,12 +72,12 @@ test("失败、待答请求、取证失败、久审、未消费结论都算有�
   assert.ok(tri({ status: "completed", prs: ["o/r#1:open(stale)"] }).triageReasons.includes("结论未消费"));
 });
 
-test("跨设备待交接：来源无新活动、来源设备未释放也每轮复核，销账后才可静默", () => {
+test("跨设备待交接：来源无新活动、来源设备未释放也每轮复核，销账后仍未 settle 照样有事", () => {
   const source = { status: "completed", lastMsgAt: ago(240), lastRunEndedAt: ago(240), prs: ["o/r#46:merged"], pendingHandoff: { targetEnvironmentId: "mini", blocker: "池 4/4" } };
   assert.deepEqual(tri(source).triageReasons, ["待交接未销账"]);
   // 目标 Mini 释放名额不会改变来源 MBP 的 deviceFreed，仍须被唤起。
   assert.equal(triageOf(source, { since: ago(20), thresholds, now: NOW, deviceFreed: false }).triage, "hot");
-  assert.equal(tri({ ...source, pendingHandoff: undefined }).triage, "quiet");
+  assert.deepEqual(tri({ ...source, pendingHandoff: undefined }).triageReasons, ["PR 已合并未收结"]);
 });
 
 test("排队超时", () => {
@@ -144,4 +144,14 @@ test("线程状态表的复查时间只压住持续条件，新变化与全量�
   assert.equal(triageOf(c, { since, thresholds, now: NOW, hold: { ...hold, recheckAt: ago(1) } }).triage, "hot", "到期重新复核");
   assert.deepEqual(triageOf({ ...c, lastMsgAt: ago(5) }, { since, thresholds, now: NOW, hold }).triageReasons, ["上轮后有新活动"]);
   assert.equal(triageOf(c, { since: null, thresholds, now: NOW, hold }).triage, "hot");
+});
+
+test("已合并未收结受复查时间压住；复查到期只在两轮之间叫醒一次", () => {
+  const merged = { status: "completed", lastMsgAt: ago(600), lastRunEndedAt: ago(600), prs: ["o/r#239:merged(unwatched)"] };
+  const hold = { kind: "closeout", waitFor: "来源回报可回收", recheckAt: new Date(NOW + 30 * 60000).toISOString() };
+  assert.equal(triageOf(merged, { since, thresholds, now: NOW, hold }).triage, "quiet");
+  const quiet = { status: "completed", lastMsgAt: ago(600), lastRunEndedAt: ago(600), prs: [] };
+  const due = { ...hold, recheckAt: ago(5) };
+  assert.deepEqual(triageOf(quiet, { since: ago(20), thresholds, now: NOW, hold: due }).triageReasons, ["复查到期：来源回报可回收"]);
+  assert.equal(triageOf(quiet, { since: ago(2), thresholds, now: NOW, hold: due }).triage, "quiet", "上一轮已经过了复查时间，不再重复叫醒");
 });

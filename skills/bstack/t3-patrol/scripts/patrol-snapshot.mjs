@@ -347,9 +347,10 @@ async function snapshotEnv(env) {
   const top = all.filter((t) => !isSubagent(t));
   const rootsP = liveSubagentRoots(env.isLocal ? null : env.environmentId, top).then((roots) => ({ roots }), (error) => ({ error }));
   const eligible = top.filter((t) => !isReviewBot(t) && !isProbe(t) && t.threadId !== SELF);
-  const owned = (t) => isManaged(env.environmentId, t.threadId);
+  // 建过 PR 即视为用户把线程交给巡检推进，与台账派出同等纳管。
+  const owned = (t) => isManaged(env.environmentId, t.threadId) || (t.pullRequests ?? []).length > 0;
   const patrolExcluded = eligible.filter((t) => !owned(t)).map((t) => ({
-    id: t.threadId, link: t.link, title: clip(t.title, 80), reason: "非巡检派出",
+    id: t.threadId, link: t.link, title: clip(t.title, 80), reason: "非巡检派出且未建 PR",
   }));
   const candidates = eligible.filter(owned);
   const enriched = await pool(candidates, CONC, async (t) => {      const base = {

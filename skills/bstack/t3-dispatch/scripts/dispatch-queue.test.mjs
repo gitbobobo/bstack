@@ -47,6 +47,10 @@ test("待交接优先占同池空位；没有提示词或没空位的交接仍�
   assert.equal(waiting.picks.length, 0);
   const done = plan({ handoffs: [h("c", { launchedThreadLink: "x" })], pool: { repos: { [MUS]: [entry("1")] } } });
   assert.equal(done.picks.length, 1, "已建线的交接不再占池");
+  const auth = plan({ handoffs: [h("d", { needsUser: "生产部署授权", launch: { projectId: "e-pc-mus", title: "t", message: "m" } })], pool: { repos: { [MUS]: [entry("1")] } } });
+  assert.ok(!auth.handoffPlan[0].slot, "等用户授权的交接即使有 launch 也不建线");
+  assert.match(auth.handoffPlan[0].blocked, /授权/);
+  assert.equal(auth.picks.length, 1, "等用户授权的交接不占池");
 });
 
 test("出队前复核：不通过的题目不占空位，按 drop 与 recheck 分开", () => {

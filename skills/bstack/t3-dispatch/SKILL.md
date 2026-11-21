@@ -45,6 +45,7 @@ node <技能目录>/scripts/dispatch-queue.mjs --capacity /tmp/t3-dispatch-capac
 
 ### 出队结果
 
+- `handoffs[].blocked`：「等你授权」的交接不建线、不占池，原样进报告「需要你决定」；其余写明占用的池或缺什么。
 - `launched[].pending`：工作树还在准备，认领与台账已保留，算派出成功，下一轮巡检核对。
 - `launched[].duplicate`：已有未结线程，题目已移出题库，报告附该线程 link。
 - `launched[].error`：身份核验或查重失败时未认领；主问题认领失败说明已被认领。建线失败或 run 已失败时脚本已归还认领（见 `released`），题目留在题库；代理额度失败按「派活模型」换档，已建线程按 t3-patrol 故障恢复续跑，恢复后对归还的问题重新认领并 `record` 到原线程。建线请求报错且无法确认是否已创建时，先按编号查重。

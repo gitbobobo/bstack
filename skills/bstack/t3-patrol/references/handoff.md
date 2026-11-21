@@ -4,10 +4,10 @@
 
 ## 待交接队列
 
-交接完成的界限是**目标线程实际接手**。队列存在巡检状态文件的 `pendingHandoffs`，按来源环境＋线程去重；空位与建线由 dispatch-queue 负责：带 `launch` 的项在目标设备同池有空位时建线并回写 `launchedThreadLink`，没空位的项占住该池、同池不派新问题。研判只管入账、验收与销账。
+交接完成的界限是**目标线程实际接手**。队列存在巡检状态文件的 `pendingHandoffs`，按来源环境＋线程去重；空位与建线由 dispatch-queue 负责：带 `launch` 的项在目标设备同池有空位时建线并回写 `launchedThreadLink`，没空位的项占住该池、同池不派新问题；带 `needsUser` 的项不建线、不占池，只进报告「需要你决定」。研判只管入账、验收与销账。
 
-- **入账**：决定交接后在研判结果写 `handoff`，字段：`sourceEnvironmentId`、`sourceThreadId`、`sourceLink`、`targetEnvironmentId`、`canonicalKey`（仓库身份）、`task`、`handoffRef`（可重读的收尾消息或提示词位置）、`waitingSince`（收尾时间，ISO）、`blocker`（当前阻塞或待验证项）、`launch: { projectId, title, message }`（按下文「有提示词时」写好）。更新已有项时原样带上 `launchedThreadLink`，最初的 `waitingSince` 自动保留。
-- **每轮复核**：来源无派出归属时只报告「非巡检派出，暂停自动交接」。已建线的项读目标线程：实际接手（run 在目标工作树里有任务活动）就写 `handoffResolve` 并 settle 来源；准备失败或排队未启动按 [工作树准备失败](recovery.md#工作树准备失败) 处理，保留队列。未建线的项核 `blocker` 是否仍成立，缺 `launch` 就补齐。
+- **入账**：决定交接后在研判结果写 `handoff`，字段：`sourceEnvironmentId`、`sourceThreadId`、`sourceLink`、`targetEnvironmentId`、`canonicalKey`（仓库身份）、`task`、`handoffRef`（可重读的收尾消息或提示词位置）、`waitingSince`（收尾时间，ISO）、`blocker`（当前阻塞或待验证项）、`needsUser`（只有等用户授权或辨认时写：所缺输入、选项与默认）、`launch: { projectId, title, message }`（只给现在就能执行的段写，按下文「有提示词时」写好；有 `needsUser` 时不写）。更新已有项时原样带上 `launchedThreadLink`，最初的 `waitingSince` 自动保留。
+- **每轮复核**：已建线的项读目标线程：实际接手（run 在目标工作树里有任务活动）就写 `handoffResolve` 并 settle 来源；准备失败或排队未启动按 [工作树准备失败](recovery.md#工作树准备失败) 处理，保留队列。未建线的项核 `blocker`、`needsUser` 是否仍成立：授权已到就去掉 `needsUser` 并补 `launch`；仍缺授权的保持原样，不补 `launch`。
 - **销账**：`handoffResolve: { sourceEnvironmentId, sourceThreadId, outcome: "accepted" | "cancelled", evidenceRef }`，`evidenceRef` 指实际接手活动或来源撤销后续段的原文位置。launch 成功只是已建线，接手前保留。
 
 **完成标准**：每个队列项都有本轮结果：仍阻塞（写明阻塞）、已建待接手，或有证据销账。
@@ -20,7 +20,7 @@
 
 只看收尾汇报里「交接后续工作」那一项：`$pr-finish` 要求它给出交接提示词，或明确写「无后续段」。
 
-- **按任务归属分流**：原需求明确必交的后续段入队；审查遗留、架构或体验等独立建议交 t3-dispatch 准入评估，不占交接队列。
+- **按任务归属分流**：原需求明确必交的后续段入队，只剩发布类操作的按 [SKILL.md「发布择时」](../SKILL.md#权限边界) 收口，不入队；审查遗留、架构或体验等独立建议交 t3-dispatch 准入评估，不占交接队列。
 - 写了「无后续段」，且任务书也没有后续段：没有交接。
 - 列了条目但未区分必交与独立建议，或没写有无后续段：发消息请来源按原任务区分，必交段给完整交接提示词、来源依据及目标设备，否则写「无后续段」；来源本轮不 settle。
 
