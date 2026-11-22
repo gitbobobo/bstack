@@ -1,0 +1,31 @@
+# architecture-scan 本地配置示例。
+# 复制到本地后填入本机路径或仓库定位符，用 --config 或环境变量
+# ARCHITECTURE_SCAN_CONFIG 指向副本。不要把密钥、token 或服务地址写入本文件。
+
+# 工作目录；省略时由脚本在系统临时目录下创建 architecture-scan-<时间戳>
+# work_dir: /tmp/architecture-scan-example
+
+concurrency: 4
+timeout_sec: 3600
+
+# 扫描对象由调用方填写。技能没有默认仓库清单。
+# path 与 repo 至少提供一项：path 为本地检出，repo 为可克隆定位符（如 owner/name）。
+targets: []
+# - name: example
+#   path: /path/to/local/checkout
+#   repo: owner/example
+
+# Grok CLI 可选，默认关闭：由当前 agent 直接扫描。
+grok:
+  enabled: false
+  # bin 为 PATH 中的命令名或本机绝对路径，不要写死他人机器上的路径
+  bin: grok
+  model: null
+  reasoning_effort: high
+
+# Fast Ship 建单默认关闭。即使改为 true，仍需本轮用户明确授权才会创建 issue。
+# 凭证只放在 fast-ship 技能的外部配置里，不要写在这里。
+fast_ship:
+  enabled: false
+  # projects:
+  #   example: example-project-name

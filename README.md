@@ -58,6 +58,10 @@ PR 收尾：整合目标分支、合并、分流遗留，再关闭关联问题�
 
 默认全仓找线索、分批核实慢测、flaky、弱断言与冗余测试，给出修改及 lint 建议，并保留续扫摘要。[SKILL.md](skills/general/test-audit/SKILL.md) · [三仓库调研与设计依据](docs/test-audit-research.md)
 
+### architecture-scan
+
+在本地对仓库做架构扫描，核实深化候选并仅在明确授权时写入 issue；默认只读，Grok CLI 可选。[SKILL.md](skills/general/architecture-scan/SKILL.md)
+
 ### harmful-prompt-audit
 
 按可扩充的模式库扫描仓库中对 agent 有害的提示词、规则与任务描述（首个模式：诱导创可贴修复的"最小改动"措辞），给出改写建议。[SKILL.md](skills/general/harmful-prompt-audit/SKILL.md)
