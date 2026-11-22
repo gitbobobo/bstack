@@ -49,7 +49,7 @@ node <技能目录>/scripts/patrol-round.mjs start --self <threadId> > /tmp/t3-p
 子代理用 `delegate_task`（`role:"research"`，`mode:"async"`），模型取本轮档位在 `modelLadder` 中的 `instanceId`/`model`/`options`；派发所需参数都在决策包里，不必读 t3-orchestrator 或 t3-code。同时在跑的子代理不超过决策包的 `maxConcurrent`，并发多了会一齐撞额度：先按 `judge[]` 顺序再按 `dispatch.refill[]` 顺序排队，开局派满上限，每有一个结束就补派队首。某档额度失败就用阶梯下一档重派该任务，重派同样占名额，并且排在队首。
 
 - 每个 `judge[]` 一个研判子代理，任务书：`巡检研判：按 <技能目录>/references/judge.md 处理 <file>，结果写 <out>。不再派子代理。`
-- 每个带 `brief` 的 `dispatch.refill[]` 一个补货子代理，任务书：`派活补货：按 <t3-dispatch>/references/refill.md 处理 <brief>。不再派子代理。`
+- 每个带 `brief` 的 `dispatch.refill[]` 一个补货子代理，任务书：`派活补货：按 <t3-dispatch>/references/refill.md 处理 <brief>。不再派子代理。` 带 `skip` 的仓库没有待研判内容，不派，原因原样进报告。
 
 研判子代理全部回来（或到时限）再进第 3 步；其间完成事件唤醒你时，只补派队首或给失败的任务换档重派，不发进度消息。补货子代理不等：它们直接写题库，本轮出队时已入库的题目照常派出；本轮汇报之后它们的完成事件唤醒你时，只回一行入库结果，队列里还没派的补货照样补派。
 
@@ -95,7 +95,7 @@ node <技能目录>/scripts/patrol-snapshot.mjs --capacity-only > /tmp/t3-patrol
 node <t3-dispatch>/scripts/dispatch-queue.mjs --capacity /tmp/t3-patrol/capacity.json --model-tier <本轮档位 name> > /tmp/t3-patrol/dispatch.json
 ```
 
-脚本先给待交接建线，再按题库顺序弹出题目、复核来源后建线，`mode` 为 `dry-run` 时只出计划。结果按 [t3-dispatch「出队结果」](../t3-dispatch/SKILL.md#出队结果) 处理。`idle` 里的空位是题库暂无适配题目，补货子代理在补；本轮派出的线程下一轮按候选正常巡检。
+脚本先给待交接建线，再按题库顺序弹出题目、复核来源后建线，`mode` 为 `dry-run` 时只出计划。结果按 [t3-dispatch「出队结果」](../t3-dispatch/SKILL.md#出队结果) 处理。`idle` 里的空位是题库暂无适配题目，本轮补货子代理在补或该仓库 `skip`；本轮派出的线程下一轮按候选正常巡检。
 
 **完成标准**：每条交接与派出都有 link、回读状态或错误；每个空位池都有派出、交接占用或「题库无适配题目」的去向。
 

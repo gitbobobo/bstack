@@ -16,7 +16,8 @@
   },
   "stock": {
     "multiplier": 3,
-    "maxAgeHours": 72
+    "maxAgeHours": 72,
+    "recheckHours": 24
   },
   "trustedUsers": [],
   "repos": []

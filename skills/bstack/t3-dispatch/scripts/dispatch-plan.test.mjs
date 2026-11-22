@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { briefName, buildPlan, rankOf, repoBriefOf } from "./dispatch-plan.mjs";
+import { briefName, buildPlan, rankOf, repoBriefOf, skipReasonOf } from "./dispatch-plan.mjs";
 import { refillStatus, validateCandidate } from "./candidate-pool.mjs";
 import { capacityErrors, validatePlan, launchConfigFor } from "./dispatch-launch.mjs";
 
@@ -8,7 +8,7 @@ const MUS = "fj.frp.musiver.cn/fjbobo/musiver";
 const TMA = "fj.frp.musiver.cn/fjbobo/tma";
 const config = {
   limits: { perRun: 5, perDay: 20, maxAttempts: 2 },
-  stock: { multiplier: 3, maxAgeHours: 72 },
+  stock: { multiplier: 3, maxAgeHours: 72, recheckHours: 24 },
   repos: [{ repo: MUS }, { repo: TMA, devices: ["mini"] }],
 };
 const environments = { pc: { environmentId: "e-pc" }, mini: { environmentId: "e-mini" } };
@@ -83,14 +83,51 @@ test("库存够就不列候选；缺口仓库只列不在库存里的题目，�
   assert.equal(mus.sourceSkipped, 1);
 });
 
-test("过期、阻塞或待核的旧条目带 pooled 回到研判；池里有、列表没了的进 poolMissing", () => {
+test("阻塞或待核的旧条目过期或来源更新才带 pooled 回到研判；池里有、列表没了的进 poolMissing", () => {
   const old = cand("INT-1", "播放失败");
+  const updated = cand("INT-2", "保存失败", { updatedAt: "2026-11-01T12:00:00Z" });
+  const stale = cand("INT-3", "下载失败");
+  const parked = cand("INT-4", "同步失败");
   const gone = cand("INT-9", "已关闭");
+  const pending = { state: "pending", deferredBy: "evidence" };
   const p = buildPlan({ capacity: { environments: [env("e-pc")] }, config, environments, ledger: [], now: NOW,
-    candidatePool: { [MUS]: [saved(old, { state: "pending", deferredBy: "evidence" }), saved(gone)] },
-    listOf: () => ({ candidates: [old], skipped: [] }) });
-  assert.equal(p.repos[0].shortlist[0].pooled.state, "pending");
-  assert.deepEqual(p.repos[0].poolMissing, [{ id: gone.id, ref: "INT-9" }]);
+    candidatePool: { [MUS]: [
+      saved(old, { ...pending, issueUpdatedAt: null }),
+      saved(updated, { ...pending, issueUpdatedAt: "2026-11-01" }),
+      saved(stale, { state: "blocked", deferredBy: "dependency", checkedAt: "2026-10-31T23:00:00Z" }),
+      saved(parked, { state: "blocked", deferredBy: "dependency" }),
+      saved(gone),
+    ] },
+    listOf: () => ({ candidates: [old, updated, stale, parked], skipped: [] }) });
+  const r = p.repos[0];
+  assert.deepEqual(r.shortlist.map((c) => c.ref).sort(), ["INT-1", "INT-2", "INT-3"], "来源时间未知、来源更新、超过 recheckHours 都重核");
+  assert.ok(r.shortlist.every((c) => c.pooled));
+  assert.deepEqual(r.parked.map((c) => [c.ref, c.state]), [["INT-4", "blocked"]]);
+  assert.deepEqual(r.poolMissing, [{ id: gone.id, ref: "INT-9" }]);
+});
+
+test("没有待办的缺货仓库给出 skip，不派补货子代理；台账线程已结束或认领未记线程则要对账", () => {
+  const parked = cand("INT-4", "同步失败");
+  const deferred = cand("INT-5", "体验", { labels: ["bstack:defer"] });
+  const plan = (ledger, openThreads = []) => buildPlan({ capacity: { environments: [env("e-pc", [1, 1], { openThreads })] }, config: { ...config, repos: [{ repo: MUS }] }, environments, ledger, now: NOW,
+    candidatePool: { [MUS]: [saved(parked, { state: "blocked", deferredBy: "dependency" })] },
+    listOf: () => ({ candidates: [parked, deferred], skipped: [{ ref: "x" }] }) }).repos[0];
+  const at = new Date(NOW).toISOString();
+  const idle = plan([]);
+  assert.equal(skipReasonOf(idle), "无待研判内容：题库阻塞/待核且来源未更新 1，暂缓 1，来源跳过 1");
+  const empty = buildPlan({ capacity: { environments: [env("e-pc")] }, config: { ...config, repos: [{ repo: MUS }] }, environments, ledger: [], now: NOW, listOf: () => ({ candidates: [], skipped: [] }) }).repos[0];
+  assert.equal(skipReasonOf(empty), "无待研判内容：来源无可派问题");
+
+  const launched = { at, event: "launched", repo: MUS, id: "id-INT-7", environmentId: "e-pc", threadId: "t7" };
+  assert.deepEqual(plan([launched], [{ id: "t7", title: "INT-7" }]).ledgerStale, [], "线程还开着不必对账");
+  const closed = plan([launched]);
+  assert.deepEqual(closed.ledgerStale, [{ id: "id-INT-7", event: "launched" }]);
+  assert.equal(skipReasonOf(closed), null);
+  assert.deepEqual(plan([{ ...launched, environmentId: "e-gone" }]).ledgerStale, [], "环境不在快照里无法判定");
+  assert.equal(skipReasonOf(plan([{ at, event: "claimed", repo: MUS, id: "id-INT-8", ref: "INT-8" }])), null);
+
+  idle.excluded.push({ ref: "INT-6", reason: "回读确认未结线程", duplicateReview: true });
+  assert.equal(skipReasonOf(idle), null, "线程命中要子代理复核范围");
 });
 
 test("用户优先项在截表前提升，暂缓排除", () => {

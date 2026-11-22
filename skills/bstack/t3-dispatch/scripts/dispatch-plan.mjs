@@ -3,11 +3,14 @@
 //
 // 用法：node dispatch-plan.mjs --capacity <快照> [--brief-dir <目录>] [--excerpt 0]
 // 快照可以是完整快照或 --capacity-only（都带 environments[].projects/capacity/openThreads）。
-// 输出 { refill: [refillStatus…], repos: [{ repo, deficit, devices, shortlist, excluded, poolMissing, more }], briefs, warnings }：
+// 输出 { refill: [refillStatus…], repos: [{ repo, deficit, devices, shortlist, excluded, parked, poolMissing, ledgerStale, more, skip? }], briefs, warnings }：
 //   refill      各仓库目标库存（stock.multiplier × 可派设备所属池名额）、未过期 ready 库存与缺口
 //   shortlist   缺口仓库的待研判候选（已在库存里的不再列），粗排后取前 max(5, 缺口×2) 条；pooled 是池里已有的过期/阻塞/待核旧结论
 //   excluded    台账在派、暂缓标签或回读确认未结线程命中（范围待子代理复核）的项
+//   parked      池里 stock.recheckHours 内的阻塞/待核结论且来源没更新过：不重复研判，到期或来源更新后回到 shortlist
 //   poolMissing 池里有、准入列表已没有的条目：子代理核实后移除
+//   ledgerStale 台账在派、但线程已不在可达环境的未结列表里（或认领未记线程）：子代理对账
+//   skip        以上都没有待办时的原因：不写切片、不派补货子代理
 // 粗排只是排序提示：按标题与标签关键词归类（崩溃/丢数据 → 门禁/构建/发版 → 安全 → 功能错误 → 性能 → 体验 → 重构），用户优先标签在先。
 
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
@@ -19,7 +22,7 @@ import { loadEnvironments } from "../../t3-patrol/scripts/patrol-config.mjs";
 import { call, connect, hasSession, pool } from "../../t3-patrol/scripts/t3-mcp.mjs";
 
 import { labelPolicy } from "./dispatch-labels.mjs";
-import { readPool, refillStatus, stockOf } from "./candidate-pool.mjs";
+import { fresh, readPool, refillStatus, stockOf } from "./candidate-pool.mjs";
 import { findOpenThread, refRe } from "./dispatch-duplicates.mjs";
 
 const CATEGORIES = [
@@ -50,7 +53,12 @@ export function buildPlan({ capacity, config, environments, ledger, listOf, cand
   const activeIds = new Set(summary.active.map((e) => e.id));
   const envs = capacity.environments ?? [];
   const openThreads = envs.flatMap((e) => (e.openThreads ?? []).map((t) => ({ ...t, environmentId: e.environmentId })));
+  // 只有拿到未结线程列表的可达环境才能判定台账线程已结束。
+  const listedEnvs = new Set(envs.filter((e) => !e.error && Array.isArray(e.openThreads)).map((e) => e.environmentId));
+  const open = new Set(openThreads.map((t) => `${t.environmentId}/${t.id}`));
   const stock = config.stock ?? {};
+  const unchanged = (old, c) => old && old.state !== "ready" && fresh(old, now, stock.recheckHours ?? 24) && old.issueUpdatedAt && c.updatedAt
+    && Date.parse(c.updatedAt) <= Date.parse(old.issueUpdatedAt);
   const refill = refillStatus({ repos: config.repos, pool: { repos: candidatePool }, envs, environments, multiplier: stock.multiplier, maxAgeHours: stock.maxAgeHours, now });
   const repos = [];
   for (const s of refill.filter((x) => x.deficit > 0)) {
@@ -58,8 +66,12 @@ export function buildPlan({ capacity, config, environments, ledger, listOf, cand
     const inStock = new Set(stockOf(entries, { now, maxAgeHours: stock.maxAgeHours }).map((e) => e.id));
     const saved = new Map(entries.map((e) => [e.id, e]));
     const listed = listOf(s.repo);
-    const r = { repo: s.repo, deficit: s.deficit, devices: s.devices, shortlist: [], excluded: [], more: 0 };
+    const r = { repo: s.repo, deficit: s.deficit, devices: s.devices, shortlist: [], excluded: [], parked: [], more: 0 };
     r.poolMissing = entries.filter((e) => !listed.candidates.some((c) => c.id === e.id)).map(({ id, ref }) => ({ id, ref }));
+    r.ledgerStale = [
+      ...summary.active.filter((e) => e.repo === s.repo && listedEnvs.has(e.environmentId) && !open.has(`${e.environmentId}/${e.threadId}`)),
+      ...summary.pending.filter((e) => e.repo === s.repo),
+    ].map(({ id, ref, event }) => ({ id, ...(ref ? { ref } : {}), event }));
     const cands = [];
     for (const c of listed.candidates) {
       if (inStock.has(c.id)) continue;
@@ -67,6 +79,7 @@ export function buildPlan({ capacity, config, environments, ledger, listOf, cand
       const old = saved.get(c.id);
       if (activeIds.has(c.id)) r.excluded.push({ ref: c.ref, title: c.title, reason: "台账里已派出、线程未了结" });
       else if (labelPolicy(c.labels).deferred) r.excluded.push({ ref: c.ref, title: c.title, reason: "bstack:defer 暂缓自动派活" });
+      else if (unchanged(old, c)) r.parked.push({ ref: c.ref, state: old.state, checkedAt: old.checkedAt });
       else cands.push({ ...c, ...rankOf(c), priority: labelPolicy(c.labels).priority, ...(thread ? { threadMatch: thread } : {}),
         ...(old ? { pooled: { state: old.state, checkedAt: old.checkedAt, reason: old.reason, nextCheck: old.nextCheck } } : {}) });
     }
@@ -80,6 +93,14 @@ export function buildPlan({ capacity, config, environments, ledger, listOf, cand
     repos.push(r);
   }
   return { refill, repos };
+}
+
+// 补货子代理只在有待办时派：待研判候选、需复核的线程命中、池里失效条目或台账对账。查重会改 shortlist，须在其后调用。
+export function skipReasonOf(r) {
+  if (r.shortlist.length || r.poolMissing?.length || r.ledgerStale?.length || r.excluded.some((e) => e.duplicateReview)) return null;
+  const count = (re) => r.excluded.filter((e) => re.test(e.reason)).length;
+  const parts = [["题库阻塞/待核且来源未更新", r.parked.length], ["在派", count(/台账/)], ["暂缓", count(/defer/)], ["来源跳过", r.sourceSkipped ?? 0]];
+  return `无待研判内容：${parts.filter(([, n]) => n).map(([k, n]) => `${k} ${n}`).join("，") || "来源无可派问题"}`;
 }
 
 const SCRIPTS = dirname(fileURLToPath(import.meta.url));
@@ -102,7 +123,9 @@ export function repoBriefOf(plan, repo, { capacity, ledger = [], scripts = SCRIP
     shortlist: r.shortlist,
     more: r.more,
     excluded: r.excluded,
+    parked: r.parked ?? [],
     poolMissing: r.poolMissing ?? [],
+    ledgerStale: r.ledgerStale ?? [],
     ledger: { active: summary.active.filter(mine), recent: summary.recent.filter(mine) },
     commands: {
       list: `node ${join(scripts, "issue-source.mjs")} list --repo ${repo} --excerpt 0`,
@@ -155,10 +178,15 @@ export async function refillPlan({ capacity, briefDir, excerpt = 0, connected = 
     if (!connected) await connect("t3-dispatch-plan");
     await searchDupes(plan, capacity);
   } else if (plan.repos.length) warnings.push("没有 T3 MCP 会话，标题命中仅作 threadMatch 线索");
-  if (briefDir && plan.repos.length) {
+  for (const r of plan.repos) {
+    const skip = skipReasonOf(r);
+    if (skip) r.skip = skip;
+  }
+  const work = plan.repos.filter((r) => !r.skip);
+  if (briefDir && work.length) {
     mkdirSync(briefDir, { recursive: true });
     plan.briefs = {};
-    for (const r of plan.repos) {
+    for (const r of work) {
       const file = join(briefDir, briefName(r.repo));
       writeFileSync(file, `${JSON.stringify(repoBriefOf(plan, r.repo, { capacity, ledger }), null, 1)}\n`);
       plan.briefs[r.repo] = file;

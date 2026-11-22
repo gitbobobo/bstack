@@ -171,7 +171,7 @@ export function reportOf(snap, decisions, { tier, tierReason = tierReasonOf(snap
     for (const l of dispatch.launched ?? []) lines.push(`- ${l.ref ?? l.title} → ${l.device}：${l.link ?? ""}${l.pending ? "（工作树准备中）" : ""}${l.error ? `失败：${l.error}` : ""}${l.planned ? "（dry-run 未执行）" : ""}`);
     for (const d of dispatch.dropped ?? []) lines.push(`- 移出题库 ${d.ref}：${d.reason}`);
     for (const d of dispatch.recheck ?? []) lines.push(`- 转重核 ${d.ref}：${d.reason}`);
-    for (const i of dispatch.idle ?? []) lines.push(`- 空位 ${i.device}/${i.pool} 余 ${i.free}：${i.reason ?? "题库无适配题目，补货中"}`);
+    for (const i of dispatch.idle ?? []) lines.push(`- 空位 ${i.device}/${i.pool} 余 ${i.free}：${i.reason ?? "题库无适配题目"}`);
   }
   const ask = decisions.filter((d) => d.needsUser);
   const blocked = decisions.filter((d) => d.blocker || (d.results ?? []).some((r) => !r.ok));
@@ -193,9 +193,10 @@ async function dispatchStatus(snap, dir) {
   const { refillPlan } = await import(join(DISPATCH, "dispatch-plan.mjs"));
   try {
     const plan = await refillPlan({ capacity: snap, briefDir: join(dir, "refill"), connected: true });
+    const skipOf = new Map(plan.repos.filter((r) => r.skip).map((r) => [r.repo, r.skip]));
     return {
       enabled: true, mode: config.mode, free, ...(warnings.length ? { warnings } : {}),
-      refill: plan.refill.map((r) => ({ repo: r.repo, stock: r.stock, target: r.target, deficit: r.deficit, ...(plan.briefs?.[r.repo] ? { brief: plan.briefs[r.repo] } : {}), ...(r.unknownDevices ? { unknownDevices: r.unknownDevices } : {}) })),
+      refill: plan.refill.map((r) => ({ repo: r.repo, stock: r.stock, target: r.target, deficit: r.deficit, ...(plan.briefs?.[r.repo] ? { brief: plan.briefs[r.repo] } : {}), ...(skipOf.has(r.repo) ? { skip: skipOf.get(r.repo) } : {}), ...(r.unknownDevices ? { unknownDevices: r.unknownDevices } : {}) })),
       ...(plan.warnings ? { refillWarnings: plan.warnings } : {}),
     };
   } catch (e) {

@@ -314,6 +314,11 @@ async function occupancyOf(env, top, detailsOf, now, rootsP, waiting) {
   return { occupying, capacity, projects };
 }
 
+// 未 settle 顶层线程的标题与身份：派活按问题编号查重、按台账核对线程是否还开着。
+const openThreadsOf = (top) => top
+  .filter((t) => !isProbe(t) && !isReviewBot(t))
+  .map((t) => ({ id: t.threadId, link: t.link, title: clip(t.title, 80), status: t.status, projectId: t.projectId, prs: (t.pullRequests ?? []).map((p) => `${p.repository}#${p.number}:${p.state}`) }));
+
 // --capacity-only：只算容量，供派活使用。停驻线程一次回读绑定、run 与资源标记，不读活动与 PR 实况。
 // 另给项目清单（按仓库找 projectId）与未 settle 顶层线程的标题（按问题编号查重）。
 async function capacityEnv(env) {
@@ -332,9 +337,7 @@ async function capacityEnv(env) {
     occupying: occupying.map((t) => clip(t.title, 40)),
     capacity,
     projects: [...projects].map(([id, identity]) => ({ id, canonicalKey: identity?.canonicalKey ?? null })),
-    openThreads: top
-      .filter((t) => !isProbe(t) && !isReviewBot(t))
-      .map((t) => ({ id: t.threadId, link: t.link, title: clip(t.title, 80), status: t.status, projectId: t.projectId, prs: (t.pullRequests ?? []).map((p) => `${p.repository}#${p.number}:${p.state}`) })),
+    openThreads: openThreadsOf(top),
   };
 }
 
@@ -484,6 +487,7 @@ async function snapshotEnv(env) {
     occupying: occupyingTitles,
     capacity,
     projects: [...projects].map(([id, identity]) => ({ id, canonicalKey: identity?.canonicalKey ?? null })),
+    openThreads: openThreadsOf(top),
     // 静默候选只留识别与分诊字段：巡检对它们只记一行，不再深读。
     candidates: real.map((x) => (x.triage === "quiet" ? pick(x, QUIET_FIELDS) : x)),
     delegatedExcluded: enriched.length - real.length,

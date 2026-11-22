@@ -56,7 +56,7 @@ export function readPool(env = process.env) {
   return { revision: createHash("sha256").update(raw ?? "").digest("hex"), state };
 }
 
-const fresh = (e, now, maxAgeHours) => {
+export const fresh = (e, now, maxAgeHours) => {
   const age = now - Date.parse(e.checkedAt);
   return age >= 0 && age <= maxAgeHours * 3600000;
 };

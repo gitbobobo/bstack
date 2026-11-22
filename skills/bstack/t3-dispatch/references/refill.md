@@ -4,7 +4,7 @@
 
 ## 输入与边界
 
-切片字段：`need`（本次要补的条数）、`target`/`stock`、`devices`（可派设备别名）、`shortlist`（粗排后的候选，`pooled` 是题库里的旧结论，`threadMatch` 是标题线索）、`more`（表外候选数）、`excluded`（台账在派、暂缓或线程命中）、`poolMissing`（题库有、准入列表已没有）、`ledger`（本仓库台账）、`openThreads`、`commands`（全部命令用法）。
+切片字段：`need`（本次要补的条数）、`target`/`stock`、`devices`（可派设备别名）、`shortlist`（粗排后的候选，`pooled` 是题库里的旧结论，`threadMatch` 是标题线索）、`more`（表外候选数）、`excluded`（台账在派、暂缓或线程命中）、`parked`（未到重核期、来源也没更新的阻塞/待核结论，不重核）、`poolMissing`（题库有、准入列表已没有）、`ledgerStale`（台账在派但线程已不在未结列表，或认领未记线程）、`ledger`（本仓库台账）、`openThreads`、`commands`（全部命令用法）。
 
 你可以：读来源（`commands.list`/`show`）、读仓库源码与历史（只读，不检出、不安装、不跑重验证）、`t3_thread_search`/`t3_thread_read` 查重、对本仓库台账做 `release`/`record`、补齐本仓库标签、写本仓库题库。认领、发消息、建线程留给出队脚本。
 
@@ -17,7 +17,7 @@
 
 ## 2. 研判
 
-按 `shortlist` 顺序逐条研判，不够 `need` 再用 `commands.list` 取表外候选继续，每条只核一次。
+按 `shortlist` 顺序逐条研判，不够 `need` 再用 `commands.list` 取表外候选继续（跳过 `parked`），每条只核一次。
 
 1. **摘要初筛，歧义补读**：明确单平台且不匹配 `devices`、已有明确阻塞的直接归类；准备入库的候选读全文（`show`），`needsInfo` 只是提示。带 `pooled` 的先执行它的 `nextCheck`，问题版本与源码相关路径未变就沿用旧结论。
 2. **准入**：按 [任务准入](admission.md) 核目标与价值、交付与验收、授权与可执行性；仅缺当前复现或门禁结果时按其「验证先行」形成可执行任务。审查循环的分级只管原 PR，不是派活门槛。
