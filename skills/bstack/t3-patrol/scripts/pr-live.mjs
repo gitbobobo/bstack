@@ -77,7 +77,7 @@ export function headReviewOf(reviews, headSha) {
 
 // 端点地址与凭据：环境变量 → ~/.agents/env/forgejo.sh → fj 实例列表 → git credential helper。
 let confCache = null;
-function forgeConf() {
+export function forgeConf() {
   if (confCache) return confCache;
   const bases = [];
   const tokens = [];
@@ -123,7 +123,7 @@ function baseFromHint(hint) {
 }
 
 const credCache = new Map();
-function credentialFor(base) {
+export function credentialFor(base) {
   if (credCache.has(base)) return credCache.get(base);
   let token = null;
   try {
@@ -141,7 +141,7 @@ function credentialFor(base) {
   return token;
 }
 
-async function forgeApi(base, token, path) {
+export async function forgeApi(base, token, path) {
   const res = await fetch(`${base}/api/v1${path}`, {
     headers: { authorization: `token ${token}`, accept: "application/json" },
     signal: AbortSignal.timeout(20000),
@@ -150,7 +150,7 @@ async function forgeApi(base, token, path) {
   return res.json();
 }
 // Gitea 列表按时间正序分页：只取第一页会在长 PR 上丢掉最新的 review 与评论。
-async function forgeAll(base, token, path, limit = 50, maxPages = 10) {
+export async function forgeAll(base, token, path, limit = 50, maxPages = 10) {
   const out = [];
   for (let page = 1; page <= maxPages; page++) {
     const batch = (await forgeApi(base, token, `${path}${path.includes("?") ? "&" : "?"}limit=${limit}&page=${page}`)) ?? [];
