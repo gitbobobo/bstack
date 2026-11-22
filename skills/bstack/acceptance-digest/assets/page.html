@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>验收清单</title>
+<style>
+  :root {
+    --paper: #f6f3ec; --ink: #1d1b17; --muted: #6f685c; --rule: #ddd6c8;
+    --card: #fffdf8; --accent: #2f5d50; --high: #b2452c; --done: #8a9a88;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --paper: #171614; --ink: #ece6da; --muted: #a39b8c; --rule: #34302a; --card: #1f1d1a; --accent: #8cc3ad; --high: #ec8a6d; --done: #6b7768; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--paper); color: var(--ink); font: 16px/1.65 "PingFang SC", "Noto Sans SC", system-ui, sans-serif; }
+  main { max-width: 860px; margin: 0 auto; padding: 48px 20px 96px; }
+  header { border-bottom: 2px solid var(--ink); padding-bottom: 20px; margin-bottom: 28px; }
+  .kicker { font: 600 12px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
+  h1 { font-size: clamp(30px, 6vw, 46px); line-height: 1.1; margin: 10px 0 12px; letter-spacing: -.01em; }
+  h1 a { color: inherit; text-decoration: none; }
+  .meta { color: var(--muted); font-size: 14px; display: flex; flex-wrap: wrap; gap: 6px 18px; }
+  .tally { margin-top: 18px; display: flex; gap: 10px; flex-wrap: wrap; }
+  .tally span { font: 600 13px/1 var(--mono); padding: 8px 10px; border: 1px solid var(--rule); border-radius: 4px; background: var(--card); }
+  .tally .h { color: var(--high); border-color: currentColor; }
+  .bar { height: 4px; background: var(--rule); margin-top: 18px; border-radius: 2px; overflow: hidden; }
+  .bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .3s; }
+  article { background: var(--card); border: 1px solid var(--rule); border-radius: 6px; padding: 22px 24px; margin-bottom: 18px; position: relative; }
+  article.high { border-left: 4px solid var(--high); }
+  article.done { opacity: .6; }
+  article.done h2 { text-decoration: line-through; text-decoration-color: var(--done); }
+  .row { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .num { font: 600 14px/1 var(--mono); color: var(--accent); text-decoration: none; }
+  .tag { font: 600 11px/1 var(--mono); padding: 4px 6px; border-radius: 3px; background: var(--high); color: var(--card); letter-spacing: .06em; }
+  h2 { font-size: 20px; line-height: 1.35; margin: 8px 0 4px; }
+  .sub { color: var(--muted); font: 12px/1.4 var(--mono); }
+  .label { font: 600 12px/1 var(--mono); color: var(--muted); letter-spacing: .1em; margin: 18px 0 6px; }
+  p { margin: 0; }
+  ol { list-style: none; padding: 0; margin: 0; counter-reset: s; }
+  li { counter-increment: s; border-top: 1px dashed var(--rule); }
+  li:first-child { border-top: 0; }
+  li label { display: grid; grid-template-columns: 22px 1.6em 1fr; gap: 6px; padding: 9px 0; cursor: pointer; align-items: start; }
+  li label::before { content: counter(s) "."; grid-column: 2; grid-row: 1; font: 600 14px/1.65 var(--mono); color: var(--muted); }
+  li input { grid-column: 1; grid-row: 1; margin: 5px 0 0; accent-color: var(--accent); width: 16px; height: 16px; }
+  li span { grid-column: 3; grid-row: 1; }
+  li input:checked ~ span { color: var(--done); text-decoration: line-through; }
+  .evidence { font-size: 14px; color: var(--muted); border-left: 2px solid var(--rule); padding-left: 12px; white-space: pre-wrap; }
+  details { margin-top: 36px; border-top: 1px solid var(--rule); padding-top: 16px; }
+  summary { cursor: pointer; color: var(--muted); font: 600 13px/1.4 var(--mono); letter-spacing: .06em; }
+  .skip { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; margin-top: 14px; font-size: 14px; }
+  .skip a { font-family: var(--mono); color: var(--accent); text-decoration: none; }
+  .skip div { color: var(--muted); }
+  .skip b { color: var(--ink); font-weight: 500; }
+  footer { margin-top: 40px; color: var(--muted); font: 12px/1.4 var(--mono); }
+</style>
+</head>
+<body>
+<main id="app"></main>
+<script id="data" type="application/json">/*DATA*/null</script>
+<script>
+  const data = JSON.parse(document.getElementById("data").textContent);
+  const app = document.getElementById("app");
+  const el = (tag, attrs = {}, ...kids) => {
+    const n = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs)) k === "class" ? (n.className = v) : n.setAttribute(k, v);
+    for (const k of kids) if (k != null) n.append(k);
+    return n;
+  };
+  const fmt = (iso) => new Date(iso).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  const store = `acceptance:${data.repo}:${data.until}`;
+  const state = JSON.parse(localStorage.getItem(store) || "{}");
+  const save = () => localStorage.setItem(store, JSON.stringify(state));
+  document.title = `验收 · ${data.name}`;
+
+  const high = data.accept.filter((a) => a.risk === "high").length;
+  const fill = el("i");
+  app.append(
+    el("header", {},
+      el("div", { class: "kicker" }, "人工验收清单"),
+      el("h1", {}, el("a", { href: data.web, target: "_blank", rel: "noopener" }, data.name)),
+      el("div", { class: "meta" }, el("span", {}, data.repo), el("span", {}, `合并于 ${fmt(data.since)} — ${fmt(data.until)}`)),
+      el("div", { class: "tally" },
+        el("span", {}, `${data.accept.length} 待验收`),
+        high ? el("span", { class: "h" }, `${high} 高风险`) : null,
+        el("span", {}, `${data.skip.length} 免验收`)),
+      el("div", { class: "bar" }, fill)),
+  );
+
+  const cards = [];
+  const refresh = () => {
+    let total = 0, done = 0;
+    for (const { card, boxes } of cards) {
+      const n = boxes.filter((b) => b.checked).length;
+      total += boxes.length; done += n;
+      card.classList.toggle("done", n === boxes.length);
+    }
+    fill.style.width = total ? `${(done / total) * 100}%` : "0";
+  };
+
+  for (const pr of data.accept) {
+    const boxes = [];
+    const steps = el("ol");
+    pr.checks.forEach((text, i) => {
+      const id = `${pr.num}.${i}`;
+      const box = el("input", { type: "checkbox" });
+      box.checked = !!state[id];
+      box.addEventListener("change", () => { state[id] = box.checked; save(); refresh(); });
+      boxes.push(box);
+      steps.append(el("li", {}, el("label", {}, box, el("span", {}, text))));
+    });
+    const card = el("article", { class: pr.risk === "high" ? "high" : "" },
+      el("div", { class: "row" },
+        el("a", { class: "num", href: pr.url, target: "_blank", rel: "noopener" }, `#${pr.num}`),
+        pr.risk === "high" ? el("span", { class: "tag" }, "高风险") : null),
+      el("h2", {}, pr.title),
+      el("div", { class: "sub" }, [pr.author && `@${pr.author}`, `合并 ${fmt(pr.mergedAt)}`, pr.additions != null && `+${pr.additions}/-${pr.deletions}`, pr.changedFiles != null && `${pr.changedFiles} 个文件`].filter(Boolean).join(" · ")),
+      el("div", { class: "label" }, "改了什么"), el("p", {}, pr.summary),
+      el("div", { class: "label" }, "为什么要你看"), el("p", {}, pr.why),
+      el("div", { class: "label" }, "验收步骤"), steps,
+      pr.evidence ? el("div", { class: "label" }, "已有证据") : null,
+      pr.evidence ? el("p", { class: "evidence" }, pr.evidence) : null);
+    cards.push({ card, boxes });
+    app.append(card);
+  }
+
+  if (data.skip.length) {
+    const list = el("div", { class: "skip" });
+    for (const s of data.skip) list.append(el("a", { href: s.url, target: "_blank", rel: "noopener" }, `#${s.num}`), el("div", {}, el("b", {}, s.title), ` — ${s.reason}`));
+    app.append(el("details", {}, el("summary", {}, `免验收的 ${data.skip.length} 个合并`), list));
+  }
+  app.append(el("footer", {}, `生成于 ${fmt(data.generatedAt)} · 勾选进度只存在本浏览器`));
+  refresh();
+</script>
+</body>
+</html>

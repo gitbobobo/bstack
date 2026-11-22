@@ -40,6 +40,10 @@ T3 Code 多 harness 编排：从实现/顾问两类固定档位的模型池选 h
 
 补货子代理把候选研判进跨轮题库（按池名额的倍数备货），有空位时按题库顺序出队，复核来源、查重、核仓库身份后建工作树线程。[SKILL.md](skills/bstack/t3-dispatch/SKILL.md)
 
+### acceptance-digest
+
+巡检的对立面：从近 24 小时各项目合并的 PR 中挑出需要用户亲自验收的（小修小改不打扰），按项目用网页模板生成验收清单并经 html-preview 上传。[SKILL.md](skills/bstack/acceptance-digest/SKILL.md)
+
 ## 通用技能
 
 ### git-prefs
