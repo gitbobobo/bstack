@@ -56,7 +56,7 @@ failed、interrupted、非用户取消的 cancelled，以及 queued 超过 `thre
 | 在问产品决策 | `decision` | 原任务/issue 有已确认口径就发「结论＋出处＋动作」；没有时可选改进保留原行为、记独立建议并继续收尾；只有原任务必需的决定才写 `needsUser` |
 | 在请求原任务已覆盖的授权 | `authorize` | 「同意，按原任务继续，后续同类步骤不用再问」 |
 | 在问遗留项，或未区分必交后续段与独立建议 | `leftovers` | 测试遗留沿用 pr-review-loop「测试失败处置」；其余区分必交后续段（补交接提示词）与独立建议（记目标与来源事实，交 t3-dispatch 准入评估）；没有必交段就写「无后续段」并继续收尾 |
-| 在问方案、范围、修在哪个 PR，或以审查上限耗尽为由等用户定技术方向 | `tech` | 按 [技术收敛](convergence.md)：要它按 pr-review-loop「改动准入」定范围、按账本顾问定性执行，没有定性或有新反例就请方向顾问（`route.mjs select --task design`），由它定方案与边界后实施 |
+| 在问方案、范围、修在哪个 PR，或以审查上限耗尽为由等用户定技术方向 | `tech` | 按 [技术收敛](convergence.md)：要它按 pr-review-loop「改动准入」定范围、按账本顾问定性执行，没有定性或有新反例就请方向顾问（`route.mjs advisor`），由它定方案与边界后实施 |
 | 等审查但未关联该 PR | `link-pr` | 要它 `link_pull_request` 关联 <URL>、`watch_pull_request` 补监听，再重读审查与检查按 pr-review-loop 继续 |
 | 有未处理结论，线程仍停着 | `review-result` | 写 HEAD 与结论出处，要它重读审查与检查按 pr-review-loop 继续 |
 | 审查类检查 pending 超过 `thresholds.reviewWaitMinutes` | `review-timeout` | 要它经宿主检查接口确认 HEAD 状态，按 pr-review-loop 账本核重试次数与等待上限，到放弃条件记「审查者缺席，结束等待」再核能否收尾 |

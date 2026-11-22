@@ -1,6 +1,6 @@
 # 模型参考
 
-调研日期：2026-10-11；harness 收敛为 pi / codex / droid：2026-10-27；2026-11-04 cliproxyapi 的 devin 订阅移除，devin harness 回归，swe-2/opus 改走 devin（用户定）；2026-11-17 订阅削减，opus/grok 改为点名专用（用户定）；2026-11-20 gpt-6.1-sol 换为 gpt-6.2-sol（用户定；pi/codex 目录实时确认，FrontierCode 榜单同日换版，新分 43.8%，cost 与视觉分待复核）。模型 ID 以 `orchestrator_capabilities` 实时返回为准，这里的 ID 只是当时的快照。更新方法见文末「更新来源与标准」。
+调研日期：2026-10-11；harness 收敛为 pi / codex / droid：2026-10-27；2026-11-04 cliproxyapi 的 devin 订阅移除，swe-2/opus 改走 devin（用户定）；2026-11-17 opus/grok 改为点名专用（用户定）；2026-11-20 gpt-6.1-sol 换为 gpt-6.2-sol（用户定）；2026-11-22 简化为实现/顾问两类池、思考强度固定（用户定）。模型 ID 以 `orchestrator_capabilities` 实时返回为准。
 
 基准说明：FrontierCode（Cognition 维护，按代码能否合并评分）和 CursorBench 是第三方统一 harness 的榜单；Terminal-Bench、DeepSWE 多为厂商自报，不同版本不能横比。
 
@@ -8,87 +8,52 @@
 
 | 实例 | 用途 | 说明 |
 |---|---|---|
-| `pi` | glm/deepseek/grok/gpt 系的首选入口 | 经 cliproxyapi（`~/.pi/agent/cliproxyapi.json`）调多个提供商，额度与渠道切换由 cliproxyapi 负责；模型 ID 形如 `cliproxyapi/<模型>`。2026-11-04 起 devin 订阅已移除，不再提供 opus/swe-2。pi 目录里的 `opencode-go/*`、`commandcode/*`、`opendesign/*` 不走 cliproxyapi，不进路由 |
-| `codex` | gpt-6.2-sol 的备用入口 | 仅跑 GPT；也经 cliproxyapi 向 pi 提供 gpt-6.2-sol |
-| `acpRegistry_devin` | swe-2 与 opus（点名）的主入口（用户定） | 模型 ID 自带档位后缀（`swe-2-high`、`claude-opus-5-5-medium`）；另有 `gpt-6-1-sol-medium` 可人工点名，不进自动路由 |
-| `acpRegistry_factory_droid` | 其余模型的备用入口 | 目录没有 SWE-2。需 droid ≥0.234.0（修复 acp-daemon `--mcp-servers`，[Factory-AI/factory#9](https://github.com/Factory-AI/factory/issues/9)） |
+| `pi` | glm/deepseek/grok/gpt 系的首选入口 | 经 cliproxyapi（`~/.pi/agent/cliproxyapi.json`）调多个提供商，额度与渠道切换由 cliproxyapi 负责；模型 ID 形如 `cliproxyapi/<模型>`。目录里的 `opencode-go/*`、`commandcode/*`、`opendesign/*` 不走 cliproxyapi，不进路由 |
+| `codex` | gpt-6.2-sol 的备用入口 | 仅跑 GPT |
+| `acpRegistry_devin` | swe-2 与 opus（点名）的主入口（用户定） | 模型 ID 自带档位后缀（`swe-2-high`、`claude-opus-5-5-medium`） |
+| `acpRegistry_factory_droid` | 其余模型的备用入口 | 目录没有 SWE-2。需 droid ≥0.234.0（[Factory-AI/factory#9](https://github.com/Factory-AI/factory/issues/9)） |
 
-## 模型画像
+## 模型池
 
-状态：**自动** = 可以自动选；**顾问** = 自动用于审查和咨询，不承担写代码的实现任务；**点名** = 只有用户点名才用；**不用** = 不在 `MODELS`（白名单外），`check` 按「不在入口清单」拦。
+池的归属与思考强度只有用户能改（用户定，2026-11-22）。
 
-| 模型 | 状态 | 定位 | 关键数据 | 擅长 | 短板 |
-|---|---|---|---|---|---|
-| Opus 5.5 | 点名（仅实现顾问） | 前沿，综合第一 | FrontierCode 第 1（medium 54.6%，$0.80）；CursorBench high 56.0% | 方案咨询、视觉判断、长时程规划意见 | 订阅额度受限，仅用户点名（用户定，2026-11-17）；点名时也不写实现、不做代码审查与安全复核，只做实现顾问（用户定，`tasks: ["design"]`）；安全、生物、ML kernel 类任务会被静默回退到旧模型 |
-| GPT-6.2 Sol | 顾问 | 审查与咨询主力 | FrontierCode 43.8%（第 6，2026-11-20；榜单已换版，与旧版 medium 口径不可横比）；cost 待核 | 审查（首选）、方案咨询、调试思路 | 不写实现；输出量沿用 6.1 的记录（比 6 Sol 多 10–30%），待复核 |
-| SWE-2 | 自动 | 接近前沿，便宜 | FrontierCode max 50.0%（$1.18） | 端到端测试覆盖；被质疑时会重新推导；探索聚焦；基于 Kimi K3，原生看图 | 多小时级终端长任务弱于 Opus；无官方视觉数据 |
-| Grok 4.7 | 点名 | 前沿，长任务 | FrontierCode high 47.6%（$6.65）；CursorBench xhigh 46.3% | 审查（用户实测适合）、长时程任务、自我验证、文档类知识工作 | 订阅额度受限，仅用户点名（用户定，2026-11-17）；慢（小任务均 177s，Opus 34s），输出 token 约 4.5 倍；UI 口碑一般；500k 上下文双倍价 |
-| GLM 5.3 Flash | 自动，低难度优先 | 便宜 | CursorBench max 36.8%，$0.39 | 低难度、批量；原生多模态，能看截图 | 能力有上限 |
-| DeepSeek V4.1 Flash | 自动 | 便宜、快 | Artificial Analysis MMMU-Pro 77% | general 行尾备选；原生多模态 | 视觉弱于 GLM 5.3 Flash 与 SWE-2 |
-| GLM 5.3（非 flash） | 不用 | 开源旗舰 | FrontierCode max 40.1%，但 $16.91 | 安全 | 没有视觉能力；max 档 token 极多 |
-| Composer 2.5 | 不用 | 便宜、快 | FrontierCode 25.6% | — | 已过时 |
-| MiniMax-M3 | 不用 | 便宜 | FrontierCode 14.7% | — | 能力太差 |
-| 其他旧模型 | 不用 | — | — | — | glm-5.2、gpt-6-sol、gpt-6.1-sol（2026-11-20 由 gpt-6.2-sol 替换）、gpt-5.6 系列、gemini flash 系列（步数极多）；grok-4.6、claude-sonnet-5-5、gpt-6-luna、gpt-6-astra、claude-fable-5-1、kimi-k3（2026-10-18 用户移出路由） |
+| 模型 | 池 | 档位 | 关键数据 | 备注 |
+|---|---|---|---|---|
+| GLM 5.3 Flash | 实现（首选） | high | CursorBench max 36.8%，$0.39 | 便宜；原生多模态 |
+| SWE-2 | 实现 | high | FrontierCode max 50.0%（$1.18） | 基于 Kimi K3，原生看图；多小时级终端长任务弱于 Opus |
+| DeepSeek V4.1 Flash | 实现 | medium | Artificial Analysis MMMU-Pro 77% | 便宜、快；视觉弱于前两者 |
+| GPT-6.2 Sol | 顾问 | medium | FrontierCode 43.8%（2026-11-20 换版后） | 审查与方案咨询，不写实现；顾问不够时 `advisor` 从实现池递补 |
+| Opus 5.5 | 仅点名 | medium | FrontierCode medium 54.6% | 订阅额度受限 |
+| Grok 4.7 | 仅点名 | medium | FrontierCode high 47.6%（$6.65） | 订阅额度受限；慢、输出 token 多 |
 
-## 路由规则在哪里
+不用（不写进 `MODELS` 即不可选）：GLM 5.3（非 flash，max 档 token 极多、无视觉）、Composer 2.5、MiniMax-M3、glm-5.2、gpt-6-sol、gpt-6.1-sol、gpt-5.6 系、gemini flash 系、grok-4.6、claude-sonnet-5-5、gpt-6-luna、gpt-6-astra、claude-fable-5-1、kimi-k3。
 
-路由数据（模型状态与入口、ROUTES 组合优先级行、白名单递补）的默认值在 `scripts/route-data.mjs`，结构见其文件头；用户配置 `~/.config/bstack/t3-orchestrator.json` 可覆盖其中的模型状态、任务限定、入口、候选顺序与换路上限（规则见 `scripts/route-config.mjs`）。`route.mjs table` 查看当前生效数据及配置来源。画像表「状态」列对应 `MODELS.status`：自动 → `auto`、顾问 → `advisor`、点名 → `named`；「不用」即不写进 `MODELS`。括注的任务限定（如「仅实现顾问」）对应 `MODELS.tasks`。
+## 数据在哪
 
-## 选项与档位
+`scripts/route-data.mjs`：`IMPLEMENTERS`、`ADVISORS`（顺序即优先级）、`MODELS`（`effort` 固定档位、`entries` 入口顺序即 harness 优先级）、`EFFORT_KEYS`（各 harness 的档位选项名：pi `thinking`、codex `reasoningEffort`、devin `thought_level`、droid `reasoning_effort`）。droid 一律注入 `autonomy_level:"auto-high"`；目录里有 `fastMode` 的入口注入 `false`；codex `serviceTier` 保持 default。用户配置 `~/.config/bstack/t3-orchestrator.json` 的覆盖规则见 `scripts/route-config.mjs` 文件头，`route.mjs table` 看生效值。
 
-各 harness 的思考档选项名不同（2026-10-27 按实时目录核对）：
-
-| harness | 选项名 | 备注 |
-|---|---|---|
-| pi | `thinking` | 取值集随模型而异（glm/deepseek 只到 high） |
-| codex | `reasoningEffort` | 另有 `serviceTier`，保持 default 不用 priority |
-| devin | `thought_level` | 取值 medium/high/max；另有 `mode`、`speed`，保持默认不设 |
-| droid | `reasoning_effort` | snake_case；取值 low/medium/high/xhigh/max（2026-11-04 目录新增 medium）；另有必传的 `autonomy_level`（调度一律 auto-high） |
-
-档位取值规则（用户定）：**主代理派发默认 `high`；Opus 5.5、GPT-6.2 Sol、Grok 4.7 用 `medium`**（`route-data.mjs` 的 `EFFORT_MEDIUM_MODELS`）。早期 droid 的 `reasoning_effort` 没有 medium，这三个模型的 droid 入口曾用 `high`；2026-11-04 目录新增 medium 后，droid 入口同样用 `medium`（用户确认）。每个入口显式声明一个档位选项，由 `route.test.mjs` 校验。
-
-`fastMode` 不写进路由数据：`route.mjs` 只在目录规格里确实存在该选项时自动注入 `fastMode:false`。
-
-### 持续校验：`route.mjs audit`
-
-```bash
-node scripts/route.mjs audit --caps-file /tmp/t3-caps.json   # 有问题逐条打印并 exit 1
-```
-
-审计生效路由数据（`route-data.mjs` 加用户配置）全部 entries 与 ROUTES 候选的合并 options：provider/模型在目录里、选项名存在、取值在生效集内。`check --caps-file` 对手工拼的组合做同样的取值校验；select 时对注入后的最终 options 也跑一遍，非法入口直接进 skipped。
-
-测试用的裁剪夹具 `scripts/fixtures/caps-trimmed.json` 只含 route-data 用到的 provider/模型/选项。目录变化后重新生成：取实时 `orchestrator_capabilities` 落盘，按 `route-data.mjs` 里 entries 的 provider/模型 id 过滤 providers 与 models（保留模型完整选项描述），并把 `canRunChildTask`/`canRunCrossProviderChildTask` 归一化为 true、`constraints` 清空后写回该文件。
+测试夹具 `scripts/fixtures/caps-trimmed.json` 只含 route-data 用到的 provider/模型。目录变化后重新生成：取实时 `orchestrator_capabilities`，按 entries 的 provider/模型 id 过滤（保留完整选项描述），`canRunChildTask`/`canRunCrossProviderChildTask` 归一化为 true、`constraints` 清空。
 
 ## 更新来源与标准
 
-### 来源
-
 | 用途 | 来源 |
 |---|---|
-| 实际可用的模型 ID 与选项 | `orchestrator_capabilities`；cliproxyapi 可用模型另见 `~/.pi/agent/cliproxyapi-models.json`（`stale:false` 的条目） |
-| 第三方统一榜（排序主依据） | FrontierCode：https://cognition.com/frontiercode；CursorBench：https://cursor.com/cursorbench |
-| 视觉分数（`MODELS.vision`） | Roboflow Vision Evals 总分：https://playground.roboflow.com/evals；榜上缺的模型按 MMMU-Pro（Vals、Artificial Analysis）估值并在 `route-data.mjs` 注明 |
-| 厂商发布与系统卡 | OpenAI https://openai.com/news 与 https://deploymentsafety.openai.com；Anthropic https://www.anthropic.com/news；xAI https://x.ai/news；Cognition https://cognition.com/blog；智谱 https://docs.z.ai |
+| 实际可用的模型 ID 与选项 | `orchestrator_capabilities`；cliproxyapi 可用模型另见 `~/.pi/agent/cliproxyapi-models.json`（`stale:false`） |
+| 第三方统一榜 | FrontierCode：https://cognition.com/frontiercode；CursorBench：https://cursor.com/cursorbench |
+| 厂商发布 | OpenAI https://openai.com/news；Anthropic https://www.anthropic.com/news；xAI https://x.ai/news；Cognition https://cognition.com/blog；智谱 https://docs.z.ai |
 | 价格 | Codex https://help.openai.com（搜 Codex usage limits）；Factory https://factory.ai/pricing |
-| 本机实际表现 | `~/.t3/userdata/statev2.sqlite`，必须以只读方式打开（`sqlite3 "file:...?mode=ro"`），统计 `projection_thread_activities` 中 `runtime.error` 的按 provider 分布 |
+| 本机实际表现 | `~/.t3/userdata/statev2.sqlite`，只读打开（`sqlite3 "file:...?mode=ro"`），统计 `projection_thread_activities` 中 `runtime.error` 的按 provider 分布 |
 
-### 标准
+标准：
 
-1. **只有用户能改的规则**：快速模式、点名专用（`status:"named"`，当前 opus/grok 因额度受限点名专用）、harness 分工（glm/deepseek/grok/gpt 系首选 pi；swe-2 只走 devin、opus 走 devin/droid，均用户定；codex/droid 备用）、顾问定位（`status:"advisor"` 不写实现）、任务限定（`MODELS.tasks`）这几类限制由用户决定。更新时可以提出建议，不能自行改动。模型不入选不需要登记——不写进 `MODELS` 即不可选。
-2. **排序依据**：先看 FrontierCode 和 CursorBench 的分数和每任务成本；厂商自报数字只用来在第三方数据缺失或分数接近时参考，并在表里注明「厂商」。
-3. **加入自动路由**，须同时满足：
-   - cliproxyapi 能调（pi 入口排首位；swe-2/opus 例外，用户定走 devin），codex/droid 有同模型时补为备用入口；
-   - 第三方榜上的分数比该行现有候选低不超过 5 分，且每任务成本更低；或者分数更高、成本相近；
-   - 不属于用户限定的模型。
-4. **降级或移出**，满足任一即可：
-   - 同厂商出了价格相同或更低的新版本；
-   - 第三方分数落后该行第一名 10 分以上；
-   - 本机记录显示该入口反复失败。
-5. **每个数字都要能追溯**：写明来源；调研日期写在文件开头。
+1. 池归属、思考强度、点名专用、harness 分工（glm/deepseek/grok/gpt 首选 pi；swe-2 只走 devin、opus 走 devin/droid）只有用户能改；你只提建议。
+2. 排序先看 FrontierCode 与 CursorBench 的分数和每任务成本；厂商自报只在第三方缺失或分数接近时参考，并注明「厂商」。
+3. 建议换入实现池：cliproxyapi 能调，第三方分数比池内同位模型低不超过 5 分且更便宜，或分数更高、成本相近。建议移出：同厂商出了同价或更便宜的新版；分数落后池首 10 分以上；本机记录反复失败。
+4. 每个数字写明来源。
 
-### 流程
+流程：
 
-1. 对比 `orchestrator_capabilities` 的模型列表和 `scripts/route-data.mjs` 的 entries，找出新增、下线和改名的模型；选项规格变化后重新生成 `scripts/fixtures/caps-trimmed.json`。
-2. 按上面的来源核对新增模型与价格变化；核对完跑 `route.mjs audit --caps-file <实时 caps>` 确认全部入口目录可查、选项合法。
-3. 把建议的改动列成表（模型、原状态、新状态、理由、来源）交给用户确认。
-4. 用户确认后改 `scripts/route-data.mjs` 与本文件（画像表同步状态列），跑 `node --test scripts/route.test.mjs scripts/route-config.test.mjs`，并更新调研日期。只影响用户自己设备的偏好（如某个 harness 本机没有）改 `~/.config/bstack/t3-orchestrator.json`，不改默认值。
+1. 对比 `orchestrator_capabilities` 与 `route-data.mjs` 的 entries，找出新增、下线和改名的模型；选项规格变化后重新生成夹具。
+2. 跑 `node scripts/route.mjs audit --caps-file <实时 caps>`，确认全部入口目录可查、选项合法。
+3. 把建议列成表（模型、原池/档位、新池/档位、理由、来源）交给用户确认。
+4. 确认后改 `route-data.mjs` 与本文件，跑 `node --test scripts/route.test.mjs scripts/route-config.test.mjs`，更新调研日期。只影响某台设备的偏好（如本机没有某个 harness）改用户配置，不改默认值。

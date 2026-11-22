@@ -15,7 +15,7 @@
 ├── environments.json      # 设备别名 → environmentId，多技能共用
 ├── t3-patrol.json         # 巡检节奏、阈值、容量池
 ├── t3-dispatch.json       # 可派活仓库、问题来源、模型、节流、派活档位
-├── t3-orchestrator.json   # harness 偏好、模型阶梯
+├── t3-orchestrator.json   # 两类模型池、模型入口与档位
 ├── devices/<别名>.json    # 按设备区分的值（本机路径、shell 方言）
 ├── templates/             # 派活提示词模板，带 {{source_block}} 占位符
 ├── state/                 # 运行状态（派活台账），已 gitignore，只在本机
@@ -25,7 +25,7 @@
 - JSON 格式，脚本零依赖读取；每个文件带 `version`，技能读到旧版本时自行迁移。
 - 不放密钥。各服务凭据留在自己的位置（`~/.config/fast-ship/`、gh/fj 登录、T3 `request_secret`）。
 - 每个有偏好的技能自带 `references/config.defaults.json`，它同时充当结构说明：用户文件只能覆盖其中已有的键且类型相同，对象逐键合并、数组整体替换；拼错的键与错类型记 `warnings` 并沿用默认值，文件损坏记 `errors` 并整份回落默认值。加载器与测试随技能自带（首个实现：`t3-patrol/scripts/patrol-config.mjs`），`BSTACK_CONFIG_DIR` 可改配置目录。
-- t3-orchestrator：`route-data.mjs` 保留为默认值，`route-config.mjs` 合并 `t3-orchestrator.json`，可覆盖模型状态、任务限定、入口、候选顺序和换路上限，也可新增模型；`PROVIDER_RULES`、任务类型与档位标准是技能规则，不进配置。
+- t3-orchestrator：`route-data.mjs` 保留为默认值，`route-config.mjs` 合并 `t3-orchestrator.json`，可替换实现池/顾问池、覆盖模型入口与档位、换路上限，也可新增模型；`PROVIDER_RULES` 与档位选项名是技能规则，不进配置。
 
 ## setup 技能（`bstack-setup`）
 

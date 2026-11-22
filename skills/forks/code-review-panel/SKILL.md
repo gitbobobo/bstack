@@ -32,7 +32,7 @@ Write one clear paragraph. If you're unsure about the intent, ask the user befor
 
 ## Step 3, Spawn Reviewers
 
-Pick reviewer models with the `t3-orchestrator` skill's `route.mjs select --task review`; pick the second with `--exclude-model <first reviewer's model=>` so the panel spans two different models, not one model on two harnesses. The same filled template goes to all reviewers, so every model applies the code-quality lens.
+Pick reviewer models with the `t3-orchestrator` skill's `route.mjs advisor`; pick the second with `--exclude-model <first reviewer's PICK model>` so the panel spans two different models, not one model on two harnesses. The same filled template goes to all reviewers, so every model applies the code-quality lens.
 
 Reviewers read code and existing raw evidence by default. Route requests for heavy checks through the single final verification owner; reviewers do not start duplicate builds. Dispatch each reviewer as a read-only subagent — via the t3-code MCP `delegate_task`, or the harness's own read-only subagent mechanism for work that runs no commands.
 

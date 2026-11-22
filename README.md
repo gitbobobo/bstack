@@ -30,7 +30,7 @@
 
 ### t3-orchestrator
 
-T3 Code 多 harness 编排：按固定规则选 harness 与模型，派活验收并在失败时换路续跑。[SKILL.md](skills/bstack/t3-orchestrator/SKILL.md)
+T3 Code 多 harness 编排：从实现/顾问两类固定档位的模型池选 harness 与模型，派活验收并在失败时换路续跑。[SKILL.md](skills/bstack/t3-orchestrator/SKILL.md)
 
 ### t3-patrol
 
