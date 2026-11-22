@@ -29,9 +29,9 @@ test("frontmatter 与目录名一致，description 非空", () => {
   assert.ok(fm, "SKILL.md 必须有 frontmatter");
   const name = fm[1].match(/^name:\s*(.+)$/m)?.[1]?.trim();
   const desc = fm[1].match(/^description:\s*(.+)$/m)?.[1]?.trim();
-  assert.equal(name, "bug-scan");
+  assert.equal(name, "bug-audit");
   assert.ok(desc && desc.length > 10, "description 不能为空");
-  assert.match(desc, /bug 扫描/);
+  assert.match(desc, /bug 审计/);
 });
 
 test("相对链接都能落到技能目录内的文件", () => {
@@ -70,15 +70,12 @@ test("没有启动器/调度/运行框架，也没有凭证或本机路径", () 
   }
 });
 
-test("准则与建单保留核实门槛、只读和授权要求", () => {
+test("准则保留核实门槛，技能只出报告", () => {
   const skill = textOf(join(skillDir, "SKILL.md"));
   const criteria = textOf(join(skillDir, "references", "criteria.md"));
-  const filing = textOf(join(skillDir, "references", "filing.md"));
-  assert.match(skill, /\$fast-ship/);
-  assert.match(skill, /本轮用户明确授权/);
-  assert.match(skill, /不改被扫仓库/);
+  assert.doesNotMatch(skill, /fast-ship|建单/i);
   assert.match(skill, /最多 5 条/);
-  assert.match(skill, /不建 issue/);
+  assert.match(skill, /生产可达调用链/);
   assert.match(criteria, /逻辑错误/);
   assert.match(criteria, /输入边界/);
   assert.match(criteria, /错误处理/);
@@ -97,16 +94,4 @@ test("准则与建单保留核实门槛、只读和授权要求", () => {
   assert.match(criteria, /真实账户/);
   assert.match(criteria, /CodeQL/);
   assert.match(criteria, /npm ci/);
-  assert.match(filing, /## 现状/);
-  assert.match(filing, /## 证据/);
-  assert.match(filing, /## 影响/);
-  assert.match(filing, /## 建议/);
-  assert.match(filing, /## 验收标准/);
-  assert.match(filing, /## 来源/);
-  assert.match(filing, /仍开放的 issue/);
-  assert.match(filing, /已关闭的 issue/);
-  assert.match(filing, /当天已经新建/);
-  assert.match(filing, /每创建一张之前，再查一次/);
-  assert.match(filing, /高置信/);
-  assert.match(filing, /脱敏/);
 });

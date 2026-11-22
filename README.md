@@ -62,25 +62,25 @@ PR 收尾：整合目标分支、合并、分流遗留，再关闭关联问题�
 
 默认全仓找线索、分批核实慢测、flaky、弱断言与冗余测试，给出修改及 lint 建议，并保留续扫摘要。[SKILL.md](skills/general/test-audit/SKILL.md) · [三仓库调研与设计依据](docs/test-audit-research.md)
 
-### architecture-scan
+### architecture-audit
 
-在本地对仓库做架构扫描，核实深化候选并仅在明确授权时写入 issue；默认只读。[SKILL.md](skills/general/architecture-scan/SKILL.md)
+在本地对仓库做架构审计，核实深化候选并出中文报告。[SKILL.md](skills/general/architecture-audit/SKILL.md)
 
-### bad-pattern-scan
+### bad-pattern-audit
 
-在本地寻找 agent 容易照抄、且多处重复的不良编程模式，核实证据并仅在明确授权时写入 issue；默认只读。[SKILL.md](skills/general/bad-pattern-scan/SKILL.md)
+在本地寻找 agent 容易照抄、且多处重复的不良编程模式，核实证据并出中文报告。[SKILL.md](skills/general/bad-pattern-audit/SKILL.md)
 
-### performance-scan
+### performance-audit
 
-在本地对仓库做性能扫描，核实热路径上有证据的问题并仅在明确授权时写入 issue；默认只读。[SKILL.md](skills/general/performance-scan/SKILL.md)
+在本地对仓库做性能审计，核实热路径上有证据的问题并出中文报告。[SKILL.md](skills/general/performance-audit/SKILL.md)
 
-### dependency-check
+### dependency-audit
 
-在本地对仓库做依赖检查，对照 registry 核实直接依赖并分档，仅在明确授权时写入 issue；默认只读。[SKILL.md](skills/general/dependency-check/SKILL.md)
+在本地对仓库做依赖审计，对照 registry 核实直接依赖并分档并出中文报告。[SKILL.md](skills/general/dependency-audit/SKILL.md)
 
-### bug-scan
+### bug-audit
 
-在本地对仓库做 bug 扫描，核实生产可达、有证据的逻辑与安全问题并仅在明确授权时写入 issue；默认只读。[SKILL.md](skills/general/bug-scan/SKILL.md)
+在本地对仓库做 bug 审计，核实生产可达、有证据的逻辑与安全问题并出中文报告。[SKILL.md](skills/general/bug-audit/SKILL.md)
 
 ### harmful-prompt-audit
 

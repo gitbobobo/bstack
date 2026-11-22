@@ -29,9 +29,9 @@ test("frontmatter 与目录名一致，description 非空", () => {
   assert.ok(fm, "SKILL.md 必须有 frontmatter");
   const name = fm[1].match(/^name:\s*(.+)$/m)?.[1]?.trim();
   const desc = fm[1].match(/^description:\s*(.+)$/m)?.[1]?.trim();
-  assert.equal(name, "dependency-check");
+  assert.equal(name, "dependency-audit");
   assert.ok(desc && desc.length > 10, "description 不能为空");
-  assert.match(desc, /依赖检查/);
+  assert.match(desc, /依赖审计/);
 });
 
 test("相对链接都能落到技能目录内的文件", () => {
@@ -63,28 +63,17 @@ test("没有启动器/调度/运行框架，也没有凭证或本机路径", () 
   }
 });
 
-test("准则与建单保留分档、只读和授权要求", () => {
+test("准则保留分档与只读，技能只出报告", () => {
   const skill = textOf(join(skillDir, "SKILL.md"));
   const criteria = textOf(join(skillDir, "references", "criteria.md"));
-  const filing = textOf(join(skillDir, "references", "filing.md"));
   const ecosystems = textOf(join(skillDir, "references", "ecosystems.md"));
   for (const label of ["立即升级", "可以升级", "暂不动", "未核验"]) {
     assert.match(criteria, new RegExp(label));
     assert.match(skill, new RegExp(label));
   }
-  assert.match(skill, /\$fast-ship/);
-  assert.match(skill, /本轮用户明确授权/);
-  assert.match(skill, /不改被扫仓库/);
-  assert.match(filing, /## 现状/);
-  assert.match(filing, /## 证据/);
-  assert.match(filing, /## 影响/);
-  assert.match(filing, /## 建议/);
-  assert.match(filing, /## 验收标准/);
-  assert.match(filing, /## 来源/);
-  assert.match(filing, /仍开放的 issue/);
-  assert.match(filing, /已关闭的 issue/);
-  assert.match(filing, /当天已经新建/);
-  assert.match(filing, /每创建一张之前，再查一次/);
+  assert.doesNotMatch(skill, /fast-ship|建单/i);
+  assert.match(skill, /lockfile 保持原样/);
+  assert.match(skill, /结论表/);
   assert.match(ecosystems, /禁止/);
   assert.match(ecosystems, /只读/);
 });
