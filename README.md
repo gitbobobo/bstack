@@ -78,6 +78,10 @@ PR 收尾：整合目标分支、合并、分流遗留，再关闭关联问题�
 
 在本地对仓库做依赖检查，对照 registry 核实直接依赖并分档，仅在明确授权时写入 issue；默认只读。[SKILL.md](skills/general/dependency-check/SKILL.md)
 
+### bug-scan
+
+在本地对仓库做 bug 扫描，核实生产可达、有证据的逻辑与安全问题并仅在明确授权时写入 issue；默认只读。[SKILL.md](skills/general/bug-scan/SKILL.md)
+
 ### harmful-prompt-audit
 
 按可扩充的模式库扫描仓库中对 agent 有害的提示词、规则与任务描述（首个模式：诱导创可贴修复的"最小改动"措辞），给出改写建议。[SKILL.md](skills/general/harmful-prompt-audit/SKILL.md)
