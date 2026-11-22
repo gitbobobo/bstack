@@ -1,0 +1,75 @@
+# 可选的自包含 semgrep 规则，只作线索，命中必须再经人工核实。
+# 没有 semgrep 或选择不跑时，直接读代码即可。
+rules:
+- id: go-string-concat-in-loop
+  languages: [go]
+  severity: WARNING
+  message: 循环内字符串 += 拼接，可能是累积拼接；核实后考虑 strings.Builder
+  patterns:
+  - pattern-inside: for ... { ... }
+  - pattern: $S += $X
+  - metavariable-type:
+      metavariable: $S
+      type: string
+
+- id: go-defer-in-loop
+  languages: [go]
+  severity: WARNING
+  message: 循环内 defer，资源可能到函数结束才释放；若写在循环内新建的闭包中则可能是误报
+  patterns:
+  - pattern-inside: for ... { ... }
+  - pattern: defer $F(...)
+  - pattern-not-inside: |
+      for ... {
+        ...
+        func(...) {
+          ...
+          defer $F(...)
+          ...
+        }
+        ...
+      }
+
+- id: ts-await-in-loop
+  languages: [typescript, javascript]
+  severity: WARNING
+  message: 循环内串行 await（可能 N+1），核实后考虑 Promise.all 或批量查询
+  patterns:
+  - pattern-either:
+    - pattern-inside: for (...) { ... }
+    - pattern-inside: while (...) { ... }
+  - pattern: await $X
+
+- id: ts-sync-io
+  languages: [typescript, javascript]
+  severity: WARNING
+  message: 同步 I/O 可能阻塞事件循环
+  pattern-either:
+  - patterns:
+    - pattern: fs.$M(...)
+    - metavariable-regex:
+        metavariable: $M
+        regex: '^(readFileSync|writeFileSync|readdirSync|statSync|existsSync)$'
+  - pattern: execSync(...)
+
+- id: ts-linear-search-in-loop
+  languages: [typescript, javascript]
+  severity: INFO
+  message: 循环内线性查找或排序，可能 O(n²)，核实规模后考虑 Map/Set 或提到循环外
+  patterns:
+  - pattern-either:
+    - pattern-inside: for (...) { ... }
+    - pattern-inside: $A.forEach(...)
+    - pattern-inside: $A.map(...)
+  - pattern-either:
+    - pattern: $B.find(...)
+    - pattern: $B.indexOf(...)
+    - pattern: $B.includes(...)
+    - pattern: $B.filter(...)
+    - pattern: $B.sort(...)
+
+- id: ts-json-deep-clone
+  languages: [typescript, javascript]
+  severity: INFO
+  message: JSON 深拷贝，核实规模后考虑 structuredClone 或避免拷贝
+  pattern: JSON.parse(JSON.stringify($X))

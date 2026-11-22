@@ -70,6 +70,10 @@ PR 收尾：整合目标分支、合并、分流遗留，再关闭关联问题�
 
 在本地寻找 agent 容易照抄、且多处重复的不良编程模式，核实证据并仅在明确授权时写入 issue；默认只读。[SKILL.md](skills/general/bad-pattern-scan/SKILL.md)
 
+### performance-scan
+
+在本地对仓库做性能扫描，核实热路径上有证据的问题并仅在明确授权时写入 issue；默认只读。[SKILL.md](skills/general/performance-scan/SKILL.md)
+
 ### harmful-prompt-audit
 
 按可扩充的模式库扫描仓库中对 agent 有害的提示词、规则与任务描述（首个模式：诱导创可贴修复的"最小改动"措辞），给出改写建议。[SKILL.md](skills/general/harmful-prompt-audit/SKILL.md)
