@@ -64,7 +64,7 @@ PR 收尾：整合目标分支、合并、分流遗留，再关闭关联问题�
 
 ### architecture-scan
 
-在本地对仓库做架构扫描，核实深化候选并仅在明确授权时写入 issue；默认只读，Grok CLI 可选。[SKILL.md](skills/general/architecture-scan/SKILL.md)
+在本地对仓库做架构扫描，核实深化候选并仅在明确授权时写入 issue；默认只读。[SKILL.md](skills/general/architecture-scan/SKILL.md)
 
 ### harmful-prompt-audit
 
