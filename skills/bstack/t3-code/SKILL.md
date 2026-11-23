@@ -68,7 +68,8 @@ T3 在事件到达时唤醒本线程。等外部结果时登记监听，然后�
 ## 子线程取证（t3_thread_read）
 
 - 默认视图只回消息项；工具调用与文件写入要用 `view:"activity"`。找子代理回报或某次写入，从尾部 position 往回翻，不要从 0 分页。
-- 跨环境复盘先跑 `node <技能目录>/scripts/t3-activity-scan.mjs --hours 24 --self <本线程 id> > scan.json`：经 T3 MCP 端点收集本机与所有已连接环境窗口期内活跃的线程，每个带读过的 `skillReads`、`$技能名` 提及和用户消息。活跃按最近一次 run 或创建时间判断：`t3_thread_list` 的 `updatedAt` 会被同步批量刷新，用它筛会把几百个老线程算进来。再对关心的线程用 `t3_thread_read` 补读细节。
+- 跨环境复盘先跑 `node <技能目录>/scripts/t3-activity-scan.mjs --hours 24 > scan.json`。脚本经 T3 MCP 端点扫描本机和已连接环境，默认用本机 `t3_thread_list.currentThreadId` 排除当前线程。显式传 `--self` 时，取 `t3_thread_read` 返回的 `thread.threadId`。
+- 活跃按最近一次 run 或创建时间判断，`updatedAt` 只用来预筛候选。结果的 `skillReads` 包含技能正文路径和 harness 的技能调用事件，`mentions` 从完整对话消息里统计已知的 `$技能名`，`users` 保留用户消息摘要。技能名取自仓库的技能目录或安装目录中的同级技能。对关心的线程用 `t3_thread_read` 补读细节。
 - `file_change` 项的 `originalFile` 带编辑前全量快照：未跟踪文件被改毁时，取该文件最后一个 file_change 的 `originalFile` 重建——这是此类事故的最后恢复途径。
 
 ## 收尾窗口
