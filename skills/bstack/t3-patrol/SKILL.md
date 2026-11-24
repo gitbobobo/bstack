@@ -61,12 +61,12 @@ node <技能目录>/scripts/patrol-round.mjs start --self <threadId> > /tmp/t3-p
 node <技能目录>/scripts/patrol-round.mjs review /tmp/t3-patrol/judge-*.out.json
 ```
 
-脚本把研判结果合并成 `/tmp/t3-patrol/decisions.json`，每条线程一行：动作、判定摘要、待发消息开头。逐行裁决，要改就直接编辑 `decisions.json`：
+脚本把研判结果合并成 `/tmp/t3-patrol/decisions.json`，每条线程一行摘要，另列待发消息全文。逐条裁决，要改就直接编辑 `decisions.json`：
 
 - **越权**：消息要求超出「权限边界」的，改成交回用户或删掉该调用。
 - **需要你决定**：`needsUser` 只留用户才能给的授权、产品取舍、互斥的用户要求或无法核实的交接身份；技术方案、修在哪个 PR、复审次数改为推线程按技术收敛处理；人工或实体设备验收、只剩发布类操作的必交段按「权限边界」由巡检收口。
 - **跨线程**：同设备两个线程可能改同一处、同一线程收到两条请求、多条交接争同一池，由你合并或排序。
-- **设备锁**：逐条核对 `calls` 里的 `settle`，按 [settle 前核设备锁](references/handoff.md#settle-前核设备锁) 裁决。只有确认目标线程已无设备占用，才把 `settle` 交给脚本执行。
+- **结案门槛**：业务线程的 `settle` 只走第 4 步 `run`。逐条读收尾、回收、释放设备的消息全文，要求来源只完成动作并回报，留给巡检复核。每个 `settle` 调用都按 [结案门槛](references/handoff.md#结案门槛) 核交接与设备锁两项证据，缺一就保留线程。
 - 批次缺输出的线程记「研判未完成」，不补做取证。
 
 **完成标准**：每行都是批准、修改或删除，修改与删除有一句理由。

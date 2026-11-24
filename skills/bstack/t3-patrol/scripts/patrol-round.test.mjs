@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { judgeBatches, judgeInput, mergeDecisions, packOf, reportOf, tierOf, tierReasonOf } from "./patrol-round.mjs";
+import { runCalls } from "./patrol-batch.mjs";
+import { judgeBatches, judgeInput, mergeDecisions, packOf, reportOf, reviewLine, settleGuard, tierOf, tierReasonOf } from "./patrol-round.mjs";
 
 const ladder = [{ name: "glm" }, { name: "swe" }, { name: "ds", fallback: true }];
 const cand = (id, triage, extra = {}) => ({ id, link: `<${id}>`, title: `T${id}`, triage, triageReasons: [], ...extra });
@@ -79,6 +80,32 @@ test("报告骨架：按环境列研判与回读、静默合一行、派活结�
   assert.match(md, /### 需要你决定\n- <4>：选 A 或 B/);
   assert.match(md, /### 阻塞\n- <5>：quota/);
   assert.match(md, /档位：glm（上一轮与本轮均无额度失败）/, "档位依据不留占位");
+});
+
+test("#417：待发消息展示收结措辞；提示词已交付但下一段未接手时拦截 settle", () => {
+  const handoff = { sourceEnvironmentId: "mbp", sourceThreadId: "417", task: "段 2：watchOS FFmpeg" };
+  const d = { environmentId: "mbp", threadId: "417", handoff };
+  const settle = { tool: "t3_thread_organize", args: { ...d, action: "settle" } };
+  const message = `【巡检】${"核对回收。".repeat(20)}\n回报结果并收结。`;
+  assert.ok(reviewLine({ ...d, calls: [{ tool: "t3_thread_send", args: { message } }] }).includes(message));
+  assert.match(settleGuard(d, settle, []), /入账/);
+  delete d.handoff;
+  assert.match(settleGuard(d, settle, [handoff]), /缺结案依据/);
+  d.closeout = { outcome: "no-followup", evidenceRef: "PR 已合并，目录只剩壳", deviceRef: "来源设备 open=[]" };
+  assert.match(settleGuard(d, settle, [handoff]), /仍有待交接/);
+  d.closeout = { outcome: "accepted", evidenceRef: "段 2 目标线程的 FFmpeg 验证活动 #15", deviceRef: "来源设备 open=[]" };
+  assert.match(settleGuard(d, settle, [handoff]), /仍有待交接/);
+  d.handoffResolve = { ...handoff, outcome: "accepted", evidenceRef: d.closeout.evidenceRef };
+  assert.equal(settleGuard(d, settle, [handoff]), null);
+  assert.match(settleGuard(d, { ...settle, args: { ...settle.args, threadId: "other" } }, [handoff]), /对应 settle 目标/);
+  delete d.closeout.deviceRef;
+  assert.match(settleGuard(d, settle, [handoff]), /设备锁证据/);
+});
+
+test("旧版批处理入口不能绕过结案校验", async () => {
+  const [result] = await runCalls([{ tool: "t3_thread_organize", args: { threadId: "417", action: "settle" } }]);
+  assert.equal(result.ok, false);
+  assert.match(result.error, /结案校验/);
 });
 
 test("档位依据：本轮额度失败优先，其次开局建议与实际档位的差异", () => {

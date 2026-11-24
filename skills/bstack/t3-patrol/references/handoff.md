@@ -7,7 +7,7 @@
 交接完成的界限是**目标线程实际接手**。队列存在巡检状态文件的 `pendingHandoffs`，按来源环境＋线程去重；空位与建线由 dispatch-queue 负责：带 `launch` 的项在目标设备同池有空位时建线并回写 `launchedThreadLink`，没空位的项占住该池、同池不派新问题；带 `needsUser` 的项不建线、不占池，只进报告「需要你决定」。研判只管入账、验收与销账。
 
 - **入账**：决定交接后在研判结果写 `handoff`，字段：`sourceEnvironmentId`、`sourceThreadId`、`sourceLink`、`targetEnvironmentId`、`canonicalKey`（仓库身份）、`task`、`handoffRef`（可重读的收尾消息或提示词位置）、`waitingSince`（收尾时间，ISO）、`blocker`（当前阻塞或待验证项）、`needsUser`（只有等用户授权或辨认时写：所缺输入、选项与默认）、`launch: { projectId, title, message }`（只给现在就能执行的段写，按下文「有提示词时」写好；有 `needsUser` 时不写）。更新已有项时原样带上 `launchedThreadLink`，最初的 `waitingSince` 自动保留。
-- **每轮复核**：已建线的项读目标线程：实际接手（run 在目标工作树里有任务活动）就写 `handoffResolve` 并 settle 来源；准备失败或排队未启动按 [工作树准备失败](recovery.md#工作树准备失败) 处理，保留队列。未建线的项核 `blocker`、`needsUser` 是否仍成立：授权已到就去掉 `needsUser` 并补 `launch`；仍缺授权的保持原样，不补 `launch`。
+- **每轮复核**：已建线的项读目标线程：实际接手（回读到目标线程针对该段的命令、改动或验证活动）才写 `handoffResolve`，再按「结案门槛」处理来源；准备失败或排队未启动按 [工作树准备失败](recovery.md#工作树准备失败) 处理，保留队列。未建线的项核 `blocker`、`needsUser` 是否仍成立：授权已到就去掉 `needsUser` 并补 `launch`；仍缺授权的保持原样，不补 `launch`。
 - **销账**：`handoffResolve: { sourceEnvironmentId, sourceThreadId, outcome: "accepted" | "cancelled", evidenceRef }`，`evidenceRef` 指实际接手活动或来源撤销后续段的原文位置。launch 成功只是已建线，接手前保留。
 
 **完成标准**：每个队列项都有本轮结果：仍阻塞（写明阻塞）、已建待接手，或有证据销账。
@@ -18,7 +18,7 @@
 
 ## 有无交接
 
-只看收尾汇报里「交接后续工作」那一项：`$pr-finish` 要求它给出交接提示词，或明确写「无后续段」。
+对照 `$pr-finish` 的交接汇报与原任务首条消息或关联 issue。后到的审查唤醒摘要只说明 PR 状态，不能替代交接汇报。回收单独核对：来源已报告按约定清空并只留目录壳时，`worktreePath` 仍在不代表回收未完成。
 
 - **按任务归属分流**：原需求明确必交的后续段入队，只剩发布类操作的按 [SKILL.md「发布择时」](../SKILL.md#权限边界) 收口，不入队；审查遗留、架构或体验等独立建议交 t3-dispatch 准入评估，不占交接队列。
 - 写了「无后续段」，且任务书也没有后续段：没有交接。
@@ -32,11 +32,19 @@
    - `projectId`：目标环境 `t3_project_list`（翻完分页）里 `repositoryIdentity.canonicalKey` 与来源仓库一致的项目；
    - `title`：按 [命名](naming.md)，用该项目以往标题的语言和写法；
    - `message`：原样贴交接提示词，开头的斜杠命令保持在第一行，末尾另起一行写 `> 交接自 <来源线程 link>`。多段接力（先 A 设备、合并后换新 PR 号再 B 设备）只建第一段，末尾再加 `> 后续：合并后按同一提示词换新 PR 号交接给 <下一台设备>`。
-4. **settle 前确认没有后续段**：收尾汇报和**原任务首条消息 / 关联 issue** 两处都要看过。「跨端」「其他端」「后续平台」这类分工常只写在任务书里（INT-1280 只做了 Mac mini 段就 settle，断了 14.9 小时）。任务书有未做的后续段而汇报没给提示词，按上节请来源补；两处都确认没有后续段、或交接目标已实际接手，才加 `t3_thread_organize`（`action:"settle"`）调用。
 
 收尾汇报里的遗留事项写进 `summary`，注明归属与去向（独立候选、用户撤销依据或必交段接手线程）。
 
-## settle 前核设备锁
+## 结案门槛
+
+对每个 `t3_thread_organize(action:"settle")`，在该决策写 `closeout: { outcome, evidenceRef, deviceRef }`。引用指向可回读的消息或活动位置；缺任一项，本轮只核验、交接或等待。
+
+- `outcome: "no-followup"`：原任务与交付回执均证明已无必交后续段；`evidenceRef` 指向两处依据（无 PR 时用任务完成回执）。
+- `outcome: "accepted"`：`evidenceRef` 指向对应后续段实际接手活动。提示词已写、已建线或 run 已启动不是接手。仍在队列时同时为该来源写同结论、同证据的 `handoffResolve`。
+- `outcome: "cancelled"` 或 `"release-deferred"`：`evidenceRef` 指向明确撤销依据，或来源已按「发布择时」回报的证据；仍在队列时 `handoffResolve` 用 `cancelled`，引用同一份证据。
+- `deviceRef` 指向下节核实的设备状态。设备释放消息与交接证据互不替代。
+
+### settle 前核设备锁
 
 每条待 settle 的线程都适用，包括无 PR、无工作树、交接已接手和恢复后要收结的旧线程。
 

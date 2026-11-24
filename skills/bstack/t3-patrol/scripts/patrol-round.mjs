@@ -13,14 +13,14 @@
 //   node patrol-round.mjs finish --tier <档位 name> [--quota-failure] [--dispatch <dispatch-queue 输出>]
 //       写线程状态表与本轮记账，stdout 输出报告骨架（Markdown）。
 // 研判结果（每项一条线程）：{ environmentId, threadId, link, title, kind, action, summary, calls?, handoff?, handoffResolve?,
-//   waitFor?, recheckMinutes?, needsUser?, blocker? }，格式见 references/judge.md。
+//   closeout?, waitFor?, recheckMinutes?, needsUser?, blocker? }，格式见 references/judge.md。
 
 import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { call, connect, hasSession, NO_SESSION } from "./t3-mcp.mjs";
-import { runCalls, watchAll } from "./patrol-batch.mjs";
+import { isSettle, runCalls, watchAll } from "./patrol-batch.mjs";
 import { commitRound, loadState, putHandoff, recordDecisions, resolveHandoff, saveState, threadKey } from "./patrol-state.mjs";
 
 const SCRIPTS = dirname(fileURLToPath(import.meta.url));
@@ -123,9 +123,34 @@ export function mergeDecisions(lists) {
   return [...out.values()];
 }
 
-const reviewLine = (d) => [d.title ?? d.threadId, d.kind, d.action, d.summary,
-  ...(d.calls ?? []).map((c) => `${c.tool}${c.args?.message ? `「${String(c.args.message).slice(0, 80)}」` : c.args?.title ? `「${c.args.title}」` : ""}`),
-  d.needsUser ? `需要你决定：${d.needsUser}` : "", d.blocker ? `阻塞：${d.blocker}` : ""].filter(Boolean).join("｜");
+export const reviewLine = (d) => [
+  [d.title ?? d.threadId, d.kind, d.action, d.summary,
+    ...(d.calls ?? []).map((c) => `${c.tool}${c.args?.title ? `「${c.args.title}」` : ""}`),
+    d.closeout ? `结案：${JSON.stringify(d.closeout)}` : "",
+    d.needsUser ? `需要你决定：${d.needsUser}` : "", d.blocker ? `阻塞：${d.blocker}` : ""].filter(Boolean).join("｜"),
+  ...(d.calls ?? []).flatMap((c) => c.args?.message ? [`  待发全文：${c.args.message}`] : []),
+].join("\n");
+
+const hasRef = (ref) => typeof ref === "string" && Boolean(ref.trim());
+const sourceKey = (h) => threadKey(h.sourceEnvironmentId, h.sourceThreadId);
+const closeoutOutcomes = new Set(["no-followup", "accepted", "cancelled", "release-deferred"]);
+
+export function settleGuard(d, c, pendingHandoffs) {
+  if (!isSettle(c)) return null;
+  const key = threadKey(d.environmentId, d.threadId);
+  if (key !== threadKey(c.args.environmentId, c.args.threadId)) return "结案证据必须对应 settle 目标";
+  if (d.handoff) return "本轮仍需交接入账，保留来源线程";
+  const { outcome, evidenceRef, deviceRef } = d.closeout ?? {};
+  if (!closeoutOutcomes.has(outcome) || !hasRef(evidenceRef) || !hasRef(deviceRef)) return "settle 缺结案依据或设备锁证据";
+  if (pendingHandoffs.some((h) => sourceKey(h) === key)) {
+    const expected = outcome === "release-deferred" ? "cancelled" : outcome;
+    const resolved = d.handoffResolve;
+    if (expected === "no-followup" || !resolved || sourceKey(resolved) !== key || resolved.outcome !== expected || resolved.evidenceRef !== evidenceRef) {
+      return "仍有待交接项，settle 需要同一来源、同一证据的销账结论";
+    }
+  }
+  return null;
+}
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const STARTED = new Set(["starting", "running", "completed", "failed", "interrupted", "cancelled"]);
@@ -241,9 +266,12 @@ if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToP
       if (!hasSession()) throw new Error(NO_SESSION);
       const decisions = readJson(decisionsFile);
       const state = loadState();
+      const pending = [...state.pendingHandoffs, ...decisions.flatMap((d) => d.handoff ? [d.handoff] : [])];
       for (const d of decisions) {
-        if (d.handoff && !d.handoffDone) putHandoff(state, d.handoff);
-        if (d.handoffResolve && !d.handoffDone) resolveHandoff(state, d.handoffResolve);
+        if (d.handoffDone) continue;
+        if (d.handoff) putHandoff(state, d.handoff);
+        if (d.handoffResolve && (d.calls ?? []).some((c) => settleGuard(d, c, pending))) continue;
+        if (d.handoffResolve) resolveHandoff(state, d.handoffResolve);
         if (d.handoff || d.handoffResolve) d.handoffDone = true;
       }
       saveState(state);
@@ -253,7 +281,12 @@ if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToP
         d.results ??= [];
         for (const [i, c] of (d.calls ?? []).entries()) {
           if (d.results[i]?.ok) continue;
-          [d.results[i]] = await runCalls([{ label: `${d.title ?? d.threadId} #${i}`, ...c }]);
+          const blocked = settleGuard(d, c, pending);
+          if (blocked) {
+            d.results[i] = { tool: c.tool, ok: false, error: blocked };
+            continue;
+          }
+          [d.results[i]] = await runCalls([{ label: `${d.title ?? d.threadId} #${i}`, ...c }], { allowSettle: isSettle(c) });
           fresh.push([d.results[i], c]);
         }
       }

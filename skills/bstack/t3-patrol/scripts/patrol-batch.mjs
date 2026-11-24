@@ -3,7 +3,7 @@
 //
 // 用法：
 //   node patrol-batch.mjs --watch <快照>      给快照里全部 needsWatchThreads 代挂监听（PR 已合并/关闭的跳过），再回读 watching
-//   node patrol-batch.mjs --calls <文件>      按文件逐条执行任意 MCP 调用（发消息、改名、settle、interrupt……）
+//   node patrol-batch.mjs --calls <文件>      按文件逐条执行 MCP 调用（发消息、改名、interrupt……；settle 走 patrol-round run）
 // 两者可同时给。calls 文件（UTF-8 JSON，消息正文写在里面，不进命令行）：
 //   [ { "label": "send #28", "tool": "t3_thread_send", "args": { "environmentId": "…", "threadId": "…", "mode": "auto", "message": "【巡检】…" } }, … ]
 // 输出 { watch: [{ threadId, environmentId, url, result|skipped|error, watching }], calls: [{ label, tool, threadId, environmentId, ok, result|error }] }；
@@ -47,7 +47,9 @@ export async function watchAll(snap) {
   return out;
 }
 
-export async function runCalls(list) {
+export const isSettle = (c) => c?.tool === "t3_thread_organize" && c.args?.action === "settle";
+
+export async function runCalls(list, { allowSettle = false } = {}) {
   if (!Array.isArray(list)) throw new Error("calls 须是数组");
   const out = [];
   for (const [i, c] of list.entries()) {
@@ -57,6 +59,10 @@ export async function runCalls(list) {
       continue;
     }
     const scope = c.args.threadId ? { threadId: c.args.threadId, environmentId: c.args.environmentId } : {};
+    if (isSettle(c) && !allowSettle) {
+      out.push({ label, tool: c.tool, ...scope, ok: false, error: "settle 必须走 patrol-round run 的结案校验" });
+      continue;
+    }
     try {
       out.push({ label, tool: c.tool, ...scope, ok: true, result: brief(await call(c.tool, c.args)) });
     } catch (e) {

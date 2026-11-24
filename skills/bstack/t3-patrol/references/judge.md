@@ -22,7 +22,7 @@
   - **已收敛**：HEAD 上审查类检查都 success（或 `headReview` 无 blocker），其余检查通过，可合并。
   - `(health-unavailable)` 按 [核不到 PR 实况](snapshot.md#核不到-pr-实况) 手工核一次。
 - `pendingRequestCount > 0`：读 `t3_pending_request action:list` 的问题。
-- 「PR 已合并未收结」：线程停在收尾、交接或 settle 前的某一步，读末尾消息定是哪一步，按 C 表对应行推进或直接 settle。
+- 「PR 已合并未收结」：按 C 表进入收尾或交接；末尾是审查唤醒摘要时，补读实际收尾汇报。
 - 「复查到期」：核 `hold.waitFor` 是否兑现，兑现就按新状态选动作，没兑现按第 3 节升级。
 - **运行进展**（疑似空转、消息沉默、停驻超时、检查久未出结论）：进展证据是上一轮以来的新命令输出、新提交、日志增长或锁持有者变化。旧 pending、监听在位、过去自述进程健康都不支持继续等待。
 - `task`/`tail` 是摘要；判定依赖原任务验收条件、已定口径、交接与顾问结论时读原文。
@@ -49,9 +49,9 @@ failed、interrupted、非用户取消的 cancelled，以及 queued 超过 `thre
 
 | 证据 | kind | 动作与消息要点 |
 | --- | --- | --- |
-| 必交段只剩生产部署、发布、真实分发或通知用户 | `release-defer` | 按「发布择时」发：summary 写「发布由用户择时进行」及未做的操作，issue 标完成，回报后 settle；已在交接队列的写 `handoffResolve`（`cancelled`，证据指这条消息） |
+| 必交段只剩生产部署、发布、真实分发或通知用户 | `release-defer` | 按「发布择时」发：summary 写「发布由用户择时进行」及未做的操作，issue 标完成并回报；回读到回报后按 [结案门槛](handoff.md#结案门槛) 处理 |
 | 缺人工验收、截图或实体设备测量，或在问能否豁免 | `waiver` | 按「验收豁免」发：以已有审查与自动化证据替代，summary 写「按巡检授权豁免人工/实体设备验收」、替代证据与未测项，其余硬条件逐条核对后收尾。不写 `needsUser` |
-| PR 已合并 | `finish` | 收尾已完成按 [交接与 settle](handoff.md)；未收尾且有工作树或待办发「使用 $pr-finish 技能收尾」；无工作树且无收尾汇报按「代理自称完成」行 |
+| PR 已合并 | `finish` | 按 [交接与 settle](handoff.md) 对照原任务与实际收尾汇报；确有未完成的收尾动作，发「使用 $pr-finish 技能处理缺项并回报」；无工作树且无收尾汇报按「代理自称完成」行 |
 | 停在 `【等待资源】` | `resource` | 分诊原因含「资源可能已释放」或「等待资源已满」时发：依据（占用从 N 降到 M／已等 X 小时），要它按 t3-orchestrator「资源不足时」重查，够就继续、不够更新标记后结束；否则 `none` |
 | 在问产品决策 | `decision` | 原任务/issue 有已确认口径就发「结论＋出处＋动作」；没有时可选改进保留原行为、记独立建议并继续收尾；只有原任务必需的决定才写 `needsUser` |
 | 在请求原任务已覆盖的授权 | `authorize` | 「同意，按原任务继续，后续同类步骤不用再问」 |
@@ -86,7 +86,7 @@ failed、interrupted、非用户取消的 cancelled，以及 queued 超过 `thre
 
 - `action` 取 `send`、`interrupt`、`settle`、`rename`、`handoff`、`report`、`none` 之一，是本条的主动作；`calls` 按执行顺序列出全部调用（interrupt 用 `t3_thread_interrupt`，改名用 `t3_thread_update` 带 `action:"rename"`、`title`，settle 用 `t3_thread_organize` 带 `action:"settle"`，换模型用 `t3_thread_configure`）。
 - 消息以 `【巡检】` 开头，用代用户回话的口吻写清依据与要它做的事；点名「不要等我确认」的地方是刻意的，这些线程常把该做的步骤挂起来等人批。
-- `handoff` / `handoffResolve` 的字段见 [交接与 settle](handoff.md#待交接队列)。
+- `handoff` / `handoffResolve` 见 [待交接队列](handoff.md#待交接队列)；直接 `settle` 必填 `closeout`，见 [结案门槛](handoff.md#结案门槛)。
 - 写完后用 `node -e "JSON.parse(require('fs').readFileSync('<out>','utf8'))"` 校验能解析。
 
 **完成标准**：每条输入线程都有一项；每个非 `none` 动作有出自快照或本轮补读的证据；在途、有未处理结论、证据不足已区分；持续超时项有进展证据、定向核验或 `blocker`。
