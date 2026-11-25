@@ -10,14 +10,6 @@
       }
     },
     {
-      "name": "acpRegistry_devin/swe-2-high",
-      "instanceId": "acpRegistry_devin",
-      "model": "swe-2-high",
-      "options": {
-        "thought_level": "medium"
-      }
-    },
-    {
       "name": "pi/cliproxyapi/deepseek-v4.1-flash",
       "instanceId": "pi",
       "model": "cliproxyapi/deepseek-v4.1-flash",
