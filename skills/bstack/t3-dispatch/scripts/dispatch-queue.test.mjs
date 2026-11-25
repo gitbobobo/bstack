@@ -1,5 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { consumed, freshnessOf, launchOf, queuePlan } from "./dispatch-queue.mjs";
 
 const MUS = "host/o/mus";
@@ -16,6 +21,25 @@ const env = (id, free, poolByRepo = { [MUS]: "heavy", [TMA]: "general" }) => ({
 const entry = (id, extra = {}) => ({ id, ref: `INT-${id}`, title: `题 ${id}`, state: "ready", deferredBy: "capacity", scope: "s", reason: "r", nextCheck: "n",
   checkedAt: new Date(NOW - 3600000).toISOString(), issueUpdatedAt: "2026-11-01T00:00:00Z", source: { head: "h", paths: ["p"] }, devices: ["pc"], evidenceRefs: ["e"], ...extra });
 const plan = (over) => queuePlan({ capacity: { environments: [env("e-pc", [1, 1])] }, config, environments, pool: { repos: {} }, ledger: [], now: NOW, ...over });
+
+test("巡检出队固定用 DeepSeek medium，独立出队保留派活配置", (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "dispatch-model-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const model = { instanceId: "pi", model: "test-model" };
+  writeFileSync(join(dir, "t3-dispatch.json"), JSON.stringify({ mode: "auto", model, repos: [{ repo: MUS, source: "fast-ship" }] }));
+  const capacity = join(dir, "capacity.json");
+  writeFileSync(capacity, JSON.stringify({ environments: [] }));
+  const run = (...args) => {
+    const script = fileURLToPath(new URL("./dispatch-queue.mjs", import.meta.url));
+    const result = spawnSync(process.execPath, [script, "--capacity", capacity, "--dry-run", ...args], {
+      env: { ...process.env, BSTACK_CONFIG_DIR: dir }, encoding: "utf8",
+    });
+    assert.equal(result.status, 0, result.stderr);
+    return JSON.parse(result.stdout).modelSelection;
+  };
+  assert.deepEqual(run("--patrol"), { instanceId: "pi", model: "cliproxyapi/deepseek-v4.1-flash", options: { thinking: "medium" } });
+  assert.equal(run("--user").model, model.model);
+});
 
 test("按题库顺序出队，各仓库轮流，空位与 perRun 封顶", () => {
   const p = plan({ capacity: { environments: [env("e-pc", [2, 1])] },

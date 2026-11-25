@@ -51,18 +51,12 @@ test("未知键与类型不符报警告，不生效", () => {
   });
 });
 
-test("模型阶梯整体替换；残缺的阶梯回落默认", () => {
-  const ladder = [{ name: "x", instanceId: "codex", model: "gpt-x", options: {} }];
-  withConfig({ modelLadder: ladder }, (env) => {
-    assert.deepEqual(loadConfig({ env }).config.modelLadder, ladder);
+test("旧模型阶梯配置不再生效", () => {
+  withConfig({ modelLadder: [{ instanceId: "pi", model: "old-model" }] }, (env) => {
+    const r = loadConfig({ env });
+    assert.equal(r.config.modelLadder, undefined);
+    assert.match(r.warnings[0], /^modelLadder：未知配置项/);
   });
-  for (const bad of [[], [{ model: "gpt-x" }]]) {
-    withConfig({ modelLadder: bad }, (env) => {
-      const r = loadConfig({ env });
-      assert.deepEqual(r.config.modelLadder, DEFAULTS.modelLadder);
-      assert.ok(r.warnings.some((w) => w.startsWith("modelLadder：")));
-    });
-  }
 });
 
 test("带 BOM 的文件照常解析", () => {

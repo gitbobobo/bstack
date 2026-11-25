@@ -55,8 +55,7 @@ const clipEnds = (s, n = CHARS) => {
   const head = Math.floor(n * 0.4);
   return `${t.slice(0, head)} …[略]… ${t.slice(t.length - (n - head))}`;
 };
-// 探测线程：额度探测（「0. 前提」）由巡检自己建、当轮 settle，不是待判任务（「资源探测」是旧版留下的同类线程），
-// 也不占名额；失败本身就是探测结果，不进 failedTopLevel。
+// 旧版留下的探测线程不是待判任务，也不占名额。
 export const isProbe = (t) => /^(?:额度|资源)探测$/.test(String(t.title ?? "").trim());
 const isSubagent = (t) => t.parentThreadId || t.threadId.startsWith("thread:delegated-task:");
 // 代理派活的执行线程：首条消息就是派活模板。它们做完即完成，验收由派活方负责，不该占巡检候选。
@@ -531,7 +530,7 @@ async function main() {
     4,
     (run) => run(),
   );
-  const { modelLadder, version, ...prefs } = CFG;
+  const { version, ...prefs } = CFG;
   const config = { source: PREFS.source, warnings: PREFS.warnings, errors: PREFS.errors, ...prefs };
   const known = KNOWN;
   const aliasOf = ALIAS_OF;
@@ -550,8 +549,8 @@ async function main() {
   const environments = results.map((r) => ({ ...(aliasOf.get(r.environmentId) ?? {}), ...r }));
   for (const u of unreachable) Object.assign(u, aliasOf.get(u.environmentId) ?? {});
   const triage = CAPACITY_ONLY ? undefined : { full: ROUND.full, ...(ROUND.full ? { reason: ROUND.reason } : { since: ROUND.since }) };
-  const lastRound = STATE.lastRound ? { at: STATE.lastRound.at, tier: STATE.lastRound.tier, quotaFailure: STATE.lastRound.quotaFailure } : null;
-  const snapshot = { generatedAt, config, modelLadder, lastRound, pendingHandoffs: STATE.pendingHandoffs, triage, environmentsFile, unreachable, environments };
+  const lastRound = STATE.lastRound ? { at: STATE.lastRound.at } : null;
+  const snapshot = { generatedAt, config, lastRound, pendingHandoffs: STATE.pendingHandoffs, triage, environmentsFile, unreachable, environments };
   console.log(JSON.stringify(snapshot, null, 1));
 }
 

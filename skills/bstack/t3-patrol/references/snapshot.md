@@ -6,7 +6,7 @@
 
 ## 输出结构
 
-- **顶层**：`generatedAt`（也是下一轮分诊的「上一轮」时点）、`lastRound`（`at`、`tier`、`quotaFailure`）、`pendingHandoffs`、`triage`（`full` 及原因，或增量起点 `since`）、`modelLadder`、`config`（含 `warnings`/`errors`）、`environmentsFile`（`unlisted` 是文件里没有的环境，`missing` 是文件里有但本轮没连上的别名）、`unreachable`。
+- **顶层**：`generatedAt`（也是下一轮分诊的「上一轮」时点）、`lastRound`（`at`）、`pendingHandoffs`、`triage`（`full` 及原因，或增量起点 `since`）、`config`（含 `warnings`/`errors`）、`environmentsFile`（`unlisted` 是文件里没有的环境，`missing` 是文件里有但本轮没连上的别名）、`unreachable`。
 - **巡检排除** `environments[].patrolExcluded`：没有派出归属、也没建过 PR 的线程（`id`、`link`、`title`、`reason`），只参与容量与查重。
 - **候选** `environments[].candidates`：已剔除巡检排除项、子代理线程、无工作树的派活模板线程、Fast Ship 审查线程（「代码审查 · PR #N」「视觉审查 · PR #N」）、探测线程和本线程，剔除数在 `delegatedExcluded`。
   - 每条带 `triage`（`hot`/`quiet`）、`triageReasons`，线程状态表有记录时带 `hold`。

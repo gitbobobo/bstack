@@ -19,7 +19,7 @@ description: 从问题来源挑问题，在各 T3 环境建工作树线程派活
 
 ### 派活模型
 
-默认用配置的 `model`。巡检调用沿用本轮档位（`--model-tier`）；独立调用时额度失败按 [t3-patrol 故障恢复「模型优先级」](../t3-patrol/references/recovery.md#模型优先级) 判档。仅剩 `fallback` 档或普通档均已证实不可用时暂停新问题，只做恢复；单个默认模型额度不足本身不足以停派。用户或项目明确指定模型时以其为准。
+巡检调用带 `--patrol`，新派与交接使用巡检固定模型。独立调用默认用配置的 `model`，以用户或项目明确指定的模型为准；未指定时遇到模型额度失败，按 [t3-orchestrator 故障处理](../t3-orchestrator/references/failures.md) 换路。
 
 ## 2. 补货
 
@@ -38,7 +38,7 @@ node <技能目录>/scripts/dispatch-plan.mjs --capacity /tmp/t3-dispatch-capaci
 
 ```bash
 node <t3-patrol>/scripts/patrol-snapshot.mjs --capacity-only > /tmp/t3-dispatch-capacity.json
-node <技能目录>/scripts/dispatch-queue.mjs --capacity /tmp/t3-dispatch-capacity.json [--model-tier <name>] [--user] > /tmp/t3-dispatch-queue.json
+node <技能目录>/scripts/dispatch-queue.mjs --capacity /tmp/t3-dispatch-capacity.json [--user] > /tmp/t3-dispatch-queue.json
 ```
 
 脚本先给待交接建线，再各仓库轮流弹出题目，按快照实际空位与 `limits.perRun`、`limits.perDay` 余量封顶；每条派出都经绑定身份核验、跨环境查重、认领、渲染模板、建工作树线程、记账与回读。用户点名具体问题时，改写计划文件直接跑 `dispatch-launch.mjs --plan <文件>`（格式见脚本头注释）。
@@ -48,7 +48,7 @@ node <技能目录>/scripts/dispatch-queue.mjs --capacity /tmp/t3-dispatch-capac
 - `handoffs[].blocked`：「等你授权」的交接不建线、不占池，原样进报告「需要你决定」；其余写明占用的池或缺什么。
 - `launched[].pending`：工作树还在准备，认领与台账已保留，算派出成功，下一轮巡检核对。
 - `launched[].duplicate`：已有未结线程，题目已移出题库，报告附该线程 link。
-- `launched[].error`：身份核验或查重失败时未认领；主问题认领失败说明已被认领。建线失败或 run 已失败时脚本已归还认领（见 `released`），题目留在题库；代理额度失败按「派活模型」换档，已建线程按 t3-patrol 故障恢复续跑，恢复后对归还的问题重新认领并 `record` 到原线程。建线请求报错且无法确认是否已创建时，先按编号查重。
+- `launched[].error`：身份核验或查重失败时未认领；主问题认领失败说明已被认领。建线失败或 run 已失败时脚本已归还认领（见 `released`），题目留在题库；巡检派活失败按 [巡检故障恢复](../t3-patrol/references/recovery.md#重试) 处理，独立派活按「派活模型」处理；已建线程在原线程续跑，恢复后对归还的问题重新认领并 `record` 到原线程。建线请求报错且无法确认是否已创建时，先按编号查重。
 - `dropped`：来源已关闭、出了 PR、离开准入或加了暂缓，已移出题库；`recheck`：来源有更新，已改回待核等下次补货。
 - `idle`：还有空位但题库没有适配题目；第 2 步没给切片的仓库本轮无题可补。
 

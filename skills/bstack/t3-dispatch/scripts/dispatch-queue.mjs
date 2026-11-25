@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // 出队派活：按快照的实际空位，先建待交接线程，再按题库顺序弹出 ready 题目建线。主代理不挑题，只跑这一条命令。
 //
-// 用法：node dispatch-queue.mjs --capacity <快照> [--model-tier <modelLadder 档位 name>] [--dry-run] [--user]
-// 快照可以是完整快照或 --capacity-only；--model-tier 缺省用 t3-dispatch 配置的 model，交接线程同用此档。
+// 用法：node dispatch-queue.mjs --capacity <快照> [--patrol | --user] [--dry-run]
+// 快照可以是完整快照或 --capacity-only；--patrol 用巡检固定模型，否则用 t3-dispatch 配置的 model。
 // --user 表示用户当面要求派活：跳过 mode 与 PAUSE 闸，perRun 仍封顶。
 // 顺序：
 //   1. 闸：config.mode 为 off、repos 为空或 ~/.config/bstack/PAUSE 存在时不出队；mode 为 dry-run 等同 --dry-run。
@@ -23,7 +23,7 @@ import { ledgerSummary, readLedger, run } from "./issue-source.mjs";
 import { labelPolicy } from "./dispatch-labels.mjs";
 import { applyPatch, readPool, removeIds, stockOf } from "./candidate-pool.mjs";
 import { launchConfigFor, launchOne } from "./dispatch-launch.mjs";
-import { configDir, loadConfig as loadPatrolConfig, loadEnvironments } from "../../t3-patrol/scripts/patrol-config.mjs";
+import { configDir, loadEnvironments, PATROL_MODEL } from "../../t3-patrol/scripts/patrol-config.mjs";
 import { loadState, putHandoff, saveState } from "../../t3-patrol/scripts/patrol-state.mjs";
 import { call, connect, hasSession, NO_SESSION } from "../../t3-patrol/scripts/t3-mcp.mjs";
 
@@ -161,25 +161,22 @@ if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToP
   try {
     const file = opt("capacity");
     if (!file) {
-      console.error("用法：node dispatch-queue.mjs --capacity <快照> [--model-tier <name>] [--dry-run] [--user]");
+      console.error("用法：node dispatch-queue.mjs --capacity <快照> [--patrol | --user] [--dry-run]");
       process.exit(2);
     }
     const { config, errors } = loadConfig();
     if (errors.length) throw new Error(errors.join("；"));
     const user = args.includes("--user");
+    const patrol = args.includes("--patrol");
+    if (patrol && user) throw new Error("--patrol 与 --user 互斥");
+    if (args.includes("--model-tier")) throw new Error("--model-tier 已移除：巡检出队请用 --patrol");
     const gate = user ? null : config.mode === "off" ? "mode 为 off" : !config.repos.length ? "repos 为空" : existsSync(join(configDir(), "PAUSE")) ? "PAUSE 存在" : null;
     if (gate) {
       console.log(JSON.stringify({ skipped: gate }));
       process.exit(0);
     }
     const dryRun = args.includes("--dry-run") || (!user && config.mode === "dry-run");
-    const tier = opt("model-tier");
-    let modelSelection = config.model;
-    if (tier) {
-      const t = loadPatrolConfig().config.modelLadder.find((x) => x.name === tier);
-      if (!t) throw new Error(`modelLadder 里没有档位 ${tier}`);
-      modelSelection = { instanceId: t.instanceId, model: t.model, ...(t.options ? { options: t.options } : {}) };
-    }
+    const modelSelection = patrol ? PATROL_MODEL : config.model;
     const capacity = JSON.parse(readFileSync(file, "utf8"));
     const environments = loadEnvironments().environments;
     const state = loadState();

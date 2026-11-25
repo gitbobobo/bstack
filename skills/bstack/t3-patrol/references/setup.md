@@ -42,7 +42,6 @@ node <t3-patrol 技能目录>/scripts/patrol-snapshot.mjs --self <当前线程 t
 
 先展示默认值，再按组问，用户说「默认」就跳过该组：
 
-- **模型阶梯** `modelLadder`：巡检代回话时依次尝试的 harness 与模型，最后一档标 `fallback`。用户的 harness 或模型不同才需要改，整组替换。
 - **任务池** `capacity`：每台设备有重型 `heavy` 与通用 `general` 两个独立池，只有执行中的线程占位。先列 `t3_project_list` 的项目，请用户指定每个项目归重型还是通用；归属跨设备共用，以完整 `canonicalKey` 写入 `projects`。再问各设备两池名额，未覆盖的沿用 `pools` 默认值。新增项目同样先问归属；未配置项目归通用。
 
   ```json
@@ -64,7 +63,7 @@ node <t3-patrol 技能目录>/scripts/patrol-snapshot.mjs --self <当前线程 t
 ## 4. 写配置并试跑
 
 1. 按 bstack-setup「写配置」规则写 `t3-patrol.json`，然后跑 `node <t3-patrol 技能目录>/scripts/patrol-config.mjs`：退出码 0，`warnings` 与 `environments.warnings` 为空。
-2. 试跑：按 SKILL.md 第 1–3 步走一轮（首轮没有状态记录，是全量），只列 review 的审批表，不跑 run；再跑一次 `dispatch-queue.mjs --dry-run` 出派活计划，一并交给用户过目。用户对某类判定有异议时，回到第 3 步调整对应阈值。
+2. 试跑：按 SKILL.md 第 1–3 步走一轮（首轮没有状态记录，是全量），只列 review 的审批表，不跑 run；再跑一次 `dispatch-queue.mjs --patrol --dry-run` 出派活计划，一并交给用户过目。用户对某类判定有异议时，回到第 3 步调整对应阈值。
 
 ## 5. 定时任务
 

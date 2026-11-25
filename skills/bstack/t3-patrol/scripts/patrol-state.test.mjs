@@ -68,9 +68,10 @@ test("commit 保留交接队列；旧状态兼容，损坏状态报错而非清�
     assert.deepEqual(loadState(env), state);
     const snap = join(dir, "snapshot.json");
     writeFileSync(snap, JSON.stringify({ generatedAt: "2026-11-09T07:00:00Z", triage: { full: false }, environments: [] }));
-    run("commit", "--snapshot", snap, "--tier", "preferred");
+    run("commit", "--snapshot", snap);
     assert.deepEqual(loadState(env).pendingHandoffs, [entry]);
-    assert.equal(loadState(env).lastRound.tier, "preferred");
+    assert.equal(loadState(env).lastRound.snapshotAt, "2026-11-09T07:00:00Z");
+    assert.equal(loadState(env).lastRound.tier, undefined);
     assert.equal(loadState(env).lastRound.handoffQueueVersion, 1);
     writeFileSync(input, JSON.stringify({ ...entry, outcome: "accepted", evidenceRef: "目标调查活动" }));
     run("handoff-resolve", "--file", input);

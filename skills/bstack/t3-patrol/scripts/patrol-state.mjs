@@ -1,12 +1,10 @@
 #!/usr/bin/env node
-// 巡检跨轮状态：上一轮的快照时间、模型档位、额度失败、各环境占用数、待交接队列与线程状态表。
-// 存进文件而不是靠巡检线程的对话记忆：分诊要知道「上一轮以来有没有变化」「设备是否空出了名额」，
-// 档位判定要知道「上一轮有没有额度失败」，这些事实留在上下文里会随线程变长而越来越贵，换新线程就全丢。
+// 巡检跨轮状态：上一轮的快照时间、各环境占用数、待交接队列与线程状态表。
 //
 // 文件：<配置目录>/state/t3-patrol.json（只在本机，state/ 不进配置仓库）。
 // 用法：
 //   node patrol-state.mjs                                                                 输出当前状态
-//   node patrol-state.mjs commit --snapshot <快照> --tier <档位 name> [--quota-failure]   一轮结束时记账
+//   node patrol-state.mjs commit --snapshot <快照>                                      一轮结束时记账
 //   node patrol-state.mjs handoff-put --file <JSON>                                     交接入账/更新
 //   node patrol-state.mjs handoff-resolve --file <JSON>                                 有接手/撤销证据后销账
 // 线程状态表 threads 由 patrol-round finish 按本轮研判写入：上次动作、在等什么、下次复查时间、同一动作连发次数。
@@ -50,11 +48,11 @@ export function recordDecisions(state, decisions, { now = Date.now(), alive = nu
   return threads;
 }
 
-export function commitRound(state, snap, { tier, quotaFailure = false, now = Date.now() }) {
+export function commitRound(state, snap, { now = Date.now() } = {}) {
   const lastFullAt = snap.triage?.full ? snap.generatedAt : (state.lastRound?.lastFullAt ?? null);
   // 各环境占用数：下一轮据此判断设备是否空出了名额，叫醒在等资源的线程。
   const occupancy = Object.fromEntries((snap.environments ?? []).filter((e) => e.capacity).map((e) => [e.environmentId, e.capacity.used]));
-  state.lastRound = { at: new Date(now).toISOString(), snapshotAt: snap.generatedAt, lastFullAt, tier, quotaFailure, occupancy, handoffQueueVersion: 1 };
+  state.lastRound = { at: new Date(now).toISOString(), snapshotAt: snap.generatedAt, lastFullAt, occupancy, handoffQueueVersion: 1 };
   return state.lastRound;
 }
 
@@ -158,12 +156,11 @@ if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToP
     console.log(JSON.stringify({ pendingHandoffs: state.pendingHandoffs }));
   } else if (cmd === "commit") {
     const file = opt("snapshot");
-    const tier = opt("tier");
-    if (!file || !tier) {
-      console.error("用法：node patrol-state.mjs commit --snapshot <快照> --tier <档位 name> [--quota-failure]");
+    if (!file) {
+      console.error("用法：node patrol-state.mjs commit --snapshot <快照>");
       process.exit(2);
     }
-    commitRound(state, JSON.parse(readFileSync(file, "utf8")), { tier, quotaFailure: args.includes("--quota-failure") });
+    commitRound(state, JSON.parse(readFileSync(file, "utf8")));
     saveState(state);
     console.log(JSON.stringify(state.lastRound));
   } else {

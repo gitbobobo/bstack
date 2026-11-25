@@ -1,24 +1,5 @@
 {
   "version": 1,
-  "modelLadder": [
-    {
-      "name": "pi/cliproxyapi/glm-5.3-flash",
-      "instanceId": "pi",
-      "model": "cliproxyapi/glm-5.3-flash",
-      "options": {
-        "thinking": "medium"
-      }
-    },
-    {
-      "name": "pi/cliproxyapi/deepseek-v4.1-flash",
-      "instanceId": "pi",
-      "model": "cliproxyapi/deepseek-v4.1-flash",
-      "options": {
-        "thinking": "medium"
-      },
-      "fallback": true
-    }
-  ],
   "capacity": {
     "pools": { "heavy": 3, "general": 2 },
     "projects": [],

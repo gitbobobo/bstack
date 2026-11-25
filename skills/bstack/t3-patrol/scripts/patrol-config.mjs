@@ -18,6 +18,12 @@ export const CONFIG_FILE = "t3-patrol.json";
 export const ENVIRONMENTS_FILE = "environments.json";
 const OS = ["windows", "macos", "linux"];
 
+export const PATROL_MODEL = Object.freeze({
+  instanceId: "pi",
+  model: "cliproxyapi/deepseek-v4.1-flash",
+  options: Object.freeze({ thinking: "medium" }),
+});
+
 export const configDir = (env = process.env) => env.BSTACK_CONFIG_DIR || join(homedir(), ".config", "bstack");
 
 const kind = (v) => (v === null ? "null" : Array.isArray(v) ? "array" : typeof v);
@@ -41,8 +47,6 @@ export function mergeConfig(defaults, user, path = "", warnings = []) {
   return { config: out, warnings };
 }
 
-const validTier = (t) => kind(t) === "object" && typeof t.instanceId === "string" && typeof t.model === "string";
-
 export function loadConfig({ env = process.env, defaultsPath = DEFAULTS_PATH } = {}) {
   const defaults = JSON.parse(readFileSync(defaultsPath, "utf8"));
   const file = join(configDir(env), CONFIG_FILE);
@@ -57,10 +61,6 @@ export function loadConfig({ env = process.env, defaultsPath = DEFAULTS_PATH } =
     warnings.push(`version：${JSON.stringify(version)} 不是本技能支持的版本（最高 ${defaults.version}），先更新技能`);
   }
   const { config } = mergeConfig(defaults, rest, "", warnings);
-  if (config.modelLadder !== defaults.modelLadder && !(config.modelLadder.length > 0 && config.modelLadder.every(validTier))) {
-    warnings.push("modelLadder：每档须带字符串 instanceId 与 model，且至少一档；沿用默认阶梯");
-    config.modelLadder = defaults.modelLadder;
-  }
   config.capacity = {
     ...config.capacity,
     pools: validatePools(config.capacity.pools, defaults.capacity.pools, warnings),

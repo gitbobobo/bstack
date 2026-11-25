@@ -9,7 +9,7 @@ description: 巡检、定案巡检体系自行派出的未结线程。仅定时�
 
 ## 0. 前提
 
-每轮都是新会话。跨轮事实（上一轮时间与档位、额度失败、各设备占用、待交接队列、线程状态表）在 `~/.config/bstack/state/t3-patrol.json`，由脚本带出；上一轮对某线程说过什么，读该线程里的 `【巡检】` 消息。工具延迟加载的 harness（如 pi）按需用 `tool_search` 搜准确名称。
+每轮都是新会话。跨轮事实（上一轮时间、各设备占用、待交接队列、线程状态表）在 `~/.config/bstack/state/t3-patrol.json`，由脚本带出；上一轮对某线程说过什么，读该线程里的 `【巡检】` 消息。工具延迟加载的 harness（如 pi）按需用 `tool_search` 搜准确名称。
 
 配置取决策包与快照里的生效值；默认值在 [config.defaults.json](references/config.defaults.json)，用户在 `~/.config/bstack/t3-patrol.json` 只写要改的键。配置只读，修改交给用户或 bstack-setup；`schedule` 由 [初始化](references/setup.md) 维护。
 
@@ -35,25 +35,25 @@ node <技能目录>/scripts/patrol-round.mjs start --self <threadId> > /tmp/t3-p
 
 脚本跑完整快照、代挂缺失的 PR 监听、写好研判与补货输入。一次读完决策包：
 
-- `tier`：`suggest` 有值且无 `probe` 就用它；否则按 [故障恢复「模型优先级」](references/recovery.md#模型优先级) 定档，全局判一次。
+- `modelSelection`：本技能固定使用的派活模型。研判、补货、新派及交接都用它；实现线程内部的编排按它自己的技能。
 - `warnings` 写进「例行复核」，`errors` 写进「阻塞」；含「设备对照」的告警按 [快照与补读](references/snapshot.md#设备对照) 重认设备。
 - `environments`：每环境的计数与容量；`unreachable` 与带 `error` 的环境记一笔，本轮跳过。
 - `judge`、`dispatch.refill`：第 2 步要派的子代理。
 
 退出码 2 表示当前 harness 没有向 shell 注入 T3 MCP 会话：本轮只报告阻塞「巡检需在 ACP 类 harness 或 pi 上运行」，harness 由用户切换。
 
-**完成标准**：档位已定并有依据；每个环境的计数已读，告警与错误已归入报告分区。
+**完成标准**：每个环境的计数已读，告警与错误已归入报告分区。
 
 ## 2. 派子代理
 
-子代理用 `delegate_task`（`role:"research"`，`mode:"async"`），模型取本轮档位在 `modelLadder` 中的 `instanceId`/`model`/`options`；派发所需参数都在决策包里，不必读 t3-orchestrator 或 t3-code。同时在跑的子代理不超过决策包的 `maxConcurrent`，并发多了会一齐撞额度：先按 `judge[]` 顺序再按 `dispatch.refill[]` 顺序排队，开局派满上限，每有一个结束就补派队首。某档额度失败就用阶梯下一档重派该任务，重派同样占名额，并且排在队首。
+子代理用 `delegate_task`（`role:"research"`，`mode:"async"`），从决策包的 `modelSelection` 取 `instanceId`/`model`/`options`，其中 `instanceId` 填入 `target.providerInstanceId`。先按 `judge[]` 再按 `dispatch.refill[]` 排队，派到 `maxConcurrent`，每结束一个就补派队首。启动或执行失败按 [故障恢复「重试」](references/recovery.md#重试) 处理；重试也占并发名额。
 
 - 每个 `judge[]` 一个研判子代理，任务书：`巡检研判：按 <技能目录>/references/judge.md 处理 <file>，结果写 <out>。不再派子代理。`
 - 每个带 `brief` 的 `dispatch.refill[]` 一个补货子代理，任务书：`派活补货：按 <t3-dispatch>/references/refill.md 处理 <brief>。不再派子代理。` 带 `skip` 的仓库没有待研判内容，不派，原因原样进报告。
 
-研判子代理全部回来（或到时限）再进第 3 步；其间完成事件唤醒你时，只补派队首或给失败的任务换档重派，不发进度消息。补货子代理不等：它们直接写题库，本轮出队时已入库的题目照常派出；本轮汇报之后它们的完成事件唤醒你时，只回一行入库结果，队列里还没派的补货照样补派。
+研判子代理全部回来（或到时限）再进第 3 步；其间完成事件唤醒你时，只补派队首或重试失败任务，不发进度消息。补货子代理不等：它们直接写题库，本轮出队时已入库的题目照常派出；本轮汇报之后它们的完成事件唤醒你时，只回一行入库结果，队列里还没派的补货照样补派。
 
-**完成标准**：每个批次都有 taskId，补货仓库已派出或在队列里，启动失败的写明原因与已换的档位；任何时刻在跑的子代理不超过 `maxConcurrent`。
+**完成标准**：每个批次都有 taskId、排队记录或失败原因与恢复条件；在跑的子代理不超过 `maxConcurrent`。
 
 ## 3. 审批
 
@@ -77,7 +77,7 @@ node <技能目录>/scripts/patrol-round.mjs review /tmp/t3-patrol/judge-*.out.j
 node <技能目录>/scripts/patrol-round.mjs run
 ```
 
-脚本先写交接入账与销账，再逐条调用并回读：消息等对应 run 启动（最多 2 分钟），改名核标题，settle 核状态。失败的调用按 recovery 归因：额度失败换档后改 `decisions.json` 里对应调用（如先加 `t3_thread_configure`），再跑一次 `run`，它只补跑没成功的调用；仍失败记阻塞与恢复条件。
+脚本先写交接入账与销账，再逐条调用并回读：消息等对应 run 启动（最多 2 分钟），改名核标题，settle 核状态。调用或回读的 run 失败时，按 [故障恢复](references/recovery.md) 归因；有可执行补救时修改 `decisions.json` 的对应调用，将要补跑的 `results[i]` 设为 `null`；再跑一次 `run`，保留其他成功结果。仍失败记阻塞与恢复条件。
 
 | 报告用语 | 必需证据 |
 | --- | --- |
@@ -89,11 +89,11 @@ node <技能目录>/scripts/patrol-round.mjs run
 
 ## 5. 派活
 
-本轮档位是 `fallback` 或 `dispatch.enabled` 为假时不派，在「本轮派活」写明原因。否则取动作后的实际容量出队：
+`dispatch.enabled` 为假，或本轮已证实固定模型的额度未恢复时，暂缓建线并在「本轮派活」写明原因。否则取动作后的实际容量，以 `--patrol` 使用固定模型出队：
 
 ```bash
 node <技能目录>/scripts/patrol-snapshot.mjs --capacity-only > /tmp/t3-patrol/capacity.json
-node <t3-dispatch>/scripts/dispatch-queue.mjs --capacity /tmp/t3-patrol/capacity.json --model-tier <本轮档位 name> > /tmp/t3-patrol/dispatch.json
+node <t3-dispatch>/scripts/dispatch-queue.mjs --capacity /tmp/t3-patrol/capacity.json --patrol > /tmp/t3-patrol/dispatch.json
 ```
 
 脚本先给待交接建线，再按题库顺序弹出题目、复核来源后建线，`mode` 为 `dry-run` 时只出计划。结果按 [t3-dispatch「出队结果」](../t3-dispatch/SKILL.md#出队结果) 处理。`idle` 里的空位是题库暂无适配题目，本轮补货子代理在补或该仓库 `skip`；本轮派出的线程下一轮按候选正常巡检。
@@ -103,10 +103,10 @@ node <t3-dispatch>/scripts/dispatch-queue.mjs --capacity /tmp/t3-patrol/capacity
 ## 6. 记账与汇报
 
 ```bash
-node <技能目录>/scripts/patrol-round.mjs finish --tier <本轮档位 name> [--quota-failure] --dispatch /tmp/t3-patrol/dispatch.json > /tmp/t3-patrol/report.md
+node <技能目录>/scripts/patrol-round.mjs finish --dispatch /tmp/t3-patrol/dispatch.json > /tmp/t3-patrol/report.md
 ```
 
-本轮出现过额度失败（即使已换档恢复）就带 `--quota-failure`；没走第 5 步就省略 `--dispatch`。脚本写线程状态表与本轮记账，输出报告骨架：按环境逐条列研判与回读、静默合并一行、例行复核计数、派活结果、「需要你决定」与「阻塞」。以骨架为底稿回复：
+没走第 5 步就省略 `--dispatch`。脚本写线程状态表与本轮记账，输出报告骨架：按环境逐条列研判与回读、静默合并一行、例行复核计数、派活结果、「需要你决定」与「阻塞」。以骨架为底稿回复：
 
 - 「需要你决定」每条写清所缺输入、选项、默认保持的状态与依据。
 - 「阻塞」每条写证据、已做补救、下一责任方与可观察的恢复条件，仅当恢复确需用户操作才移到「需要你决定」。

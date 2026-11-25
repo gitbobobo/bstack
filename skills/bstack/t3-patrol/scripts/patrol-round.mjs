@@ -10,7 +10,7 @@
 //   node patrol-round.mjs run
 //       执行 decisions.json：交接入账/销账，calls 逐条调用并回读（消息等到对应 run 启动，最多 2 分钟；改名、settle 核状态）。
 //       重跑只补跑没有成功结果的调用，改过失败项的 calls 后再跑一次即可补救。
-//   node patrol-round.mjs finish --tier <档位 name> [--quota-failure] [--dispatch <dispatch-queue 输出>]
+//   node patrol-round.mjs finish [--dispatch <dispatch-queue 输出>]
 //       写线程状态表与本轮记账，stdout 输出报告骨架（Markdown）。
 // 研判结果（每项一条线程）：{ environmentId, threadId, link, title, kind, action, summary, calls?, handoff?, handoffResolve?,
 //   closeout?, waitFor?, recheckMinutes?, needsUser?, blocker? }，格式见 references/judge.md。
@@ -21,30 +21,12 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { call, connect, hasSession, NO_SESSION } from "./t3-mcp.mjs";
 import { isSettle, runCalls, watchAll } from "./patrol-batch.mjs";
+import { PATROL_MODEL } from "./patrol-config.mjs";
 import { commitRound, loadState, putHandoff, recordDecisions, resolveHandoff, saveState, threadKey } from "./patrol-state.mjs";
 
 const SCRIPTS = dirname(fileURLToPath(import.meta.url));
 const DISPATCH = join(SCRIPTS, "..", "..", "t3-dispatch", "scripts");
-const QUOTA = /quota|usage_exhausted|额度|rate.?limit|\b429\b/i;
 const ACTIONS = ["send", "interrupt", "settle", "rename", "handoff", "none", "report"];
-
-// 档位建议只看事实；探测与换档仍按 recovery.md。
-export function tierOf(snap) {
-  const ladder = snap.modelLadder ?? [];
-  const first = ladder[0]?.name ?? null;
-  const failed = (snap.environments ?? []).flatMap((e) => e.failedThreads ?? []).filter((t) => QUOTA.test(JSON.stringify(t.runs ?? t)));
-  if (failed.length) return { suggest: null, reason: `本轮 ${failed.length} 条失败疑似额度耗尽，按 recovery.md 判档`, quotaThreads: failed.map((t) => t.link) };
-  if (snap.lastRound?.quotaFailure) return { suggest: first, reason: "上一轮有额度失败，按 recovery.md 先探测首选档", probe: true };
-  return { suggest: first, reason: "上一轮与本轮均无额度失败" };
-}
-
-// 报告开头的档位依据：本轮出过额度失败时以它为准，否则沿用开局建议。
-export function tierReasonOf(snap, tier, quotaFailure) {
-  const first = snap.modelLadder?.[0]?.name ?? null;
-  if (quotaFailure) return tier === first ? "本轮出现额度失败，失败任务已按阶梯换档重派，首选档保持" : `本轮出现额度失败，按阶梯改用 ${tier}`;
-  const { suggest, reason } = tierOf(snap);
-  return suggest && suggest !== tier ? `${reason}；按 recovery.md 改用 ${tier}` : reason;
-}
 
 // 研判输入：每批同一环境，最多 size 条；有事候选、过滤外失败、静默线程的命名、来源不在候选里的待交接。
 export function judgeBatches(snap, { size = 4 } = {}) {
@@ -89,7 +71,7 @@ export function packOf(snap, { dir, batches, watch = [], dispatch }) {
   if (ef.unlisted?.length || ef.missing?.length) warnings.push(`environments.json 与本轮环境不一致：unlisted ${ef.unlisted?.length ?? 0}，missing ${ef.missing?.length ?? 0}，按 snapshot.md「设备对照」重认`);
   return {
     dir, snapshot: join(dir, "snapshot.json"), generatedAt: snap.generatedAt,
-    triage: snap.triage, lastRound: snap.lastRound, tier: tierOf(snap), modelLadder: snap.modelLadder,
+    triage: snap.triage, lastRound: snap.lastRound, modelSelection: PATROL_MODEL,
     ...(warnings.length ? { warnings } : {}),
     ...([...(snap.config?.errors ?? []), ...(ef.errors ?? [])].length ? { errors: [...(snap.config?.errors ?? []), ...(ef.errors ?? [])] } : {}),
     unreachable: (snap.unreachable ?? []).map((u) => u.alias ?? u.label),
@@ -105,7 +87,7 @@ export function packOf(snap, { dir, batches, watch = [], dispatch }) {
 export function judgeInput(snap, batch, { out }) {
   return {
     generatedAt: snap.generatedAt, lastRound: snap.lastRound,
-    thresholds: snap.config?.thresholds, convergenceAudit: snap.config?.convergenceAudit, modelLadder: snap.modelLadder,
+    thresholds: snap.config?.thresholds, convergenceAudit: snap.config?.convergenceAudit, modelSelection: PATROL_MODEL,
     environment: { alias: batch.alias, environmentId: batch.environmentId },
     items: batch.items, out,
     commands: {
@@ -174,8 +156,8 @@ async function verify(c, result) {
   }
 }
 
-export function reportOf(snap, decisions, { tier, tierReason = tierReasonOf(snap, tier, false), dispatch = null }) {
-  const lines = [`## 巡检 ${snap.generatedAt}`, "", `档位：${tier}（${tierReason}）｜分诊：${snap.triage?.full ? `全量（${snap.triage.reason}）` : "增量"}`];
+export function reportOf(snap, decisions, { dispatch = null } = {}) {
+  const lines = [`## 巡检 ${snap.generatedAt}`, "", `派活模型：${PATROL_MODEL.model}（${PATROL_MODEL.options.thinking}）｜分诊：${snap.triage?.full ? `全量（${snap.triage.reason}）` : "增量"}`];
   for (const e of snap.environments ?? []) {
     lines.push("", `### ${e.alias ?? e.label}`);
     if (e.error) { lines.push(`- 不可读：${e.error}`); continue; }
@@ -295,25 +277,21 @@ if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToP
       }));
       writeFileSync(decisionsFile, `${JSON.stringify(decisions, null, 1)}\n`);
       const rows = decisions.flatMap((d) => (d.results ?? []).map((r) => `${d.title ?? d.threadId}｜${r.tool}｜${r.ok ? r.verified : `失败：${r.error}`}`));
-      const quota = rows.filter((x) => QUOTA.test(x));
-      console.log([...rows, ...(quota.length ? [`疑似额度失败 ${quota.length} 条：finish 带 --quota-failure，按 recovery.md 换档后补救`] : [])].join("\n") || "没有写操作");
+      console.log(rows.join("\n") || "没有写操作");
       process.exitCode = decisions.some((d) => (d.results ?? []).some((r) => !r.ok)) ? 1 : 0;
     } else if (cmd === "finish") {
-      const tier = opt("tier");
-      if (!tier) throw new Error("finish 需要 --tier <档位 name>");
       const snap = readJson(join(dir, "snapshot.json"));
       let decisions = [];
       try { decisions = readJson(decisionsFile); } catch (e) { if (e.code !== "ENOENT") throw e; }
       const state = loadState();
       const alive = new Set((snap.environments ?? []).flatMap((e) => (e.candidates ?? []).map((c) => threadKey(e.environmentId, c.id))));
       recordDecisions(state, decisions, { alive });
-      const quotaFailure = args.includes("--quota-failure");
-      commitRound(state, snap, { tier, quotaFailure });
+      commitRound(state, snap);
       saveState(state);
       const dispatchFile = opt("dispatch");
-      process.stdout.write(reportOf(snap, decisions, { tier, tierReason: tierReasonOf(snap, tier, quotaFailure), dispatch: dispatchFile ? readJson(dispatchFile) : null }));
+      process.stdout.write(reportOf(snap, decisions, { dispatch: dispatchFile ? readJson(dispatchFile) : null }));
     } else {
-      console.error("用法：node patrol-round.mjs start --self <id> | review <judge 输出…> | run | finish --tier <name> [--quota-failure] [--dispatch <文件>]  （均可加 --dir）");
+      console.error("用法：node patrol-round.mjs start --self <id> | review <judge 输出…> | run | finish [--dispatch <文件>]  （均可加 --dir）");
       process.exitCode = 2;
     }
   } catch (e) {

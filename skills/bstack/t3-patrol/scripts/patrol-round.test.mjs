@@ -1,12 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { runCalls } from "./patrol-batch.mjs";
-import { judgeBatches, judgeInput, mergeDecisions, packOf, reportOf, reviewLine, settleGuard, tierOf, tierReasonOf } from "./patrol-round.mjs";
+import { judgeBatches, judgeInput, mergeDecisions, packOf, reportOf, reviewLine, settleGuard } from "./patrol-round.mjs";
 
-const ladder = [{ name: "glm" }, { name: "swe" }, { name: "ds", fallback: true }];
+const modelSelection = { instanceId: "pi", model: "cliproxyapi/deepseek-v4.1-flash", options: { thinking: "medium" } };
 const cand = (id, triage, extra = {}) => ({ id, link: `<${id}>`, title: `T${id}`, triage, triageReasons: [], ...extra });
 const snap = (extra = {}) => ({
-  generatedAt: "2026-11-02T00:00:00Z", modelLadder: ladder, lastRound: null, triage: { full: false, since: "x" },
+  generatedAt: "2026-11-02T00:00:00Z", lastRound: null, triage: { full: false, since: "x" },
   config: { warnings: [], errors: [], thresholds: { silenceMinutes: 60 } },
   environmentsFile: { warnings: [], errors: [], unlisted: [], missing: [] },
   pendingHandoffs: [],
@@ -21,13 +21,14 @@ const snap = (extra = {}) => ({
   ...extra,
 });
 
-test("档位：无额度失败用首选档；上一轮失败先探测；本轮失败交 recovery 判", () => {
-  assert.deepEqual([tierOf(snap()).suggest, tierOf(snap()).probe], ["glm", undefined]);
-  assert.equal(tierOf(snap({ lastRound: { quotaFailure: true } })).probe, true);
-  const s = snap();
+test("本轮及上轮额度失败不改变决策包或研判输入的固定模型", () => {
+  const s = snap({ lastRound: { quotaFailure: true } });
   s.environments[0].failedThreads[0].runs[0].error = "model_usage_exhausted";
-  assert.equal(tierOf(s).suggest, null);
-  assert.deepEqual(tierOf(s).quotaThreads, ["<9>"]);
+  const batches = judgeBatches(s);
+  const pack = packOf(s, { dir: "/d", batches });
+  assert.deepEqual(pack.modelSelection, modelSelection);
+  assert.equal(pack.tier, undefined);
+  assert.deepEqual(judgeInput(s, batches[0], { out: "/o.json" }).modelSelection, modelSelection);
 });
 
 test("研判分批：有事、静默线程的命名、过滤外失败、孤立待交接都进批次，按环境与批量切分", () => {
@@ -72,14 +73,14 @@ test("报告骨架：按环境列研判与回读、静默合一行、派活结�
     { environmentId: "e1", threadId: "4", link: "<4>", title: "T4", kind: "decision", action: "report", summary: "等产品取舍", needsUser: "选 A 或 B" },
     { environmentId: "e1", threadId: "5", link: "<5>", title: "T5", kind: "stall", action: "send", summary: "推进", results: [{ ok: false, error: "quota" }] },
   ];
-  const md = reportOf(snap(), decisions, { tier: "glm", dispatch: { launched: [{ ref: "INT-1", device: "pc", link: "<n>" }], idle: [{ device: "pc", pool: "heavy", free: 1 }] } });
+  const md = reportOf(snap(), decisions, { dispatch: { launched: [{ ref: "INT-1", device: "pc", link: "<n>" }], idle: [{ device: "pc", pool: "heavy", free: 1 }] } });
   assert.match(md, /- <1> T1：已收敛，推收尾｜running/);
   assert.match(md, /静默 2 个：T2、T3/);
   assert.match(md, /INT-1 → pc：<n>/);
   assert.match(md, /空位 pc\/heavy 余 1/);
   assert.match(md, /### 需要你决定\n- <4>：选 A 或 B/);
   assert.match(md, /### 阻塞\n- <5>：quota/);
-  assert.match(md, /档位：glm（上一轮与本轮均无额度失败）/, "档位依据不留占位");
+  assert.match(md, /派活模型：cliproxyapi\/deepseek-v4\.1-flash（medium）/);
 });
 
 test("#417：待发消息展示收结措辞；提示词已交付但下一段未接手时拦截 settle", () => {
@@ -106,10 +107,4 @@ test("旧版批处理入口不能绕过结案校验", async () => {
   const [result] = await runCalls([{ tool: "t3_thread_organize", args: { threadId: "417", action: "settle" } }]);
   assert.equal(result.ok, false);
   assert.match(result.error, /结案校验/);
-});
-
-test("档位依据：本轮额度失败优先，其次开局建议与实际档位的差异", () => {
-  assert.match(tierReasonOf(snap(), "glm", true), /换档重派，首选档保持/);
-  assert.match(tierReasonOf(snap(), "swe", true), /改用 swe/);
-  assert.match(tierReasonOf(snap(), "swe", false), /无额度失败；按 recovery.md 改用 swe/);
 });
