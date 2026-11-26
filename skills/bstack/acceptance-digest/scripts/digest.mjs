@@ -1,9 +1,9 @@
 #!/usr/bin/env node
-// 验收清单：收集各仓库近 N 小时合并的 PR，按模型的验收判定逐项目渲染网页并上传 HTML Preview。
+// 验收清单：收集各仓库近 N 小时合并的 PR，按模型的验收判定生成一份跨项目总览并上传 HTML Preview。
 //
 // 用法：
 //   node digest.mjs collect [--hours 24] [--repo <canonicalKey>]...   → <dir>/prs.json，stdout 输出各仓库计数
-//   node digest.mjs publish <verdicts.json> [--dry-run]                → <dir>/<项目>.html，上传后 stdout 输出报告
+//   node digest.mjs publish <verdicts.json> [--dry-run]                → <dir>/acceptance.html，stdout 输出总览与各仓库状态
 // 仓库缺省取 t3-dispatch 的 repos 与 t3-patrol 的 capacity.projects 之并集（同属 bstack，安装时同级排布）。
 // 产物目录缺省 /tmp/acceptance-digest，ACCEPTANCE_DIGEST_DIR 可改。
 
@@ -145,10 +145,12 @@ async function collect({ hours, repos }) {
 // 每个合并的 PR 必须且只能落进 accept 或 skip 之一；accept 项须有可执行的验收步骤。
 export function validateVerdicts(collected, verdicts) {
   const errors = [];
-  const pages = [];
+  const projects = [];
   const given = verdicts?.projects ?? {};
   for (const k of Object.keys(given)) if (!collected.repos.some((r) => r.repo === k)) errors.push(`${k}：不在 prs.json 里`);
   for (const r of collected.repos) {
+    const accept = [], skip = [];
+    projects.push({ repo: r.repo, name: parseRepoKey(r.repo).name, web: r.web, accept, skip, error: r.error });
     if (!r.prs.length) continue;
     const v = given[r.repo];
     if (!v) {
@@ -157,8 +159,6 @@ export function validateVerdicts(collected, verdicts) {
     }
     const byNum = new Map(r.prs.map((p) => [p.num, p]));
     const seen = new Map();
-    const accept = [];
-    const skip = [];
     for (const [kind, list] of [["accept", v.accept ?? []], ["skip", v.skip ?? []]]) {
       for (const item of list) {
         const pr = byNum.get(item.num);
@@ -198,9 +198,8 @@ export function validateVerdicts(collected, verdicts) {
     }
     for (const p of r.prs) if (!seen.has(p.num)) errors.push(`${r.repo}#${p.num}：未判定`);
     accept.sort((a, b) => (a.risk === b.risk ? 0 : a.risk === "high" ? -1 : 1));
-    if (accept.length) pages.push({ repo: r.repo, name: parseRepoKey(r.repo).name, web: r.web, since: collected.since, until: collected.until, accept, skip });
   }
-  return { errors, pages };
+  return { errors, projects };
 }
 
 export const renderPage = (template, data) => template.replace("/*DATA*/null", () => JSON.stringify(data).replace(/</g, "\\u003c"));
@@ -232,29 +231,35 @@ const day = (iso) => new Date(iso).toLocaleDateString("sv-SE", { timeZone: Intl.
 async function publish(verdictsPath, { dryRun }) {
   const dir = outDir();
   const collected = JSON.parse(readFileSync(join(dir, "prs.json"), "utf8"));
-  const { errors, pages } = validateVerdicts(collected, JSON.parse(readFileSync(verdictsPath, "utf8")));
+  const { errors, projects } = validateVerdicts(collected, JSON.parse(readFileSync(verdictsPath, "utf8")));
   if (errors.length) {
     console.error(`判定不完整，未生成网页：\n- ${errors.join("\n- ")}`);
     return 1;
   }
-  const conf = dryRun ? null : previewConfig();
-  if (!dryRun && !conf) {
-    console.error("缺 ~/.config/html-preview/config.yaml：按 html-preview 技能的首次使用流程配置后重跑");
-    return 2;
-  }
-  const template = readFileSync(TEMPLATE_PATH, "utf8");
-  const lines = [`验收窗口 ${collected.since} → ${collected.until}`];
-  for (const page of pages) {
-    const html = renderPage(template, { ...page, generatedAt: new Date().toISOString() });
-    const file = join(dir, `${page.name}.html`);
+  const { since, until } = collected;
+  const isHigh = (pr) => pr.risk === "high";
+  const pending = projects.flatMap((p) => p.accept);
+  const lines = [`验收窗口 ${since} → ${until}`];
+  if (pending.length) {
+    const conf = dryRun ? null : previewConfig();
+    if (!dryRun && !conf) {
+      console.error("缺 ~/.config/html-preview/config.yaml：按 html-preview 技能的首次使用流程配置后重跑");
+      return 2;
+    }
+    const html = renderPage(readFileSync(TEMPLATE_PATH, "utf8"), { since, until, projects, generatedAt: new Date().toISOString() });
+    const file = join(dir, "acceptance.html");
     writeFileSync(file, html);
-    const high = page.accept.filter((a) => a.risk === "high").length;
-    const url = dryRun ? file : await upload(conf, html, { title: `验收 · ${page.name} · ${day(collected.until)}`, notes: `${page.repo}：${page.accept.length} 个 PR 待验收${high ? `（${high} 个高风险）` : ""}` });
-    lines.push(`- ${page.name}：${page.accept.length} 个待验收${high ? `，${high} 个高风险` : ""}，免验收 ${page.skip.length} 个 → ${url}`);
+    const high = pending.filter(isHigh).length;
+    const notes = `${projects.filter((p) => p.accept.length).length} 个项目，${pending.length} 个 PR 待验收，${high} 个高风险`;
+    const url = dryRun ? file : await upload(conf, html, { title: `验收总览 · ${day(until)}`, notes });
+    lines.push(`验收总览：${notes} → ${url}`);
   }
-  for (const r of collected.repos) {
-    if (r.error) lines.push(`- ${parseRepoKey(r.repo).name}：取数失败（${r.error}）`);
-    else if (!pages.some((p) => p.repo === r.repo)) lines.push(`- ${parseRepoKey(r.repo).name}：${r.prs.length ? `${r.prs.length} 个合并均免验收` : "窗口内无合并"}`);
+  for (const { name, accept, skip, error } of projects) {
+    const high = accept.filter(isHigh).length;
+    const status = error ? `取数失败（${error}）`
+      : accept.length ? `${accept.length} 个待验收${high ? `，${high} 个高风险` : ""}，免验收 ${skip.length} 个`
+      : skip.length ? `${skip.length} 个合并均免验收` : "窗口内无合并";
+    lines.push(`- ${name}：${status}`);
   }
   console.log(lines.join("\n"));
   return 0;

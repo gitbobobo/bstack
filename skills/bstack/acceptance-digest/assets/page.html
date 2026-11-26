@@ -15,39 +15,77 @@
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--paper); color: var(--ink); font: 16px/1.65 "PingFang SC", "Noto Sans SC", system-ui, sans-serif; }
-  main { max-width: 860px; margin: 0 auto; padding: 48px 20px 96px; }
-  header { border-bottom: 2px solid var(--ink); padding-bottom: 20px; margin-bottom: 28px; }
-  .kicker { font: 600 12px/1 var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--muted); }
-  h1 { font-size: clamp(30px, 6vw, 46px); line-height: 1.1; margin: 10px 0 12px; letter-spacing: -.01em; }
-  h1 a { color: inherit; text-decoration: none; }
+  .layout { display: grid; grid-template-columns: clamp(240px, 28vw, 360px) minmax(0, 1fr); align-items: start; }
+  main { width: 100%; max-width: 980px; min-width: 0; margin-inline: auto; padding: 44px clamp(20px, 4vw, 56px) 96px; }
+  .directory { position: sticky; top: 0; z-index: 1; height: 100dvh; margin: 0; padding: 0; border: 0; border-inline-end: 1px solid var(--rule); background: var(--card); }
+  .directory summary { color: var(--ink); font: inherit; font-size: 14px; font-weight: 700; line-height: 1.4; letter-spacing: 0; overflow-wrap: anywhere; }
+  .directory > summary { padding: 17px 16px; border-bottom: 1px solid var(--rule); }
+  .directory-count { margin-inline-start: .6em; color: var(--muted); font: 12px/1.4 var(--mono); }
+  .directory-nav { display: flex; flex-direction: column; max-height: calc(100dvh - 55px); overflow-y: auto; overscroll-behavior-y: contain; scrollbar-width: thin; }
+  .directory-group { flex: 0 0 auto; margin: 0; padding: 0; border: 0; }
+  .directory-group[open] { flex-shrink: 1; min-height: min(140px, 23dvh); overflow-y: auto; scrollbar-width: thin; }
+  .directory-group + .directory-group { border-top: 1px solid var(--rule); }
+  .directory-group > summary { position: sticky; top: 0; z-index: 1; padding: 9px 16px; background: var(--paper); border-bottom: 1px solid var(--rule); }
+  .directory-repo { display: block; margin-inline-start: 1em; color: var(--muted); font: 12px/1.4 var(--mono); }
+  .directory-list { padding: 0 8px; list-style: none; margin: 0; }
+  .directory-list li + li { border-top: 1px solid var(--rule); }
+  .directory-link { display: block; padding: 9px 8px; border-inline-start: 3px solid transparent; color: inherit; text-decoration: none; }
+  .directory-link:hover, .directory-link[aria-current] { background: var(--paper); border-inline-start-color: var(--accent); }
+  .directory :focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .directory-meta { display: flex; align-items: baseline; flex-wrap: wrap; gap: 2px 8px; color: var(--muted); font-size: 12px; }
+  .directory-meta b { color: var(--accent); font: 600 12px/1.4 var(--mono); }
+  .directory-risk { color: var(--high); }
+  .directory-status { margin-inline-start: auto; }
+  .directory-status.complete { color: var(--accent); }
+  .directory-title { display: block; margin-top: 4px; font-size: 14px; line-height: 1.45; overflow-wrap: anywhere; }
+  @media (max-width: 720px) {
+    .layout { grid-template-columns: minmax(0, 1fr); }
+    main { padding: 20px 12px 64px; }
+    .directory { height: auto; border-inline-end: 0; }
+    .directory-nav { max-height: 55dvh; }
+  }
+  .overview { border-bottom: 2px solid var(--ink); padding-bottom: 20px; margin-bottom: 28px; }
+  h1 { font-size: clamp(30px, 6vw, 46px); line-height: 1.1; margin: 0 0 12px; letter-spacing: -.01em; }
+  .project + .project { margin-top: 36px; }
+  .project > header { margin-bottom: 12px; }
+  .project h2 { margin: 0; font-size: 24px; }
+  .project h2 a { color: inherit; text-decoration: none; overflow-wrap: anywhere; }
+  .project h2 a:hover { text-decoration: underline; }
+  .project .meta { overflow-wrap: anywhere; }
   .meta { color: var(--muted); font-size: 14px; display: flex; flex-wrap: wrap; gap: 6px 18px; }
   .tally { margin-top: 18px; display: flex; gap: 10px; flex-wrap: wrap; }
   .tally span { font: 600 13px/1 var(--mono); padding: 8px 10px; border: 1px solid var(--rule); border-radius: 4px; background: var(--card); }
   .tally .h { color: var(--high); border-color: currentColor; }
   .bar { height: 4px; background: var(--rule); margin-top: 18px; border-radius: 2px; overflow: hidden; }
   .bar i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .3s; }
-  article { background: var(--card); border: 1px solid var(--rule); border-radius: 6px; padding: 22px 24px; margin-bottom: 18px; position: relative; }
+  article { background: var(--card); border: 1px solid var(--rule); border-radius: 6px; padding: 22px 24px; margin-bottom: 18px; position: relative; scroll-margin-top: 20px; overflow-wrap: anywhere; }
+  article:target { outline: 2px solid var(--accent); outline-offset: 2px; }
+  @media (max-width: 720px) { article { scroll-margin-top: 72px; } }
   article.high { border-left: 4px solid var(--high); }
   article.done { opacity: .6; }
-  article.done h2 { text-decoration: line-through; text-decoration-color: var(--done); }
+  article.done h3 { text-decoration: line-through; text-decoration-color: var(--done); }
   .row { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
   .num { font: 600 14px/1 var(--mono); color: var(--accent); text-decoration: none; }
   .tag { font: 600 11px/1 var(--mono); padding: 4px 6px; border-radius: 3px; background: var(--high); color: var(--card); letter-spacing: .06em; }
-  h2 { font-size: 20px; line-height: 1.35; margin: 8px 0 4px; }
+  h3 { font-size: 20px; line-height: 1.35; margin: 8px 0 4px; }
   .sub { color: var(--muted); font: 12px/1.4 var(--mono); }
   .label { font: 600 12px/1 var(--mono); color: var(--muted); letter-spacing: .1em; margin: 18px 0 6px; }
   p { margin: 0; }
-  ol { list-style: none; padding: 0; margin: 0; counter-reset: s; }
-  li { counter-increment: s; border-top: 1px dashed var(--rule); }
-  li:first-child { border-top: 0; }
-  li label { display: grid; grid-template-columns: 22px 1.6em 1fr; gap: 6px; padding: 9px 0; cursor: pointer; align-items: start; }
-  li label::before { content: counter(s) "."; grid-column: 2; grid-row: 1; font: 600 14px/1.65 var(--mono); color: var(--muted); }
-  li input { grid-column: 1; grid-row: 1; margin: 5px 0 0; accent-color: var(--accent); width: 16px; height: 16px; }
-  li span { grid-column: 3; grid-row: 1; }
-  li input:checked ~ span { color: var(--done); text-decoration: line-through; }
+  .steps { list-style: none; padding: 0; margin: 0; counter-reset: s; }
+  .steps li { counter-increment: s; }
+  .steps li + li { border-top: 1px dashed var(--rule); }
+  .steps label { display: grid; grid-template-columns: 22px 1.6em minmax(0, 1fr); gap: 6px; padding: 9px 0; cursor: pointer; align-items: start; }
+  .steps label::before { content: counter(s) "."; grid-column: 2; grid-row: 1; font: 600 14px/1.65 var(--mono); color: var(--muted); }
+  .steps input { grid-column: 1; grid-row: 1; margin: 5px 0 0; accent-color: var(--accent); width: 16px; height: 16px; }
+  .steps span { grid-column: 3; grid-row: 1; }
+  .steps input:checked ~ span { color: var(--done); text-decoration: line-through; }
   .evidence { font-size: 14px; color: var(--muted); border-left: 2px solid var(--rule); padding-left: 12px; white-space: pre-wrap; }
-  details { margin-top: 36px; border-top: 1px solid var(--rule); padding-top: 16px; }
+  .skip-details { border-top: 1px solid var(--rule); padding-top: 12px; }
   summary { cursor: pointer; color: var(--muted); font: 600 13px/1.4 var(--mono); letter-spacing: .06em; }
+  .other { margin-top: 36px; }
+  .other > h2 { font-size: 18px; }
+  .other-project { border-top: 1px solid var(--rule); padding-block: 8px; color: var(--muted); font-size: 14px; overflow-wrap: anywhere; }
+  .other-project b { color: var(--ink); }
   .skip { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; margin-top: 14px; font-size: 14px; }
   .skip a { font-family: var(--mono); color: var(--accent); text-decoration: none; }
   .skip div { color: var(--muted); }
@@ -56,7 +94,7 @@
 </style>
 </head>
 <body>
-<main id="app"></main>
+<div class="layout"><main id="app"></main></div>
 <script id="data" type="application/json">/*DATA*/null</script>
 <script>
   const data = JSON.parse(document.getElementById("data").textContent);
@@ -68,39 +106,56 @@
     return n;
   };
   const fmt = (iso) => new Date(iso).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
-  const store = `acceptance:${data.repo}:${data.until}`;
-  const state = JSON.parse(localStorage.getItem(store) || "{}");
-  const save = () => localStorage.setItem(store, JSON.stringify(state));
-  document.title = `验收 · ${data.name}`;
-
-  const high = data.accept.filter((a) => a.risk === "high").length;
+  const active = data.projects.filter((p) => p.accept.length);
+  const pending = active.flatMap((p) => p.accept);
+  const high = pending.filter((a) => a.risk === "high").length;
+  const skipCount = data.projects.reduce((n, p) => n + p.skip.length, 0);
+  document.title = `验收总览 · ${fmt(data.until)}`;
   const fill = el("i");
+  const directoryCount = el("span", { class: "directory-count" });
+  const nav = el("nav", { class: "directory-nav", "aria-label": "验收目录" });
+  const directory = el("details", { class: "directory" }, el("summary", {}, "验收目录", directoryCount), nav);
+  const narrow = matchMedia("(max-width: 720px)");
+  const setDirectoryMode = () => { directory.open = !narrow.matches; };
+  setDirectoryMode();
+  narrow.addEventListener("change", setDirectoryMode);
+  app.before(directory);
   app.append(
-    el("header", {},
-      el("div", { class: "kicker" }, "人工验收清单"),
-      el("h1", {}, el("a", { href: data.web, target: "_blank", rel: "noopener" }, data.name)),
-      el("div", { class: "meta" }, el("span", {}, data.repo), el("span", {}, `合并于 ${fmt(data.since)} — ${fmt(data.until)}`)),
+    el("header", { class: "overview" },
+      el("h1", {}, "验收总览"),
+      el("div", { class: "meta" }, el("span", {}, `合并于 ${fmt(data.since)} — ${fmt(data.until)}`)),
       el("div", { class: "tally" },
-        el("span", {}, `${data.accept.length} 待验收`),
+        el("span", {}, `${active.length} 个项目`),
+        el("span", {}, `${pending.length} 项需验收`),
         high ? el("span", { class: "h" }, `${high} 高风险`) : null,
-        el("span", {}, `${data.skip.length} 免验收`)),
+        el("span", {}, `${skipCount} 免验收`)),
       el("div", { class: "bar" }, fill)),
   );
 
-  const cards = [];
+  const groups = [];
   const refresh = () => {
-    let total = 0, done = 0;
-    for (const { card, boxes } of cards) {
-      const n = boxes.filter((b) => b.checked).length;
-      total += boxes.length; done += n;
-      card.classList.toggle("done", n === boxes.length);
+    let total = 0, done = 0, complete = 0;
+    for (const { count, items } of groups) {
+      let groupDone = 0;
+      for (const { card, boxes, status } of items) {
+        const n = boxes.filter((b) => b.checked).length;
+        const finished = n === boxes.length;
+        total += boxes.length; done += n;
+        if (finished) groupDone++;
+        card.classList.toggle("done", finished);
+        status.classList.toggle("complete", finished);
+        status.textContent = `${finished ? "已验收" : n ? "验收中" : "未验收"} ${n}/${boxes.length}`;
+      }
+      count.textContent = `已验收 ${groupDone}/${items.length}`;
+      complete += groupDone;
     }
+    directoryCount.textContent = `已验收 ${complete}/${pending.length}`;
     fill.style.width = total ? `${(done / total) * 100}%` : "0";
   };
 
-  for (const pr of data.accept) {
+  function renderPr(pr, project, state, save) {
     const boxes = [];
-    const steps = el("ol");
+    const steps = el("ol", { class: "steps" });
     pr.checks.forEach((text, i) => {
       const id = `${pr.num}.${i}`;
       const box = el("input", { type: "checkbox" });
@@ -109,28 +164,90 @@
       boxes.push(box);
       steps.append(el("li", {}, el("label", {}, box, el("span", {}, text))));
     });
-    const card = el("article", { class: pr.risk === "high" ? "high" : "" },
+    const anchor = `pr-${project.repo}/${pr.num}`;
+    const card = el("article", { id: anchor, tabindex: "-1", class: pr.risk === "high" ? "high" : "" },
       el("div", { class: "row" },
         el("a", { class: "num", href: pr.url, target: "_blank", rel: "noopener" }, `#${pr.num}`),
         pr.risk === "high" ? el("span", { class: "tag" }, "高风险") : null),
-      el("h2", {}, pr.title),
+      el("h3", {}, pr.title),
       el("div", { class: "sub" }, [pr.author && `@${pr.author}`, `合并 ${fmt(pr.mergedAt)}`, pr.additions != null && `+${pr.additions}/-${pr.deletions}`, pr.changedFiles != null && `${pr.changedFiles} 个文件`].filter(Boolean).join(" · ")),
       el("div", { class: "label" }, "改了什么"), el("p", {}, pr.summary),
       el("div", { class: "label" }, "为什么要你看"), el("p", {}, pr.why),
       el("div", { class: "label" }, "验收步骤"), steps,
       pr.evidence ? el("div", { class: "label" }, "已有证据") : null,
       pr.evidence ? el("p", { class: "evidence" }, pr.evidence) : null);
-    cards.push({ card, boxes });
-    app.append(card);
+    const status = el("span", { class: "directory-status" });
+    const link = el("a", { class: "directory-link", href: `#${encodeURIComponent(anchor)}` },
+      el("span", { class: "directory-meta" }, el("b", {}, `#${pr.num}`),
+        pr.risk === "high" ? el("span", { class: "directory-risk" }, "高风险") : null, status),
+      el("span", { class: "directory-title" }, pr.title));
+    link.addEventListener("click", (event) => {
+      if (narrow.matches && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey) directory.open = false;
+    });
+    return { card, boxes, status, link };
   }
 
-  if (data.skip.length) {
+  function skippedItems(skip) {
     const list = el("div", { class: "skip" });
-    for (const s of data.skip) list.append(el("a", { href: s.url, target: "_blank", rel: "noopener" }, `#${s.num}`), el("div", {}, el("b", {}, s.title), ` — ${s.reason}`));
-    app.append(el("details", {}, el("summary", {}, `免验收的 ${data.skip.length} 个合并`), list));
+    for (const s of skip) list.append(el("a", { href: s.url, target: "_blank", rel: "noopener" }, `#${s.num}`), el("div", {}, el("b", {}, s.title), ` — ${s.reason}`));
+    return list;
+  }
+
+  for (const project of active) {
+    const count = el("span", { class: "directory-count" });
+    const directoryList = el("ul", { class: "directory-list", role: "list" });
+    const sameName = active.some((p) => p !== project && p.name === project.name);
+    const group = el("details", { class: "directory-group", name: "acceptance-project" },
+      el("summary", {}, project.name, count, sameName ? el("span", { class: "directory-repo" }, project.repo) : null),
+      directoryList);
+    group.open = groups.length === 0;
+    nav.append(group);
+    const section = el("section", { class: "project" }, el("header", {},
+      el("h2", {}, el("a", { href: project.web, target: "_blank", rel: "noopener" }, project.name)),
+      el("div", { class: "meta" }, project.repo)));
+    app.append(section);
+
+    // 沿用单项目报告的存储键；同号 PR 在不同仓库互不影响。
+    const store = `acceptance:${project.repo}:${data.until}`;
+    const state = JSON.parse(localStorage.getItem(store) || "{}");
+    const save = () => localStorage.setItem(store, JSON.stringify(state));
+    const items = project.accept.map((pr) => renderPr(pr, project, state, save));
+    for (const { card, link } of items) {
+      directoryList.append(el("li", {}, link));
+      section.append(card);
+    }
+    groups.push({ group, count, items });
+    if (project.skip.length) section.append(el("details", { class: "skip-details" },
+      el("summary", {}, `免验收的 ${project.skip.length} 个合并`), skippedItems(project.skip)));
+  }
+  const other = data.projects.filter((p) => !p.accept.length);
+  if (other.length) {
+    const section = el("section", { class: "other" }, el("h2", {}, "其他仓库"));
+    for (const { repo, skip, error } of other) {
+      const title = el("b", {}, repo);
+      section.append(skip.length
+        ? el("details", { class: "other-project" }, el("summary", {}, title, ` — ${skip.length} 个合并均免验收`), skippedItems(skip))
+        : el("p", { class: "other-project" }, title, error ? ` — 取数失败（${error}）` : " — 窗口内无合并"));
+    }
+    app.append(section);
   }
   app.append(el("footer", {}, `生成于 ${fmt(data.generatedAt)} · 勾选进度只存在本浏览器`));
+  const highlightJump = () => {
+    let target;
+    for (const { group, items } of groups) {
+      for (const { card, link } of items) {
+        if (location.hash === link.hash) {
+          link.setAttribute("aria-current", "location");
+          group.open = true;
+          target = card;
+        } else link.removeAttribute("aria-current");
+      }
+    }
+    return target;
+  };
+  addEventListener("hashchange", highlightJump);
   refresh();
+  highlightJump()?.scrollIntoView();
 </script>
 </body>
 </html>

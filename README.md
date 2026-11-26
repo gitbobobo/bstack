@@ -42,7 +42,7 @@ T3 Code 多 harness 编排：从实现/顾问两类固定档位的模型池选 h
 
 ### acceptance-digest
 
-巡检的对立面：从近 24 小时各项目合并的 PR 中挑出需要用户亲自验收的（小修小改不打扰），按项目用网页模板生成验收清单并经 html-preview 上传。[SKILL.md](skills/bstack/acceptance-digest/SKILL.md)
+从近 24 小时各项目合并的 PR 中挑出需要用户亲自验收的，合并发布一份验收总览，侧边栏按项目分组显示进度并支持快捷跳转。[SKILL.md](skills/bstack/acceptance-digest/SKILL.md)
 
 ## 通用技能
 
