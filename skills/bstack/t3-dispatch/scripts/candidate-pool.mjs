@@ -30,6 +30,7 @@ export function validateCandidate(e) {
   if (!date(e.checkedAt)) throw new Error("checkedAt 须为日期");
   if (e.issueUpdatedAt !== null && !date(e.issueUpdatedAt)) throw new Error("issueUpdatedAt 须为日期或 null（未知时强制重核）");
   for (const k of ["devices", "evidenceRefs"]) if (!Array.isArray(e[k]) || !e[k].length || !e[k].every(text)) throw new Error(`${k} 须为非空字符串数组`);
+  if (e.deviceExclusions !== undefined && (!object(e.deviceExclusions) || Object.entries(e.deviceExclusions).some(([alias, reason]) => !text(alias) || !text(reason) || e.devices.includes(alias)))) throw new Error("deviceExclusions 须为未列入 devices 的设备别名与排除依据");
   if (e.mergeIds !== undefined && !(Array.isArray(e.mergeIds) && e.mergeIds.every(text))) throw new Error("mergeIds 须为问题 ID 数组");
   if (e.threadTitle !== undefined && !text(e.threadTitle)) throw new Error("threadTitle 须为非空字符串");
   if (e.source === null) {
@@ -64,11 +65,13 @@ export const stockOf = (entries, { now = Date.now(), maxAgeHours = 72 } = {}) =>
 
 // 各仓库库存与缺口：目标 = multiplier × 仓库可派设备上所属池的名额之和。同池多仓库各自计目标，宁可多备不漏备。
 // envs 取快照 environments（含 projects 与 capacity.pools/poolByRepo），environments 是 environments.json 别名表。
-export function refillStatus({ repos, pool, envs, environments = {}, multiplier = 3, maxAgeHours = 72, now = Date.now() }) {
+export function refillStatus({ repos, pool, envs, environments = {}, activeIds = new Set(), multiplier = 3, maxAgeHours = 72, now = Date.now() }) {
   const aliasOf = new Map(Object.entries(environments).map(([alias, e]) => [e.environmentId, alias]));
   return repos.map((r) => {
     const allowed = r.devices?.length ? new Set(r.devices.map((d) => environments[d]?.environmentId).filter(Boolean)) : null;
+    const stock = stockOf(pool?.repos?.[r.repo], { now, maxAgeHours }).filter((e) => !activeIds.has(e.id));
     const devices = [];
+    const slots = new Map();
     const unknown = [];
     let capacity = 0;
     let poolName = null;
@@ -76,19 +79,27 @@ export function refillStatus({ repos, pool, envs, environments = {}, multiplier 
       if (allowed && !allowed.has(e.environmentId)) continue;
       const project = (e.projects ?? []).find((p) => p.canonicalKey?.toLowerCase() === r.repo);
       if (!project) continue;
-      const alias = aliasOf.get(e.environmentId) ?? e.label ?? e.environmentId;
+      const alias = aliasOf.get(e.environmentId) ?? e.alias ?? e.label ?? e.environmentId;
       if (e.error || !e.capacity?.pools) {
         unknown.push(alias);
         continue;
       }
       poolName = e.capacity.poolByRepo?.[project.canonicalKey] ?? "general";
-      capacity += e.capacity.pools.find((p) => p.name === poolName)?.max ?? 0;
+      const slot = e.capacity.pools.find((p) => p.name === poolName);
+      capacity += slot?.max ?? 0;
       devices.push(alias);
+      const free = e.capacity.freeByRepo?.[project.canonicalKey] ?? slot?.free ?? 0;
+      slots.set(alias, { device: alias, pool: poolName, free, stock: 0 });
     }
-    const entries = pool?.repos?.[r.repo] ?? [];
-    const stock = stockOf(entries, { now, maxAgeHours }).length;
+    // 预估本仓库覆盖：按出队顺序和设备偏好，一题只覆盖一席，不预留跨仓库共享容量。
+    for (const entry of stock) {
+      const alias = entry.devices.find((d) => slots.has(d) && slots.get(d).free > slots.get(d).stock);
+      if (alias) slots.get(alias).stock++;
+    }
+    const deviceGaps = [...slots.values()].filter((s) => s.free > s.stock).map((s) => ({ ...s, need: s.free - s.stock }));
+    const usable = stock.filter((x) => x.devices.some((alias) => slots.has(alias))).length;
     const target = Math.min(MAX_PER_REPO, multiplier * capacity);
-    return { repo: r.repo, pool: poolName, devices, ...(unknown.length ? { unknownDevices: unknown } : {}), capacity, target, stock, deficit: Math.max(0, target - stock) };
+    return { repo: r.repo, pool: poolName, devices, deviceGaps, maxAgeHours, ...(unknown.length ? { unknownDevices: unknown } : {}), capacity, target, stock: usable, deficit: Math.max(0, target - usable) };
   });
 }
 

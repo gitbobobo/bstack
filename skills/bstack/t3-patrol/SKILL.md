@@ -96,9 +96,9 @@ node <技能目录>/scripts/patrol-snapshot.mjs --capacity-only > /tmp/t3-patrol
 node <t3-dispatch>/scripts/dispatch-queue.mjs --capacity /tmp/t3-patrol/capacity.json --patrol > /tmp/t3-patrol/dispatch.json
 ```
 
-脚本先给待交接建线，再按题库顺序弹出题目、复核来源后建线，`mode` 为 `dry-run` 时只出计划。结果按 [t3-dispatch「出队结果」](../t3-dispatch/SKILL.md#出队结果) 处理。`idle` 里的空位是题库暂无适配题目，本轮补货子代理在补或该仓库 `skip`；本轮派出的线程下一轮按候选正常巡检。
+脚本先给待交接建线，再按题库顺序弹出题目、复核来源后建线，`mode` 为 `dry-run` 时只出计划。结果按 [t3-dispatch「出队结果」](../t3-dispatch/SKILL.md#出队结果) 处理。余位逐池转述 `idle.reason`；设备缺货结合 `dispatch.refill[].deviceGaps` 写明相关仓库在补还是 `skip`。本轮派出的线程下一轮按候选正常巡检。
 
-**完成标准**：每条交接与派出都有 link、回读状态或错误；每个空位池都有派出、交接占用或「题库无适配题目」的去向。
+**完成标准**：每条交接与派出都有 link、回读状态或错误；每个余位池都有脚本给出的原因。
 
 ## 6. 记账与汇报
 

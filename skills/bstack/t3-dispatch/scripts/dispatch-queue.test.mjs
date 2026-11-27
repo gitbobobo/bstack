@@ -5,7 +5,7 @@ import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { consumed, freshnessOf, launchOf, queuePlan } from "./dispatch-queue.mjs";
+import { consumed, freshnessOf, idleOf, launchHandoff, launchOf, queuePlan } from "./dispatch-queue.mjs";
 
 const MUS = "host/o/mus";
 const TMA = "host/o/tma";
@@ -48,6 +48,51 @@ test("按题库顺序出队，各仓库轮流，空位与 perRun 封顶", () => 
   assert.equal(p.picks[1].projectId, "e-pc-tma");
   const capped = plan({ config: { ...config, limits: { perRun: 1, perDay: 0 } }, pool: { repos: { [MUS]: [entry("1")], [TMA]: [entry("9")] } } });
   assert.equal(capped.picks.length, 1);
+});
+
+test("余位区分无启用仓库、不适配、预算和交接占池，预算外不查来源", () => {
+  const capacity = { environments: [env("e-pc", [2, 2])] };
+  const cfg = { ...config, repos: [{ repo: MUS }, { repo: TMA, devices: ["mini"] }], limits: { perRun: 1, perDay: 0 } };
+  const pool = { repos: { [MUS]: [entry("1"), entry("2")] } };
+  const checked = [];
+  const reasons = (p) => Object.fromEntries(idleOf(p).map((s) => [s.pool, s.reason]));
+  assert.deepEqual(reasons(plan({ capacity, config: cfg, pool, check: (e) => (checked.push(e.id), { ok: true }) })),
+    { heavy: "派活预算用尽，仍有待复核题目", general: "无启用的派活仓库" });
+  assert.deepEqual(checked, ["1"]);
+  assert.equal(reasons(plan({ capacity, config: cfg, pool: { repos: { [MUS]: [entry("3", { devices: ["mini"] })] } } })).heavy, "题库无适配题目");
+  assert.equal(reasons(plan({ capacity, config: cfg, pool, handoffs: [{ canonicalKey: MUS, targetEnvironmentId: "e-pc" }] })).heavy, "交接占池");
+});
+
+test("待交接建线默认补编排入口，保留已有首行命令和接力原文", async () => {
+  const android = "## 后续段（必交）：Android 迁移到能力位入口\n\n迁移 Kotlin 调用并补 FFI 回归。\n\n> 交接自 <t3-thread://v2/mbp/swift>";
+  const swift = "在 MBP 实施 Swift 确认框。\n\n> 交接自 <t3-thread://v2/pc/desktop>\n> 后续：合并后交接给 Windows 设备";
+  const verify = "只补端到端证据截图，不改代码。";
+  const other = "/skill:pr-finish\r\n" + swift.replaceAll("\n", "\r\n");
+  const reminder = "请先加载并按 `t3-orchestrator` 技能执行；小任务直接做。";
+  const withReminder = "/skill:pr-finish\r\n\r\n" + reminder + "\r\n\r\n" + swift.replaceAll("\n", "\r\n");
+  const model = { instanceId: "pi", model: "example" };
+  for (const [message, verificationOnly, expected] of [
+    [android, undefined, `/t3-orchestrator\n\n${android}`],
+    [swift, undefined, `/t3-orchestrator\n\n${swift}`],
+    [`/t3-orchestrator\n${swift}`, undefined, `/t3-orchestrator\n${swift}`],
+    [`/skill:t3-orchestrator\n${swift}`, undefined, `/skill:t3-orchestrator\n${swift}`],
+    [verify, true, verify],
+    [other, undefined, withReminder],
+    [withReminder, undefined, withReminder],
+  ]) {
+    const launch = { projectId: "e-mini-mus", title: "交接", message, ...(verificationOnly ? { verificationOnly } : {}) };
+    const result = await launchHandoff({ canonicalKey: MUS, sourceThreadId: "old", targetEnvironmentId: "e-mini", launch }, model, config, async (tool, input) => {
+      assert.equal(tool, "t3_thread_launch");
+      assert.equal(input.message, expected);
+      assert.equal(input.clientRequestId, "t3-patrol-handoff-old");
+      assert.equal(input.projectId, launch.projectId);
+      assert.equal(input.modelSelection, model);
+      assert.equal(Object.hasOwn(input, "verificationOnly"), false);
+      return { threadId: "new", link: "<new>" };
+    });
+    assert.deepEqual(result, { threadId: "new", link: "<new>" });
+    assert.equal(launch.message, message, "不改写队列原文");
+  }
 });
 
 test("同池仓库共享空位；过期、在派与设备不适配的题目跳过", () => {

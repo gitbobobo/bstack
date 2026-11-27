@@ -73,7 +73,8 @@ test("报告骨架：按环境列研判与回读、静默合一行、派活结�
     { environmentId: "e1", threadId: "4", link: "<4>", title: "T4", kind: "decision", action: "report", summary: "等产品取舍", needsUser: "选 A 或 B" },
     { environmentId: "e1", threadId: "5", link: "<5>", title: "T5", kind: "stall", action: "send", summary: "推进", results: [{ ok: false, error: "quota" }] },
   ];
-  const md = reportOf(snap(), decisions, { dispatch: { launched: [{ ref: "INT-1", device: "pc", link: "<n>" }], idle: [{ device: "pc", pool: "heavy", free: 1 }] } });
+  const md = reportOf(snap(), decisions, { dispatch: { launched: [{ ref: "INT-1", device: "pc", link: "<n>" }], idle: [{ device: "pc", pool: "heavy", free: 1, reason: "无启用的派活仓库" }] } });
+  assert.match(md, /空位 pc\/heavy 余 1：无启用的派活仓库/);
   assert.match(md, /- <1> T1：已收敛，推收尾｜running/);
   assert.match(md, /静默 2 个：T2、T3/);
   assert.match(md, /INT-1 → pc：<n>/);

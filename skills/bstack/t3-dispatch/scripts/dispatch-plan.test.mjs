@@ -57,7 +57,7 @@ test("库存目标 = 倍数 × 可派设备所属池名额；devices 限定设�
 
 test("库存够就不列候选；缺口仓库只列不在库存里的题目，表长按缺口", () => {
   let listed = [];
-  const full = { [MUS]: [1, 2, 3].map((i) => saved(cand(`INT-${i}`, "x"))), [TMA]: [4, 5, 6].map((i) => saved(cand(`INT-${i}`, "x"), { devices: ["mini"] })) };
+  const full = { [MUS]: [1, 2, 3].map((i) => saved(cand(`INT-${i}`, "x"), { devices: ["pc", "mini"] })), [TMA]: [4, 5, 6].map((i) => saved(cand(`INT-${i}`, "x"), { devices: ["mini"] })) };
   const none = buildPlan({ capacity: { environments: [env("e-pc"), env("e-mini")] }, config: { ...config, stock: { multiplier: 1 } }, environments, ledger: [], candidatePool: full, now: NOW,
     listOf: (repo) => (listed.push(repo), { candidates: [], skipped: [] }) });
   assert.deepEqual(none.repos, []);
@@ -81,6 +81,41 @@ test("库存够就不列候选；缺口仓库只列不在库存里的题目，�
   assert.equal(mus.shortlist.length, 5);
   assert.equal(mus.more, 7);
   assert.equal(mus.sourceSkipped, 1);
+});
+
+test("仓库总库存达标仍补空位设备；在派题不算库存，近期排除依据不重复核", () => {
+  const a = cand("INT-1", "共享层回归");
+  const b = cand("INT-2", "专属宿主回归");
+  const active = cand("INT-3", "Windows 回归");
+  const capacity = { environments: [env("e-pc"), env("e-mini")] };
+  const inputs = { capacity, config: { ...config, repos: [{ repo: MUS }, { repo: TMA, devices: ["mini"] }], stock: { multiplier: 1 } }, environments, now: NOW,
+    candidatePool: { [MUS]: [saved(a, { devices: ["mini"] }), saved(b, { devices: ["mini"], deviceExclusions: { pc: "Windows 无宿主验证入口" } }), saved(active)],
+      [TMA]: [saved(cand("INT-4", "x"), { devices: ["mini"] })] },
+    ledger: [{ at: new Date(NOW).toISOString(), event: "launched", repo: MUS, id: active.id, environmentId: "e-pc", threadId: "running" }] };
+  capacity.environments[0].openThreads.push({ id: "running" });
+  const plan = buildPlan({ ...inputs, listOf: () => ({ candidates: [a, b, active], skipped: [] }) });
+  const brief = repoBriefOf(plan, MUS, { capacity });
+  assert.equal(brief.need, 0);
+  assert.deepEqual(plan.repos.map((r) => r.repo), [MUS]);
+  assert.deepEqual(brief.deviceGaps, [{ device: "pc", pool: "heavy", free: 1, stock: 0, need: 1 }]);
+  assert.deepEqual(brief.deviceReviews.map((x) => [x.ref, x.devices]), [[a.ref, ["pc"]]]);
+  assert.equal(skipReasonOf(plan.repos[0]), null, "没有新题也派设备重核");
+  const updated = buildPlan({ ...inputs, listOf: () => ({ candidates: [a, { ...b, updatedAt: "2026-11-01T01:00:00Z" }, active], skipped: [] }) });
+  assert.deepEqual(updated.repos[0].deviceReviews.map((x) => x.ref), [a.ref, b.ref]);
+  assert.throws(() => saved(a, { deviceExclusions: { pc: "冲突" } }), /deviceExclusions/);
+});
+
+test("跨设备备货时一题只覆盖首个有空位的设备", () => {
+  const capacity = { environments: [env("e-pc"), env("e-mini")] };
+  const shared = cand("INT-1", "共享层");
+  const miniOnly = cand("INT-2", "Mac 宿主");
+  const plan = buildPlan({ capacity, config: { ...config, repos: [{ repo: MUS }], stock: { multiplier: 1, maxAgeHours: 48 } }, environments, ledger: [], now: NOW,
+    candidatePool: { [MUS]: [saved(shared, { devices: ["mini", "pc"] }), saved(miniOnly, { devices: ["mini"] })] },
+    listOf: () => ({ candidates: [shared, miniOnly], skipped: [] }) });
+  const brief = repoBriefOf(plan, MUS, { capacity });
+  assert.equal(brief.need, 0);
+  assert.equal(brief.maxAgeHours, 48);
+  assert.deepEqual(brief.deviceGaps, [{ device: "pc", pool: "heavy", free: 1, stock: 0, need: 1 }]);
 });
 
 test("阻塞或待核的旧条目过期或来源更新才带 pooled 回到研判；池里有、列表没了的进 poolMissing", () => {

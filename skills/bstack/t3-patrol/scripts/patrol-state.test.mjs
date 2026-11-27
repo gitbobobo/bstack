@@ -116,5 +116,9 @@ test("交接可带启动信息，缺字段拒绝", () => {
   const state = { pendingHandoffs: [] };
   putHandoff(state, { ...entry, launch: { projectId: "p", title: "#46 歌词-Android", message: "交接提示词" } });
   assert.equal(state.pendingHandoffs[0].launch.projectId, "p");
+  const verification = { projectId: "p", title: "补截图", message: "只验证，不改代码", verificationOnly: true };
+  putHandoff(state, { ...entry, launch: verification });
+  assert.deepEqual(state.pendingHandoffs[0].launch, verification);
+  assert.throws(() => putHandoff(state, { ...entry, launch: { ...verification, verificationOnly: "true" } }), /verificationOnly/);
   assert.throws(() => putHandoff(state, { ...entry, launch: { projectId: "p" } }), /launch 缺少 title/);
 });

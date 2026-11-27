@@ -59,14 +59,14 @@ export function buildPlan({ capacity, config, environments, ledger, listOf, cand
   const stock = config.stock ?? {};
   const unchanged = (old, c) => old && old.state !== "ready" && fresh(old, now, stock.recheckHours ?? 24) && old.issueUpdatedAt && c.updatedAt
     && Date.parse(c.updatedAt) <= Date.parse(old.issueUpdatedAt);
-  const refill = refillStatus({ repos: config.repos, pool: { repos: candidatePool }, envs, environments, multiplier: stock.multiplier, maxAgeHours: stock.maxAgeHours, now });
+  const refill = refillStatus({ repos: config.repos, pool: { repos: candidatePool }, envs, environments, activeIds, multiplier: stock.multiplier, maxAgeHours: stock.maxAgeHours, now });
   const repos = [];
-  for (const s of refill.filter((x) => x.deficit > 0)) {
+  for (const s of refill.filter((x) => x.deficit > 0 || x.deviceGaps.length)) {
     const entries = candidatePool[s.repo] ?? [];
     const inStock = new Set(stockOf(entries, { now, maxAgeHours: stock.maxAgeHours }).map((e) => e.id));
     const saved = new Map(entries.map((e) => [e.id, e]));
     const listed = listOf(s.repo);
-    const r = { repo: s.repo, deficit: s.deficit, devices: s.devices, shortlist: [], excluded: [], parked: [], more: 0 };
+    const r = { repo: s.repo, deficit: s.deficit, devices: s.devices, deviceGaps: s.deviceGaps, deviceReviews: [], shortlist: [], excluded: [], parked: [], more: 0 };
     r.poolMissing = entries.filter((e) => !listed.candidates.some((c) => c.id === e.id)).map(({ id, ref }) => ({ id, ref }));
     r.ledgerStale = [
       ...summary.active.filter((e) => e.repo === s.repo && listedEnvs.has(e.environmentId) && !open.has(`${e.environmentId}/${e.threadId}`)),
@@ -74,9 +74,17 @@ export function buildPlan({ capacity, config, environments, ledger, listOf, cand
     ].map(({ id, ref, event }) => ({ id, ...(ref ? { ref } : {}), event }));
     const cands = [];
     for (const c of listed.candidates) {
-      if (inStock.has(c.id)) continue;
-      const thread = openThreads.find((t) => refRe(c.ref).test(t.title ?? ""));
       const old = saved.get(c.id);
+      if (inStock.has(c.id)) {
+        if (activeIds.has(c.id) || labelPolicy(c.labels).deferred) continue;
+        const recent = fresh(old, now, stock.recheckHours ?? 24) && old.issueUpdatedAt && c.updatedAt
+          && Date.parse(c.updatedAt) <= Date.parse(old.issueUpdatedAt);
+        const devices = s.deviceGaps.map((g) => g.device).filter((d) => !old.devices.includes(d)
+          && !(recent && Object.hasOwn(old.deviceExclusions ?? {}, d)));
+        if (devices.length) r.deviceReviews.push({ id: c.id, ref: c.ref, title: c.title, devices });
+        continue;
+      }
+      const thread = openThreads.find((t) => refRe(c.ref).test(t.title ?? ""));
       if (activeIds.has(c.id)) r.excluded.push({ ref: c.ref, title: c.title, reason: "台账里已派出、线程未了结" });
       else if (labelPolicy(c.labels).deferred) r.excluded.push({ ref: c.ref, title: c.title, reason: "bstack:defer 暂缓自动派活" });
       else if (unchanged(old, c)) r.parked.push({ ref: c.ref, state: old.state, checkedAt: old.checkedAt });
@@ -84,7 +92,7 @@ export function buildPlan({ capacity, config, environments, ledger, listOf, cand
         ...(old ? { pooled: { state: old.state, checkedAt: old.checkedAt, reason: old.reason, nextCheck: old.nextCheck } } : {}) });
     }
     cands.sort((a, b) => Number(b.priority) - Number(a.priority) || a.needsInfo - b.needsInfo || a.rank - b.rank || String(b.updatedAt).localeCompare(String(a.updatedAt)));
-    const n = Math.max(5, s.deficit * 2);
+    const n = Math.max(5, Math.max(s.deficit, ...s.deviceGaps.map((g) => g.need)) * 2);
     r.shortlist = cands.slice(0, n).map(({ id, ref, title, labels, excerpt, category, rank, needsInfo, priority, attempts, updatedAt, threadMatch, pooled }) =>
       ({ id, ref, title, labels, excerpt, category, rank, needsInfo, priority, updatedAt, ...(threadMatch ? { threadMatch } : {}), ...(attempts ? { attempts } : {}), ...(pooled ? { pooled } : {}) }));
     r.more = Math.max(0, cands.length - n);
@@ -97,7 +105,7 @@ export function buildPlan({ capacity, config, environments, ledger, listOf, cand
 
 // 补货子代理只在有待办时派：待研判候选、需复核的线程命中、池里失效条目或台账对账。查重会改 shortlist，须在其后调用。
 export function skipReasonOf(r) {
-  if (r.shortlist.length || r.poolMissing?.length || r.ledgerStale?.length || r.excluded.some((e) => e.duplicateReview)) return null;
+  if (r.shortlist.length || r.deviceReviews?.length || r.poolMissing?.length || r.ledgerStale?.length || r.excluded.some((e) => e.duplicateReview)) return null;
   const count = (re) => r.excluded.filter((e) => re.test(e.reason)).length;
   const parts = [["题库阻塞/待核且来源未更新", r.parked.length], ["在派", count(/台账/)], ["暂缓", count(/defer/)], ["来源跳过", r.sourceSkipped ?? 0]];
   return `无待研判内容：${parts.filter(([, n]) => n).map(([k, n]) => `${k} ${n}`).join("，") || "来源无可派问题"}`;
@@ -119,6 +127,9 @@ export function repoBriefOf(plan, repo, { capacity, ledger = [], scripts = SCRIP
     target: s.target,
     stock: s.stock,
     devices: r.devices,
+    deviceGaps: r.deviceGaps,
+    deviceReviews: r.deviceReviews,
+    maxAgeHours: s.maxAgeHours,
     openThreads: (capacity?.environments ?? []).flatMap((e) => (e.openThreads ?? []).map((t) => ({ ...t, environmentId: e.environmentId }))),
     shortlist: r.shortlist,
     more: r.more,

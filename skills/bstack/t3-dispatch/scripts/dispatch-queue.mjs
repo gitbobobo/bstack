@@ -12,7 +12,7 @@
 //      弹出前复核来源：已关闭、出了 PR、离开准入状态或加了暂缓标签的移出题库，正文有更新的改回 pending 待重核，都不占空位。
 //   4. 派出复用 dispatch-launch（查重、认领、建线、记账、回读）；派出、已有线程或已被认领的从题库移除。
 // 每轮总数受 limits.perRun 与 limits.perDay 余量封顶。
-// 输出 { budget, handoffs, launched, dropped, recheck, idle, blocked }：idle 是还有空位但题库没有适配题目的设备池。有失败时退出码 1。
+// 输出 { budget, handoffs, launched, dropped, recheck, idle }：idle 逐池说明余位原因。有失败时退出码 1。
 
 import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -104,13 +104,29 @@ export function queuePlan({ capacity, config, environments, pool, ledger, handof
       picks.push({ repo: q.repo, entry: e, alias, environmentId: hit.slot.environmentId, projectId: hit.projectId, slot: hit.slot });
     }
   }
-  function fits(alias, q) {
-    if (q.allowed && !q.allowed.has(alias)) return false;
+  for (const slot of slots.values()) {
+    const aliases = Object.keys(environments).filter((alias) => environments[alias]?.environmentId === slot.environmentId);
+    slot.enabled = queues.some((q) => aliases.some((alias) => slotForAlias(alias, q) === slot));
+    slot.budgetBlocked = budget === 0 && queues.some((q) => q.entries.some((e) => e.devices.some((alias) => slotForAlias(alias, q) === slot)));
+  }
+  function slotForAlias(alias, q) {
+    if (q.allowed && !q.allowed.has(alias)) return null;
     const id = environments[alias]?.environmentId;
-    const hit = id && slotFor(capacity, slots, id, q.repo);
-    return !!hit && !hit.slot.handoff && hit.slot.free - hit.slot.used > 0;
+    return id ? slotFor(capacity, slots, id, q.repo)?.slot : null;
+  }
+  function fits(alias, q) {
+    const slot = slotForAlias(alias, q);
+    return !!slot && !slot.handoff && slot.free - slot.used > 0;
   }
   return { budget: Math.min(config.limits.perRun, dayLeft), handoffPlan, picks, dropped, recheck, slots: [...slots.values()] };
+}
+
+export function idleOf(plan) {
+  return plan.slots.filter((s) => s.free > s.used).map((s) => ({
+    device: s.alias, pool: s.pool, free: s.free - s.used,
+    reason: s.handoff ? "交接占池" : !s.enabled ? "无启用的派活仓库"
+      : s.unlaunched ? "有题目未建线，见派活结果" : s.budgetBlocked ? "派活预算用尽，仍有待复核题目" : "题库无适配题目",
+  }));
 }
 
 // 弹出前复核：只看来源的准入事实，源码与设备由补货时的研判负责。
@@ -137,16 +153,33 @@ export const consumed = (r) => !!(r.threadId || r.duplicate || /主问题认领�
 
 const threadLink = (environmentId, threadId) => `t3-thread://v2/${environmentId}/${threadId}`;
 
-async function launchHandoff(h, modelSelection, config) {
+const ORCHESTRATOR = "/t3-orchestrator";
+const ORCHESTRATOR_REMINDER = "请先加载并按 `t3-orchestrator` 技能执行；小任务直接做。";
+
+function handoffMessage({ message, verificationOnly }) {
+  if (verificationOnly === true) return message;
+  const lineEnd = /\r\n|\n|\r/.exec(message);
+  const firstLine = lineEnd ? message.slice(0, lineEnd.index) : message;
+  const newline = lineEnd?.[0] ?? "\n";
+  const command = /^[ \t]*(\/[\w-]+(?::[\w-]+)?)(?=[ \t]|$)/.exec(firstLine)?.[1];
+  if (command === ORCHESTRATOR || command === "/skill:t3-orchestrator") return message;
+  if (!command) return `${ORCHESTRATOR}${newline}${newline}${message}`;
+  // 其他斜杠命令仍是首行；补的是正文提醒，不是第二条命令。
+  const rest = message.slice(firstLine.length);
+  const reminder = `${newline}${newline}${ORCHESTRATOR_REMINDER}`;
+  return rest.startsWith(reminder) ? message : `${firstLine}${reminder}${newline}${rest}`;
+}
+
+export async function launchHandoff(h, modelSelection, config, callTool = call) {
   const repoCfg = config.repos.find((r) => r.repo === lower(h.canonicalKey));
-  const r = await call("t3_thread_launch", {
+  const r = await callTool("t3_thread_launch", {
     environmentId: h.targetEnvironmentId,
     projectId: h.launch.projectId,
     title: h.launch.title,
     modelSelection,
     runtimeMode: config.runtimeMode,
     workspaceStrategy: { type: "worktree", baseRef: repoCfg?.baseRef ?? "main", startFromOrigin: true },
-    message: h.launch.message,
+    message: handoffMessage(h.launch),
     clientRequestId: `t3-patrol-handoff-${h.sourceThreadId}`,
   });
   return { threadId: r.threadId, link: r.link };
@@ -210,7 +243,14 @@ if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToP
       const dir = mkdtempSync(join(tmpdir(), "t3-dispatch-"));
       try {
         const cfg = launchConfigFor({ modelSelection }, config);
-        for (const p of launches) out.launched.push({ device: p.alias, ref: p.entry.ref, ...(await launchOne(launchOf(p), cfg, dir)) });
+        for (const p of launches) {
+          const result = await launchOne(launchOf(p), cfg, dir);
+          out.launched.push({ device: p.alias, ref: p.entry.ref, ...result });
+          if (!result.threadId) {
+            p.slot.used--;
+            p.slot.unlaunched = true;
+          }
+        }
       } finally {
         rmSync(dir, { recursive: true, force: true });
       }
@@ -224,7 +264,7 @@ if (process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToP
         if (e) applyPatch({ repo: r.repo, patch: { revision, remove: [], upsert: [{ ...e, state: "pending", deferredBy: "evidence", nextCheck: `${r.reason}，重读正文与共识后重判准入` }] } });
       }
     }
-    out.idle = plan.slots.filter((s) => s.free - s.used > 0).map((s) => ({ device: s.alias, pool: s.pool, free: s.free - s.used, ...(s.handoff ? { reason: "交接占池" } : {}) }));
+    out.idle = idleOf(plan);
     console.log(JSON.stringify(out, null, 1));
     process.exitCode = out.launched.some((r) => r.error) || out.handoffs.some((h) => h.error) ? 1 : 0;
   } catch (e) {

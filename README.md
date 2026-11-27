@@ -38,7 +38,7 @@ T3 Code 多 harness 编排：从实现/顾问两类固定档位的模型池选 h
 
 ### t3-dispatch
 
-补货子代理把候选研判进跨轮题库（按池名额的倍数备货），有空位时按题库顺序出队，复核来源、查重、核仓库身份后建工作树线程。[SKILL.md](skills/bstack/t3-dispatch/SKILL.md)
+补货子代理把候选研判进跨轮题库（按仓库总量和各设备可派缺口备货），有空位时按题库顺序出队，复核来源、查重、核仓库身份后建工作树线程。[SKILL.md](skills/bstack/t3-dispatch/SKILL.md)
 
 ### acceptance-digest
 

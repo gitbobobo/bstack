@@ -7,7 +7,7 @@ description: 从问题来源挑问题，在各 T3 环境建工作树线程派活
 
 派活分两段，中间隔着一个**题库**（`~/.config/bstack/state/t3-dispatch-candidates.json`，每仓库按顺序排好的已研判题目）：
 
-- **补货**：题库低于目标库存（可派设备所属池名额之和 × `stock.multiplier`）时，缺货且有待研判内容的仓库各派一个补货子代理挑题入库；只剩未到重核期（`stock.recheckHours`）且来源未更新的阻塞/待核结论、暂缓或来源无题的仓库不派。
+- **补货**：仓库总库存不足，或某可派设备的适配库存少于该池空位时，对有待研判内容的仓库各派一个子代理补货。总库存目标仍是可派设备所属池名额之和 × `stock.multiplier`。
 - **出队**：有空位时按题库顺序弹出题目、复核来源后建线，不再现场挑题。
 
 下文 `<技能目录>` 指本技能目录，`<t3-patrol>` 指同级的 t3-patrol 技能目录；容量计数沿用 t3-patrol。派活只看名额，磁盘与内存由新线程在重验证前自己查（t3-orchestrator「资源不足时」）。
@@ -30,7 +30,7 @@ node <t3-patrol>/scripts/patrol-snapshot.mjs --capacity-only > /tmp/t3-dispatch-
 node <技能目录>/scripts/dispatch-plan.mjs --capacity /tmp/t3-dispatch-capacity.json --brief-dir /tmp/t3-dispatch-briefs > /tmp/t3-dispatch-plan.json
 ```
 
-`refill` 是各仓库的目标、库存与缺口；`briefs` 给有待研判内容的缺货仓库各一份切片，其余缺货仓库在 `repos[].skip` 写明为何不派。每份切片并行派一个补货子代理（`delegate_task`，`role:"research"`，`mode:"async"`），任务书：`派活补货：按 <技能目录>/references/refill.md 处理 <brief>。不再派子代理。` 子代理自己写题库，不需要你合并。
+`refill` 给出各仓库的目标、库存和设备缺口；`briefs` 给有待研判内容的缺货仓库各一份切片，其余缺货仓库在 `repos[].skip` 写明为何不派。每份切片并行派一个补货子代理（`delegate_task`，`role:"research"`，`mode:"async"`），任务书：`派活补货：按 <技能目录>/references/refill.md 处理 <brief>。不再派子代理。` 子代理自己写题库，不需要你合并。
 
 **完成标准**：每份切片都有 taskId 或启动失败的原因，每个 `skip` 仓库都带原因进报告。
 
@@ -49,8 +49,8 @@ node <技能目录>/scripts/dispatch-queue.mjs --capacity /tmp/t3-dispatch-capac
 - `launched[].pending`：工作树还在准备，认领与台账已保留，算派出成功，下一轮巡检核对。
 - `launched[].duplicate`：已有未结线程，题目已移出题库，报告附该线程 link。
 - `launched[].error`：身份核验或查重失败时未认领；主问题认领失败说明已被认领。建线失败或 run 已失败时脚本已归还认领（见 `released`），题目留在题库；巡检派活失败按 [巡检故障恢复](../t3-patrol/references/recovery.md#重试) 处理，独立派活按「派活模型」处理；已建线程在原线程续跑，恢复后对归还的问题重新认领并 `record` 到原线程。建线请求报错且无法确认是否已创建时，先按编号查重。
-- `dropped`：来源已关闭、出了 PR、离开准入或加了暂缓，已移出题库；`recheck`：来源有更新，已改回待核等下次补货。
-- `idle`：还有空位但题库没有适配题目；第 2 步没给切片的仓库本轮无题可补。
+- `dropped`：来源已关闭、出了 PR、离开准入或加了暂缓，已移出题库；`recheck`：来源有更新，已改回待核。由出队复核发现的库存缺口在下次补货时处理。
+- `idle`：余位及脚本判定的原因，逐池转述 `reason`。
 
 **完成标准**：每条交接与派出都有 link 与回读状态，或 error 与归还情况；额度失败项已补救一次或记了无法补救的证据。
 
@@ -58,5 +58,5 @@ node <技能目录>/scripts/dispatch-queue.mjs --capacity /tmp/t3-dispatch-capac
 
 - **本轮派活**：所用模型与依据；每条写问题编号、标题、设备、线程 link 与推荐理由。`dry-run` 标明「未执行」。
 - **题库**：各仓库库存/目标、本轮移出与转重核数，补货任务的 taskId 或 `skip` 原因。
-- **空位**：按设备的重型/通用池写余位与去向（派出、交接占用、题库无适配题目）。
+- **空位**：按设备池写余位，并结合 `idle.reason` 和补货结果说明去向。
 - **待办**：归还失败、准备失败的线程、配置警告、题库读写失败。

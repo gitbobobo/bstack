@@ -90,6 +90,7 @@ export function putHandoff(state, entry) {
     for (const key of ["projectId", "title", "message"]) {
       if (typeof entry.launch[key] !== "string" || !entry.launch[key].trim()) throw new Error(`launch 缺少 ${key}`);
     }
+    if (Object.hasOwn(entry.launch, "verificationOnly") && typeof entry.launch.verificationOnly !== "boolean") throw new Error("launch.verificationOnly 必须是布尔值");
   }
   if (entry.sourceRelease != null) {
     for (const key of ["runId", "worktreePath", "verifiedAt", "deliveryRef", "idleRef"]) {

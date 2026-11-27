@@ -6,7 +6,7 @@
 
 交接完成的界限是**目标线程实际接手**。队列存在巡检状态文件的 `pendingHandoffs`，按来源环境＋线程去重；空位与建线由 dispatch-queue 负责：带 `launch` 的项在目标设备同池有空位时建线并回写 `launchedThreadLink`，没空位的项占住该池、同池不派新问题；带 `needsUser` 的项不建线、不占池，只进报告「需要你决定」。研判只管入账、验收与销账。
 
-- **入账**：决定交接后在研判结果写 `handoff`，字段：`sourceEnvironmentId`、`sourceThreadId`、`sourceLink`、`targetEnvironmentId`、`canonicalKey`（仓库身份）、`task`、`handoffRef`（可重读的收尾消息或提示词位置）、`waitingSince`（收尾时间，ISO）、`blocker`（当前阻塞或待验证项）、`needsUser`（只有等用户授权或辨认时写：所缺输入、选项与默认）、`launch: { projectId, title, message }`（只给现在就能执行的段写，按下文「有提示词时」写好；有 `needsUser` 时不写）。更新已有项时原样带上 `launchedThreadLink`，最初的 `waitingSince` 自动保留。
+- **入账**：决定交接后在研判结果写 `handoff`，字段：`sourceEnvironmentId`、`sourceThreadId`、`sourceLink`、`targetEnvironmentId`、`canonicalKey`（仓库身份）、`task`、`handoffRef`（可重读的收尾消息或提示词位置）、`waitingSince`（收尾时间，ISO）、`blocker`（当前阻塞或待验证项）、`needsUser`（只有等用户授权或辨认时写：所缺输入、选项与默认）、`launch`（只给现在就能执行的段写，按下文「有提示词时」组装；有 `needsUser` 时不写）。更新已有项时原样带上 `launchedThreadLink`，最初的 `waitingSince` 自动保留。
 - **每轮复核**：已建线的项读目标线程：实际接手（回读到目标线程针对该段的命令、改动或验证活动）才写 `handoffResolve`，再按「结案门槛」处理来源；准备失败或排队未启动按 [工作树准备失败](recovery.md#工作树准备失败) 处理，保留队列。未建线的项核 `blocker`、`needsUser` 是否仍成立：授权已到就去掉 `needsUser` 并补 `launch`；仍缺授权的保持原样，不补 `launch`。
 - **销账**：`handoffResolve: { sourceEnvironmentId, sourceThreadId, outcome: "accepted" | "cancelled", evidenceRef }`，`evidenceRef` 指实际接手活动或来源撤销后续段的原文位置。launch 成功只是已建线，接手前保留。
 
@@ -31,7 +31,10 @@
 3. **写 `launch`**：
    - `projectId`：目标环境 `t3_project_list`（翻完分页）里 `repositoryIdentity.canonicalKey` 与来源仓库一致的项目；
    - `title`：按 [命名](naming.md)，用该项目以往标题的语言和写法；
-   - `message`：原样贴交接提示词，开头的斜杠命令保持在第一行，末尾另起一行写 `> 交接自 <来源线程 link>`。多段接力（先 A 设备、合并后换新 PR 号再 B 设备）只建第一段，末尾再加 `> 后续：合并后按同一提示词换新 PR 号交接给 <下一台设备>`。
+   - `message`：原样贴交接提示词，开头的斜杠命令保留在第一行，末尾另起一行写 `> 交接自 <来源线程 link>`。多段接力只建第一段，末尾再加 `> 后续：合并后按同一提示词换新 PR 号交接给 <下一台设备>`。
+   - `verificationOnly: true`：只采集或复核证据、无需实现改动的段才标记；更新待建线项时按同一交付范围保留标记。
+
+**编排提醒由建线脚本负责**：默认补 `/t3-orchestrator`；已有该命令就保留，已有其他首行命令就在正文补提醒。标记 `verificationOnly: true` 时原样发送。研判只写交付范围和证据，不在 `message` 另补提醒。
 
 收尾汇报里的遗留事项写进 `summary`，注明归属与去向（独立候选、用户撤销依据或必交段接手线程）。
 
